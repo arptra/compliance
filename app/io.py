@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -26,6 +26,34 @@ def _require_columns(df: pd.DataFrame, cols: list[str]) -> None:
     missing = [c for c in cols if c and c not in df.columns]
     if missing:
         raise SchemaError(f"Missing required columns: {missing}. Available: {list(df.columns)}")
+
+
+def get_message_columns(input_cfg: Dict[str, Any]) -> list[str]:
+    cols = input_cfg.get("message_cols")
+    if cols:
+        if not isinstance(cols, list) or not all(isinstance(c, str) for c in cols):
+            raise SchemaError("input.message_cols must be a list of column names")
+        return cols
+
+    col = input_cfg.get("message_col")
+    if not isinstance(col, str) or not col:
+        raise SchemaError("Provide input.message_col or input.message_cols in config")
+    return [col]
+
+
+def merge_message_columns(df: pd.DataFrame, message_cols: list[str], out_col: str = "message_joined") -> pd.Series:
+    _require_columns(df, message_cols)
+    merged = (
+        df[message_cols]
+        .fillna("")
+        .astype(str)
+        .apply(lambda r: " ".join([x.strip() for x in r.tolist() if x and x.strip()]), axis=1)
+    )
+    if out_col not in df.columns:
+        df[out_col] = merged
+    else:
+        df[out_col] = merged
+    return df[out_col]
 
 
 def _prepare_dates(df: pd.DataFrame, date_col: Optional[str], date_format: Optional[str]) -> pd.DataFrame:
@@ -67,12 +95,44 @@ def _filter_by_mode(df: pd.DataFrame, cfg: Dict[str, Any], date_col: Optional[st
     raise SchemaError(f"Unsupported split mode: {mode}")
 
 
+def _load_from_paths(paths: list[str], source_tag: str) -> pd.DataFrame:
+    if not paths:
+        return pd.DataFrame()
+    frames = []
+    for p in paths:
+        dfi = read_excel(p)
+        dfi["_source_file"] = str(p)
+        dfi["_source_split"] = source_tag
+        frames.append(dfi)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _load_input_data(config: Dict[str, Any]) -> pd.DataFrame:
+    input_cfg = config["input"]
+
+    # mode 1: single dataset path with in-file splitting rules
+    if input_cfg.get("path"):
+        return read_excel(input_cfg["path"])
+
+    # mode 2: multiple baseline files + separate december file/list
+    baseline_paths = input_cfg.get("baseline_paths") or []
+    december_paths = input_cfg.get("december_paths") or ([] if not input_cfg.get("december_path") else [input_cfg["december_path"]])
+
+    if not baseline_paths and not december_paths:
+        raise SchemaError("Provide either input.path OR input.baseline_paths / input.december_path(s)")
+
+    baseline_df = _load_from_paths(baseline_paths, "baseline")
+    december_df = _load_from_paths(december_paths, "december")
+    return pd.concat([baseline_df, december_df], ignore_index=True)
+
+
 def split_baseline_december(df: pd.DataFrame, cfg: Dict[str, Any]) -> DataSplits:
     input_cfg = cfg["input"]
-    msg_col = input_cfg["message_col"]
+    message_cols = get_message_columns(input_cfg)
     date_col = input_cfg.get("date_col")
     month_col = input_cfg.get("month_col")
-    required = [msg_col]
+
+    required = list(message_cols)
     if date_col:
         required.append(date_col)
     if month_col:
@@ -83,8 +143,14 @@ def split_baseline_december(df: pd.DataFrame, cfg: Dict[str, Any]) -> DataSplits
     if month_col and month_col in work.columns:
         work["year_month"] = work[month_col].astype("string")
 
-    baseline_mask = _filter_by_mode(work, input_cfg["baseline"], date_col)
-    december_mask = _filter_by_mode(work, input_cfg["december"], date_col)
+    merge_message_columns(work, message_cols, out_col="message_joined")
+
+    if "_source_split" in work.columns and not input_cfg.get("path"):
+        baseline_mask = work["_source_split"] == "baseline"
+        december_mask = work["_source_split"] == "december"
+    else:
+        baseline_mask = _filter_by_mode(work, input_cfg["baseline"], date_col)
+        december_mask = _filter_by_mode(work, input_cfg["december"], date_col)
 
     baseline = work[baseline_mask].copy()
     december = work[december_mask].copy()
@@ -96,7 +162,7 @@ def split_baseline_december(df: pd.DataFrame, cfg: Dict[str, Any]) -> DataSplits
 
 
 def load_and_split(config: Dict[str, Any]) -> DataSplits:
-    df = read_excel(config["input"]["path"])
+    df = _load_input_data(config)
     return split_baseline_december(df, config)
 
 

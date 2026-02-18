@@ -7,7 +7,7 @@ import pandas as pd
 
 from app.cluster import assign_clusters, cluster_summaries, save_cluster_artifacts, train_cluster_model
 from app.complaint import train_complaint_classifier
-from app.io import load_and_split
+from app.io import get_message_columns, load_and_split
 from app.novelty import max_similarity_to_centroids, novelty_threshold_from_baseline
 from app.preprocess import TextPreprocessor
 from app.utils import dump_json, ensure_dir, load_yaml, setup_logging, timed_step
@@ -29,7 +29,8 @@ def run_train(config_path: str, sample: int | None = None) -> None:
             baseline = baseline.sample(min(sample, len(baseline)), random_state=cfg.get("random_state", 42))
 
     preprocessor = TextPreprocessor(cfg)
-    msg_col = cfg["input"]["message_col"]
+    message_cols = get_message_columns(cfg["input"])
+    msg_col = "message_joined"
 
     with timed_step("preprocess"):
         baseline["processed_text"] = preprocessor.preprocess_series(baseline[msg_col])
@@ -84,7 +85,8 @@ def run_train(config_path: str, sample: int | None = None) -> None:
     with timed_step("save-train-artifacts"):
         meta = {
             "config_path": config_path,
-            "message_col": msg_col,
+            "message_cols": message_cols,
+            "message_col_runtime": msg_col,
             "complaint_threshold": threshold,
             "novelty_threshold": nov_threshold,
             "novelty_percentile": nov_percentile,
