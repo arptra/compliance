@@ -1,0 +1,51 @@
+input:
+  path: "data/sample.xlsx"
+  message_col: "message"
+  date_col: "date"
+  date_format: null
+  month_col: null
+  baseline:
+    mode: "last_n_months"
+    n_months: 6
+    start: null
+    end: null
+    filter_col: null
+    filter_value: null
+  december:
+    mode: "month_value"
+    month_value: "2025-12"
+    start: null
+    end: null
+    filter_col: null
+    filter_value: null
+preprocess:
+  lemmatize: false
+  use_razdel: true
+  use_char_ngrams: false
+  max_token_len: 30
+vectorizer:
+  ngram_range: [1, 2]
+  min_df: 2
+  max_df: 0.8
+  max_features: 200000
+clustering:
+  n_clusters: 12
+  batch_size: 2048
+  top_terms: 12
+  examples_per_cluster: 8
+complaint:
+  model: "logreg"
+  threshold: 0.5
+  seed_min_confidence: "strong_only"
+novelty:
+  percentile: 2
+  novel_december_subclusters: 6
+  examples_per_novel_cluster: 10
+output:
+  labeled_baseline_xlsx: "outputs/labeled_baseline.xlsx"
+  labeled_december_xlsx: "outputs/labeled_december.xlsx"
+  combined_xlsx: "outputs/combined_labeled.xlsx"
+  report_md: "reports/report.md"
+  model_dir: "models"
+random_state: 42
+logging_level: "INFO"
