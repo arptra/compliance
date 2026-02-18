@@ -145,6 +145,77 @@ input:
 
 ---
 
+
+## 5.1 Как прогнать не на декабре, а на другом месяце/месяцах
+
+Ниже типовые варианты.
+
+### Вариант 1: нужен один конкретный месяц (например, январь 2026)
+
+```yaml
+input:
+  baseline:
+    mode: "last_n_months"
+    n_months: 6
+  december:
+    mode: "month_value"
+    month_value: "2026-01"
+```
+
+> Несмотря на название блока `december`, технически это просто «target-период для анализа».
+
+### Вариант 2: нужен диапазон месяцев (например, январь+февраль 2026)
+
+```yaml
+input:
+  date_col: "date"
+  baseline:
+    mode: "last_n_months"
+    n_months: 6
+  december:
+    mode: "date_range"
+    start: "2026-01-01"
+    end: "2026-02-28"
+```
+
+### Вариант 3: хотите фиксированный baseline и отдельный target-диапазон
+
+```yaml
+input:
+  baseline:
+    mode: "date_range"
+    start: "2025-06-01"
+    end: "2025-11-30"
+  december:
+    mode: "date_range"
+    start: "2026-03-01"
+    end: "2026-03-31"
+```
+
+### Вариант 4: в multi-file режиме
+
+- В `baseline_paths` кладете все файлы baseline-месяцев.
+- В `december_path` (или `december_paths`) кладете файл(ы) нужного целевого месяца/периода.
+
+Пример:
+
+```yaml
+input:
+  path: null
+  baseline_paths:
+    - "data/2025-08.xlsx"
+    - "data/2025-09.xlsx"
+    - "data/2025-10.xlsx"
+    - "data/2025-11.xlsx"
+    - "data/2025-12.xlsx"
+    - "data/2026-01.xlsx"
+  december_paths:
+    - "data/2026-02.xlsx"
+    - "data/2026-03.xlsx"
+```
+
+В этом случае «target» — это объединение всех файлов из `december_paths`.
+
 ## 6. Команды запуска
 
 ```bash
