@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-
-import pandas as pd
 
 from app.cluster import assign_clusters, cluster_summaries, save_cluster_artifacts, train_cluster_model
 from app.complaint import train_complaint_classifier
@@ -34,13 +31,14 @@ def run_train(config_path: str, sample: int | None = None) -> None:
 
     with timed_step("preprocess"):
         baseline["processed_text"] = preprocessor.preprocess_series(baseline[msg_col])
-        december_texts_for_vocab = preprocessor.preprocess_series(splits.december[msg_col])
+        splits.december["processed_text"] = preprocessor.preprocess_series(splits.december[msg_col])
 
     with timed_step("vectorize"):
-        vectorizer, x_baseline, x_december = fit_transform(
-            baseline["processed_text"].tolist(),
-            december_texts_for_vocab,
+        vectorizer, x_baseline, _ = fit_transform(
+            baseline[msg_col].astype(str).tolist(),
+            splits.december[msg_col].astype(str).tolist(),
             cfg,
+            analyzer=preprocessor.analyzer,
         )
         save_vectorizer(vectorizer, model_dir)
 
@@ -56,6 +54,7 @@ def run_train(config_path: str, sample: int | None = None) -> None:
             cluster_model,
             vectorizer.get_feature_names_out(),
             cfg,
+            preprocessor,
         )
         save_cluster_artifacts(cluster_model, csum, model_dir, reports_dir)
 

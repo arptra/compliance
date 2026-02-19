@@ -23,44 +23,59 @@ def build_report(
     novel_share = (len(novel_complaints) / len(december_df)) if len(december_df) else 0.0
 
     top_clusters = cluster_summary_df.head(10)
-    top_clusters_md = top_clusters[["cluster_id", "size", "top_terms"]].to_markdown(index=False)
-    emerging_md = emerging_df.head(15).to_markdown(index=False)
-    novel_themes_md = novel_clusters_df.head(10).to_markdown(index=False) if len(novel_clusters_df) else "No novel complaint clusters."
+    top_clusters_md = top_clusters[["cluster_id", "size", "top_terms", "example_messages"]].to_markdown(index=False)
+    emerging_md = (
+        emerging_df.head(15)[["term", "december_df", "lift"]].to_markdown(index=False)
+        if len(emerging_df)
+        else "Нет валидных emerging terms после фильтрации."
+    )
+    novel_themes_md = (
+        novel_clusters_df.head(10)[["cluster_id", "size", "top_terms", "example_messages"]].to_markdown(index=False)
+        if len(novel_clusters_df)
+        else "No novel complaint clusters."
+    )
 
     artifacts = cfg["output"]
     return f"""# Complaint & Novel Context Report
 
+## How to read this report
+- **Category/Topic** = кластер похожих сообщений (автоматическая группировка).
+- **Complaint** = бинарный классификатор жалоб (`is_complaint`), обученный weak supervision.
+- **Novel** = сообщение с низкой похожестью на baseline-кластеры (`max_sim < threshold`).
+
 ## 1) Dataset sizes
 - Baseline rows: **{len(baseline_df)}**
-- December rows: **{len(december_df)}**
+- Target-period rows: **{len(december_df)}**
 
 ## 2) Topic clustering overview
 - Number of baseline clusters: **{cfg['clustering']['n_clusters']}**
-- Top 10 clusters by volume:
+- Top 10 clusters by volume (terms + examples):
 
 {top_clusters_md}
+
+> Интерпретируйте кластеры в первую очередь по example_messages, а top_terms используйте как подсказку темы.
 
 ## 3) Complaint detection overview (weak supervision)
 - Seeded validation precision: **{metrics['precision']:.3f}**
 - Seeded validation recall: **{metrics['recall']:.3f}**
 - Seeded validation F1: **{metrics['f1']:.3f}**
 - Baseline complaint rate: **{baseline_complaint_rate:.2%}**
-- December complaint rate: **{december_complaint_rate:.2%}**
+- Target-period complaint rate: **{december_complaint_rate:.2%}**
 
 ## 4) Novelty detection
 - Novelty threshold percentile: **p={novelty_percentile}**
 - Novelty similarity threshold value: **{novelty_threshold:.4f}**
-- Novel December complaints: **{len(novel_complaints)}** ({novel_share:.2%} of December)
+- Novel complaints in target period: **{len(novel_complaints)}** ({novel_share:.2%} of target-period messages)
 
-### Top emerging terms (December vs baseline)
+### Top emerging terms (filtered)
 {emerging_md}
 
-### Novel complaint subclusters
+### New-context complaint groups (top terms + 5+ examples)
 {novel_themes_md}
 
 ## 5) Artifact paths
 - Baseline labeled: `{artifacts['labeled_baseline_xlsx']}`
-- December labeled: `{artifacts['labeled_december_xlsx']}`
+- December/target labeled: `{artifacts['labeled_december_xlsx']}`
 - Combined labeled: `{artifacts['combined_xlsx']}`
 - Cluster summaries CSV: `reports/cluster_summaries.csv`
 - Novel complaint clusters CSV: `reports/december_novel_complaints_clusters.csv`

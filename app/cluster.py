@@ -8,7 +8,10 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from app.preprocess import TextPreprocessor
 
 
 def train_cluster_model(x_baseline: csr_matrix, cfg: Dict) -> MiniBatchKMeans:
@@ -30,6 +33,50 @@ def assign_clusters(x: csr_matrix, model: MiniBatchKMeans) -> Tuple[np.ndarray, 
     return cluster_ids, max_sims
 
 
+def _top_terms_ctfidf(
+    texts: List[str],
+    cluster_ids: np.ndarray,
+    n_clusters: int,
+    preprocessor: TextPreprocessor,
+    top_n: int,
+) -> dict[int, List[str]]:
+    cluster_docs: List[str] = []
+    for cid in range(n_clusters):
+        idx = np.where(cluster_ids == cid)[0]
+        cluster_docs.append(" ".join(texts[i] for i in idx))
+
+    vec = TfidfVectorizer(
+        analyzer="word",
+        tokenizer=preprocessor.analyzer,
+        preprocessor=None,
+        token_pattern=None,
+        ngram_range=(1, 2),
+        min_df=1,
+        max_df=1.0,
+        max_features=50_000,
+        sublinear_tf=True,
+        lowercase=False,
+    )
+    x_cluster = vec.fit_transform(cluster_docs)
+    feat = vec.get_feature_names_out()
+
+    top_terms: dict[int, List[str]] = {}
+    for cid in range(n_clusters):
+        row = x_cluster[cid].toarray().ravel()
+        ranked = np.argsort(row)[::-1]
+        terms: List[str] = []
+        for rid in ranked:
+            if row[rid] <= 0:
+                continue
+            term = feat[rid]
+            if preprocessor.is_good_term(term):
+                terms.append(term)
+            if len(terms) >= top_n:
+                break
+        top_terms[cid] = terms
+    return top_terms
+
+
 def cluster_summaries(
     x_baseline: csr_matrix,
     texts: List[str],
@@ -37,25 +84,46 @@ def cluster_summaries(
     model: MiniBatchKMeans,
     feature_names: np.ndarray,
     cfg: Dict,
+    preprocessor: TextPreprocessor,
 ) -> pd.DataFrame:
     ccfg = cfg["clustering"]
-    top_n = ccfg.get("top_terms", 12)
-    ex_n = ccfg.get("examples_per_cluster", 8)
+    scfg = cfg.get("summaries", {})
+    top_n = scfg.get("top_terms_per_cluster", ccfg.get("top_terms", 12))
+    ex_n = scfg.get("examples_per_cluster", ccfg.get("examples_per_cluster", 8))
+    use_ctfidf = scfg.get("use_ctfidf", True)
+
+    ctfidf_terms = (
+        _top_terms_ctfidf(texts, cluster_ids, model.n_clusters, preprocessor, top_n)
+        if use_ctfidf
+        else {}
+    )
+
     rows = []
     for cid in range(model.n_clusters):
         idx = np.where(cluster_ids == cid)[0]
         if len(idx) == 0:
             rows.append({"cluster_id": cid, "size": 0, "top_terms": "", "example_messages": ""})
             continue
-        centroid = model.cluster_centers_[cid]
-        term_ids = np.argsort(centroid)[::-1][:top_n]
-        top_terms = ", ".join(feature_names[term_ids])
+
+        terms = ctfidf_terms.get(cid, [])
+        if not terms:
+            centroid = model.cluster_centers_[cid]
+            term_ids = np.argsort(centroid)[::-1]
+            filtered = []
+            for tid in term_ids:
+                term = feature_names[tid]
+                if preprocessor.is_good_term(term):
+                    filtered.append(term)
+                if len(filtered) >= top_n:
+                    break
+            terms = filtered
+
         examples = " || ".join(texts[i][:200] for i in idx[:ex_n])
         rows.append(
             {
                 "cluster_id": cid,
                 "size": int(len(idx)),
-                "top_terms": top_terms,
+                "top_terms": ", ".join(terms),
                 "example_messages": examples,
             }
         )

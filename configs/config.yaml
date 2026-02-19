@@ -1,15 +1,13 @@
 input:
-  # Режим 1: единый файл (внутри него baseline/december выбираются фильтрами ниже)
+  # Режим 1: единый файл (внутри него baseline/target выбираются фильтрами ниже)
   path: "data/sample.xlsx"
 
-  # Режим 2: можно вместо path передать список baseline-файлов + отдельный декабрьский файл
+  # Режим 2: список baseline-файлов + отдельный файл/список target-периода
   baseline_paths: []
   december_path: null
   december_paths: []
 
-  # Можно указать одну колонку ...
   message_col: "message"
-  # ... или несколько колонок сообщений из разных каналов (тогда объединятся в message_joined)
   message_cols: null
 
   date_col: "date"
@@ -17,7 +15,7 @@ input:
   month_col: null
 
   baseline:
-    mode: "last_n_months"   # last_n_months | explicit_filter | date_range
+    mode: "last_n_months"
     n_months: 6
     start: null
     end: null
@@ -25,7 +23,7 @@ input:
     filter_value: null
 
   december:
-    mode: "month_value"     # month_value | explicit_filter | date_range
+    mode: "month_value"
     month_value: "2025-12"
     start: null
     end: null
@@ -35,13 +33,32 @@ input:
 preprocess:
   lemmatize: false
   use_razdel: true
-  use_char_ngrams: false
+  remove_placeholders: true
+  placeholder_patterns:
+    - "<[^>]{1,80}>"
+    - "\\*{2,}"
+    - "(?i)\\b(x{2,}|х{2,}|_+|#+)\\b"
+    - "\\b\\d{4,}\\b"
+    - "\\b[0-9a-f]{8,}\\b"
+    - "\\b[0-9a-f]{8}-[0-9a-f-]{8,}\\b"
+    - "(?i)\\b(ticket|case|id|uuid|guid)\\b\\s*[:=]?\\s*\\w+"
+  remove_urls_emails_phones: true
+  normalize_numbers: "remove"   # remove | token
+  number_token: "<num>"
+  keep_cyrillic_latin_only: true
+  min_token_len: 3
   max_token_len: 30
+  drop_tokens_with_digits: true
+  drop_tokens_with_underscores: true
+  drop_repeated_char_tokens: true
+  extra_stopwords_path: "configs/extra_stopwords.txt"
+  deny_tokens_path: "configs/deny_tokens.txt"
 
 vectorizer:
+  token_pattern: null
   ngram_range: [1, 2]
-  min_df: 2
-  max_df: 0.8
+  min_df: 5
+  max_df: 0.5
   max_features: 200000
 
 clustering:
@@ -49,6 +66,12 @@ clustering:
   batch_size: 2048
   top_terms: 12
   examples_per_cluster: 8
+
+summaries:
+  top_terms_per_cluster: 12
+  examples_per_cluster: 8
+  use_ctfidf: true
+  always_filter_top_terms: true
 
 complaint:
   model: "logreg"
@@ -59,6 +82,8 @@ novelty:
   percentile: 2
   novel_december_subclusters: 6
   examples_per_novel_cluster: 10
+  emerging_terms_topn: 30
+  emerging_terms_min_df: 10
 
 output:
   labeled_baseline_xlsx: "outputs/labeled_baseline.xlsx"

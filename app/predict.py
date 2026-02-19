@@ -36,14 +36,14 @@ def run_predict(config_path: str) -> None:
         baseline = splits.baseline.copy()
         december = splits.december.copy()
 
-    get_message_columns(cfg["input"])  # validate config structure
+    get_message_columns(cfg["input"])
     msg_col = metadata.get("message_col_runtime", "message_joined")
 
     with timed_step("preprocess+vectorize"):
         baseline["processed_text"] = preprocessor.preprocess_series(baseline[msg_col])
         december["processed_text"] = preprocessor.preprocess_series(december[msg_col])
-        x_baseline = vectorizer.transform(baseline["processed_text"])
-        x_december = vectorizer.transform(december["processed_text"])
+        x_baseline = vectorizer.transform(baseline[msg_col].astype(str).tolist())
+        x_december = vectorizer.transform(december[msg_col].astype(str).tolist())
 
     with timed_step("cluster+complaint"):
         baseline["cluster_id"], baseline["cluster_sim_to_centroid"] = assign_clusters(x_baseline, cluster_model)
@@ -68,11 +68,17 @@ def run_predict(config_path: str) -> None:
             float(metadata["novelty_threshold"]),
         )
 
-        terms_df = emerging_terms(x_baseline, x_december, vectorizer.get_feature_names_out(), top_n=30)
+        terms_df = emerging_terms(x_baseline, x_december, vectorizer.get_feature_names_out(), preprocessor, cfg)
         novel_mask = (december["is_complaint"] == 1) & (december["is_novel"] == 1)
         x_novel = x_december[novel_mask.values]
         novel_texts = december.loc[novel_mask, msg_col].astype(str).tolist()
-        novel_clusters_df = cluster_novel_complaints(x_novel, novel_texts, vectorizer.get_feature_names_out(), cfg)
+        novel_clusters_df = cluster_novel_complaints(
+            x_novel,
+            novel_texts,
+            vectorizer.get_feature_names_out(),
+            cfg,
+            preprocessor,
+        )
         save_novelty_reports(terms_df, novel_clusters_df, "reports")
 
     with timed_step("export-and-report"):

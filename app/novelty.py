@@ -5,15 +5,11 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-from scipy import sparse
 from scipy.sparse import csr_matrix
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.preprocessing import normalize
 
-
-def _normalized_centroids(cluster_centers: np.ndarray) -> np.ndarray:
-    return normalize(cluster_centers)
+from app.preprocess import TextPreprocessor
 
 
 def max_similarity_to_centroids(x: csr_matrix, centroids: np.ndarray) -> np.ndarray:
@@ -34,21 +30,41 @@ def emerging_terms(
     x_baseline: csr_matrix,
     x_december: csr_matrix,
     feature_names: np.ndarray,
-    top_n: int = 30,
+    preprocessor: TextPreprocessor,
+    cfg: Dict,
 ) -> pd.DataFrame:
+    top_n = cfg.get("novelty", {}).get("emerging_terms_topn", 30)
+    min_df = cfg.get("novelty", {}).get("emerging_terms_min_df", 10)
+
     baseline_mean = np.asarray(x_baseline.mean(axis=0)).ravel()
     december_mean = np.asarray(x_december.mean(axis=0)).ravel()
+    baseline_df = np.asarray((x_baseline > 0).sum(axis=0)).ravel()
+    december_df = np.asarray((x_december > 0).sum(axis=0)).ravel()
+
     lift = (december_mean + 1e-9) / (baseline_mean + 1e-9)
     support = december_mean * lift
-    idx = np.argsort(support)[::-1][:top_n]
-    return pd.DataFrame(
-        {
-            "term": feature_names[idx],
-            "baseline_tfidf_mean": baseline_mean[idx],
-            "december_tfidf_mean": december_mean[idx],
-            "lift": lift[idx],
-        }
-    )
+    ranked = np.argsort(support)[::-1]
+
+    terms = []
+    for idx in ranked:
+        term = feature_names[idx]
+        if december_df[idx] < min_df:
+            continue
+        if not preprocessor.is_good_term(term):
+            continue
+        terms.append(
+            {
+                "term": term,
+                "baseline_tfidf_mean": baseline_mean[idx],
+                "december_tfidf_mean": december_mean[idx],
+                "baseline_df": int(baseline_df[idx]),
+                "december_df": int(december_df[idx]),
+                "lift": lift[idx],
+            }
+        )
+        if len(terms) >= top_n:
+            break
+    return pd.DataFrame(terms)
 
 
 def cluster_novel_complaints(
@@ -56,6 +72,7 @@ def cluster_novel_complaints(
     texts: List[str],
     feature_names: np.ndarray,
     cfg: Dict,
+    preprocessor: TextPreprocessor,
 ) -> pd.DataFrame:
     if x_novel.shape[0] == 0:
         return pd.DataFrame(columns=["cluster_id", "size", "top_terms", "example_messages"])
@@ -69,17 +86,24 @@ def cluster_novel_complaints(
     labels = model.fit_predict(x_novel)
 
     rows = []
-    top_n = cfg["clustering"].get("top_terms", 12)
+    top_n = cfg.get("summaries", {}).get("top_terms_per_cluster", cfg["clustering"].get("top_terms", 12))
     ex_n = cfg["novelty"].get("examples_per_novel_cluster", 10)
     for cid in range(k):
         idx = np.where(labels == cid)[0]
         centroid = model.cluster_centers_[cid]
-        term_ids = np.argsort(centroid)[::-1][:top_n]
+        ranked_terms = np.argsort(centroid)[::-1]
+        terms = []
+        for tid in ranked_terms:
+            term = feature_names[tid]
+            if preprocessor.is_good_term(term):
+                terms.append(term)
+            if len(terms) >= top_n:
+                break
         rows.append(
             {
                 "cluster_id": cid,
                 "size": int(len(idx)),
-                "top_terms": ", ".join(feature_names[term_ids]),
+                "top_terms": ", ".join(terms),
                 "example_messages": " || ".join(texts[i][:200] for i in idx[:ex_n]),
             }
         )
