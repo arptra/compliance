@@ -1,18 +1,26 @@
 input:
-  # Режим 1: единый файл (внутри него baseline/target выбираются фильтрами ниже)
   path: "data/sample.xlsx"
-
-  # Режим 2: список baseline-файлов + отдельный файл/список target-периода
   baseline_paths: []
   december_path: null
   december_paths: []
 
   message_col: "message"
   message_cols: null
-
   date_col: "date"
   date_format: null
   month_col: null
+
+  role_parsing:
+    enabled: true
+    client_markers: ["CLIENT", "КЛИЕНТ", "ПОЛЬЗОВАТЕЛЬ", "USER"]
+    operator_markers: ["OPERATOR", "ОПЕРАТОР", "АГЕНТ", "SUPPORT"]
+    chatbot_markers: ["CHATBOT", "БОТ", "ROBOT", "ASSISTANT"]
+    client_prefix_regexes:
+      - "(?im)^\\s*(CLIENT|КЛИЕНТ|ПОЛЬЗОВАТЕЛЬ|USER)\\s*[:\\-\\]]\\s*"
+      - "(?im)^\\s*\\[(CLIENT|КЛИЕНТ|ПОЛЬЗОВАТЕЛЬ|USER)\\]\\s*"
+    stop_on_markers: ["OPERATOR", "ОПЕРАТОР", "CHATBOT", "БОТ", "SUPPORT", "АГЕНТ"]
+    fallback_mode: "first_paragraph"
+    fallback_first_n_chars: 400
 
   baseline:
     mode: "last_n_months"
@@ -37,13 +45,13 @@ preprocess:
   placeholder_patterns:
     - "<[^>]{1,80}>"
     - "\\*{2,}"
-    - "(?i)\\b(x{2,}|х{2,}|_+|#+)\\b"
+    - "(?i)\\b(x{2,}|х{2,}|_+|#+|!num!|!fio!)\\b"
     - "\\b\\d{4,}\\b"
     - "\\b[0-9a-f]{8,}\\b"
     - "\\b[0-9a-f]{8}-[0-9a-f-]{8,}\\b"
     - "(?i)\\b(ticket|case|id|uuid|guid)\\b\\s*[:=]?\\s*\\w+"
   remove_urls_emails_phones: true
-  normalize_numbers: "remove"   # remove | token
+  normalize_numbers: "remove"
   number_token: "<num>"
   keep_cyrillic_latin_only: true
   min_token_len: 3
@@ -62,8 +70,8 @@ vectorizer:
   max_features: 200000
 
 clustering:
-  n_clusters: 12
-  batch_size: 2048
+  n_clusters: 30
+  batch_size: 4096
   top_terms: 12
   examples_per_cluster: 8
 
@@ -73,6 +81,17 @@ summaries:
   use_ctfidf: true
   always_filter_top_terms: true
 
+pilot:
+  complaint_mode: "weak_train"  # rules_only | weak_train
+  n_clusters: 20
+  sample_per_cluster: 10
+  complaint_examples: 30
+  save_models: false
+
+stages:
+  require_pilot_approval: true
+  approval_file: "reports/pilot_approval.txt"
+
 complaint:
   model: "logreg"
   threshold: 0.5
@@ -80,12 +99,15 @@ complaint:
 
 novelty:
   percentile: 2
-  novel_december_subclusters: 6
+  novel_december_subclusters: 8
   examples_per_novel_cluster: 10
   emerging_terms_topn: 30
   emerging_terms_min_df: 10
 
 output:
+  keep_full_raw_text: true
+  raw_text_col_name: "message_raw"
+  analyzed_text_col_name: "message_client_first"
   labeled_baseline_xlsx: "outputs/labeled_baseline.xlsx"
   labeled_december_xlsx: "outputs/labeled_december.xlsx"
   combined_xlsx: "outputs/combined_labeled.xlsx"

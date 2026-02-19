@@ -6,7 +6,45 @@ from typing import Dict
 import pandas as pd
 
 
-def build_report(
+def _md(df: pd.DataFrame, cols: list[str], n: int = 10) -> str:
+    if df.empty:
+        return "(нет данных)"
+    return df[cols].head(n).to_markdown(index=False)
+
+
+def build_pilot_report(month: str, labeled_df: pd.DataFrame, cluster_df: pd.DataFrame, complaint_examples_md: str) -> str:
+    return f"""# Pilot report ({month})
+
+## How to review
+1. Проверьте, что `message_client_first` — это действительно первое сообщение клиента, без хвоста оператора/бота.
+2. Проверьте кластеры по **примерам** (а не только по словам).
+3. Проверьте жалобы: top, borderline, non-complaints.
+
+## Dataset size
+- Rows: **{len(labeled_df)}**
+
+## Pilot clusters
+{_md(cluster_df, ['cluster_id','size','top_terms','example_messages'], n=20)}
+
+## Complaint examples
+{complaint_examples_md}
+"""
+
+
+def build_train_report(baseline_df: pd.DataFrame, cluster_df: pd.DataFrame, metrics: Dict) -> str:
+    return f"""# Full Train report
+
+- Baseline rows: **{len(baseline_df)}**
+- Seed precision: **{metrics.get('precision',0):.3f}**
+- Seed recall: **{metrics.get('recall',0):.3f}**
+- Seed f1: **{metrics.get('f1',0):.3f}**
+
+## Baseline clusters
+{_md(cluster_df, ['cluster_id','size','top_terms','example_messages'], n=20)}
+"""
+
+
+def build_december_report(
     baseline_df: pd.DataFrame,
     december_df: pd.DataFrame,
     cluster_summary_df: pd.DataFrame,
@@ -15,77 +53,33 @@ def build_report(
     novelty_percentile: float,
     emerging_df: pd.DataFrame,
     novel_clusters_df: pd.DataFrame,
-    cfg: Dict,
 ) -> str:
-    baseline_complaint_rate = baseline_df["is_complaint"].mean() if len(baseline_df) else 0.0
-    december_complaint_rate = december_df["is_complaint"].mean() if len(december_df) else 0.0
-    novel_complaints = december_df[(december_df["is_complaint"] == 1) & (december_df["is_novel"] == 1)]
-    novel_share = (len(novel_complaints) / len(december_df)) if len(december_df) else 0.0
-
-    top_clusters = cluster_summary_df.head(10)
-    top_clusters_md = top_clusters[["cluster_id", "size", "top_terms", "example_messages"]].to_markdown(index=False)
-    emerging_md = (
-        emerging_df.head(15)[["term", "december_df", "lift"]].to_markdown(index=False)
-        if len(emerging_df)
-        else "Нет валидных emerging terms после фильтрации."
-    )
-    novel_themes_md = (
-        novel_clusters_df.head(10)[["cluster_id", "size", "top_terms", "example_messages"]].to_markdown(index=False)
-        if len(novel_clusters_df)
-        else "No novel complaint clusters."
-    )
-
-    artifacts = cfg["output"]
-    return f"""# Complaint & Novel Context Report
+    novel = december_df[(december_df["is_complaint"] == 1) & (december_df["is_novel"] == 1)]
+    return f"""# December/Target comparison report
 
 ## How to read this report
-- **Category/Topic** = кластер похожих сообщений (автоматическая группировка).
-- **Complaint** = бинарный классификатор жалоб (`is_complaint`), обученный weak supervision.
-- **Novel** = сообщение с низкой похожестью на baseline-кластеры (`max_sim < threshold`).
+- Category = cluster похожих сообщений
+- Complaint = бинарный флаг жалобы
+- Novel = низкое сходство с baseline-кластерами
 
-## 1) Dataset sizes
 - Baseline rows: **{len(baseline_df)}**
-- Target-period rows: **{len(december_df)}**
+- Target rows: **{len(december_df)}**
+- Novelty threshold percentile: **{novelty_percentile}**
+- Novelty threshold value: **{novelty_threshold:.4f}**
+- Novel complaints: **{len(novel)}**
 
-## 2) Topic clustering overview
-- Number of baseline clusters: **{cfg['clustering']['n_clusters']}**
-- Top 10 clusters by volume (terms + examples):
+## Cluster overview
+{_md(cluster_summary_df, ['cluster_id','size','top_terms','example_messages'], n=10)}
 
-{top_clusters_md}
+## Emerging terms
+{_md(emerging_df, [c for c in ['term','december_df','lift'] if c in emerging_df.columns], n=20)}
 
-> Интерпретируйте кластеры в первую очередь по example_messages, а top_terms используйте как подсказку темы.
-
-## 3) Complaint detection overview (weak supervision)
-- Seeded validation precision: **{metrics['precision']:.3f}**
-- Seeded validation recall: **{metrics['recall']:.3f}**
-- Seeded validation F1: **{metrics['f1']:.3f}**
-- Baseline complaint rate: **{baseline_complaint_rate:.2%}**
-- Target-period complaint rate: **{december_complaint_rate:.2%}**
-
-## 4) Novelty detection
-- Novelty threshold percentile: **p={novelty_percentile}**
-- Novelty similarity threshold value: **{novelty_threshold:.4f}**
-- Novel complaints in target period: **{len(novel_complaints)}** ({novel_share:.2%} of target-period messages)
-
-### Top emerging terms (filtered)
-{emerging_md}
-
-### New-context complaint groups (top terms + 5+ examples)
-{novel_themes_md}
-
-## 5) Artifact paths
-- Baseline labeled: `{artifacts['labeled_baseline_xlsx']}`
-- December/target labeled: `{artifacts['labeled_december_xlsx']}`
-- Combined labeled: `{artifacts['combined_xlsx']}`
-- Cluster summaries CSV: `reports/cluster_summaries.csv`
-- Novel complaint clusters CSV: `reports/december_novel_complaints_clusters.csv`
-- Emerging terms CSV: `reports/emerging_terms.csv`
-- Metrics JSON: `reports/complaint_seed_metrics.json`
-- Model directory: `{artifacts['model_dir']}`
+## Novel complaint groups
+{_md(novel_clusters_df, ['cluster_id','size','top_terms','example_messages'], n=10)}
 """
 
 
-def save_report(report_text: str, path: str) -> None:
+def save_report(text: str, path: str) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(report_text, encoding="utf-8")
+    p.write_text(text, encoding="utf-8")

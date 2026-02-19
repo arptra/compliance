@@ -1,22 +1,11 @@
-# Пайплайн анализа обращений (без LLM): темы, жалобы и «новый контекст»
+# Staged non-LLM pipeline: Excel → clusters/complaints → December novelty
 
-Проект читает Excel с обращениями пользователей и делает:
-1) кластеризацию тем (без ручных меток),
-2) бинарную детекцию жалоб,
-3) поиск новых контекстов жалоб в целевом периоде (исторически поле называется `december`).
+Проект работает **по этапам**, чтобы вы сначала проверили качество на малом объёме, и только потом запускали полный расчёт.
 
-Все на классическом ML (`scikit-learn`), без LLM/трансформеров/внешних API.
-
-## Почему теперь отчет стал чище
-Раньше в `top terms` попадали служебные артефакты анонимизации (`<phone>`, `xxxx`, `***`, ID/UUID).
-Теперь перед векторизацией включена агрессивная очистка:
-- удаляются placeholder-теги и маски (`<...>`, `***`, `xxxx`, `####`),
-- удаляются URL/email/телефоны,
-- удаляются/токенизируются числа (по конфигу),
-- denylist и фильтры токенов блокируют мусор в словаре,
-- top terms в кластерах фильтруются повторно и строятся через c-TF-IDF.
-
-Итог: `cluster_summaries.csv` и `report.md` должны быть интерпретируемыми.
+## 0) Что важно теперь
+- В анализ идёт **только первое сообщение клиента** (`message_client_first`), а не весь диалог с оператором/ботом.
+- Полный исходный текст сохраняется в `message_raw` (без обрезки) для контроля.
+- Для ML используется `message_clean` (очищенная версия, без мусора и placeholder’ов).
 
 ---
 
@@ -27,24 +16,75 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## 2) Быстрый запуск
+---
+
+## 2) Новый staged workflow
+
+### Stage 1 — PILOT (один месяц)
 ```bash
-python -m app.make_synth_data --out data/sample.xlsx
+python -m app.pilot --config configs/config.yaml --month 2025-10
+```
+
+Создаёт:
+- `outputs/pilot_labeled.xlsx`
+- `reports/pilot_report.md`
+- `reports/pilot_cluster_summaries.csv`
+- `reports/pilot_complaint_examples.md`
+- `reports/pilot_approval.txt`
+
+Что проверять в pilot:
+1. Корректно ли извлекается первое сообщение клиента.
+2. Понятны ли кластеры по примерам.
+3. Адекватны ли complaint-примеры (top / borderline / non-complaints).
+
+### Stage 2 — FULL TRAIN (все baseline месяцы)
+```bash
+python -m app.train_full --config configs/config.yaml
+```
+
+Если включено `stages.require_pilot_approval: true`, перед запуском нужно вручную записать `APPROVED` в файл:
+`reports/pilot_approval.txt`.
+
+Создаёт:
+- `outputs/labeled_baseline.xlsx`
+- `reports/train_report.md`
+- `reports/cluster_summaries.csv`
+- `reports/complaint_seed_metrics.json`
+- `models/*`
+
+### Stage 3 — December compare (сравнение с baseline)
+```bash
+python -m app.compare_december --config configs/config.yaml
+```
+
+Создаёт:
+- `outputs/labeled_december.xlsx`
+- `outputs/combined_labeled.xlsx`
+- `reports/december_report.md`
+- `reports/december_novel_complaints_clusters.csv`
+
+Если Stage 2 не запускался и нет моделей — команда завершится с понятной ошибкой.
+
+---
+
+## 3) Backward compatibility CLI
+Старые команды сохранены как алиасы:
+```bash
 python -m app.train --config configs/config.yaml
 python -m app.predict --config configs/config.yaml
 ```
 
 ---
 
-## 3) Как передавать документы
+## 4) Как передавать документы
 
-### Режим A: один общий файл
+### Один общий файл
 ```yaml
 input:
-  path: "data/my_all_data.xlsx"
+  path: "data/input.xlsx"
 ```
 
-### Режим B: baseline по месяцам + отдельный target-файл
+### Baseline по месяцам + отдельный декабрь
 ```yaml
 input:
   path: null
@@ -52,29 +92,21 @@ input:
     - "data/2025-06.xlsx"
     - "data/2025-07.xlsx"
     - "data/2025-08.xlsx"
-  december_path: "data/2025-09.xlsx"
-```
-
-Также можно несколько target-файлов:
-```yaml
-input:
-  december_paths:
-    - "data/2025-09.xlsx"
-    - "data/2025-10.xlsx"
+  december_path: "data/2025-12.xlsx"
 ```
 
 ---
 
-## 4) Одна или несколько колонок сообщений
+## 5) Как передавать колонку(и) сообщений
 
-Одна колонка:
+### Одна колонка
 ```yaml
 input:
   message_col: "message"
   message_cols: null
 ```
 
-Несколько колонок (из разных каналов):
+### Несколько каналов в одной строке
 ```yaml
 input:
   message_col: null
@@ -84,85 +116,93 @@ input:
     - "message_callcenter"
 ```
 
-Пайплайн объединит их в `message_joined`.
+Они объединяются в `message_raw`, затем извлекается `message_client_first`.
 
 ---
 
-## 5) Как выбрать target-месяц(ы)
+## 6) Извлечение только первого сообщения клиента
 
-### Один месяц
-```yaml
-input:
-  baseline:
-    mode: "last_n_months"
-    n_months: 6
-  december:
-    mode: "month_value"
-    month_value: "2026-01"
+Настройки в `input.role_parsing`:
+- `client_markers`
+- `operator_markers`
+- `chatbot_markers`
+- `client_prefix_regexes`
+- `stop_on_markers`
+- fallback (`first_paragraph` или `first_n_chars`)
+
+Логика:
+1. найти первый client-marker;
+2. взять текст после него;
+3. остановиться на первом operator/chatbot marker;
+4. если marker’ов нет — fallback.
+
+---
+
+## 7) Как устроены текстовые поля в output
+
+В итоговых Excel есть 3 ключевых поля:
+- `message_raw` — полный исходный текст, без изменения;
+- `message_client_first` — извлечённое первое сообщение клиента;
+- `message_clean` — очищенный текст для ML.
+
+---
+
+## 8) Как убирать мусор (`!num!`, `!fio!`, placeholders и т.д.)
+
+### Где настраивать
+1. `configs/deny_tokens.txt` — запрещённые токены (никогда не должны попадать в top terms).
+2. `configs/extra_stopwords.txt` — дополнительные стоп-слова вашего домена.
+3. `preprocess.placeholder_patterns` в `configs/config.yaml` — regex для шаблонов мусора.
+
+### Как добавить новый мусор
+Пример: хотите убрать `!acc!` и `!passport!`.
+
+1) Добавьте в `configs/deny_tokens.txt`:
+```text
+!acc!
+!passport!
 ```
 
-### Диапазон
+2) Если это шаблон, добавьте regex в `preprocess.placeholder_patterns`, например:
 ```yaml
-input:
-  december:
-    mode: "date_range"
-    start: "2026-01-01"
-    end: "2026-02-28"
+- "(?i)![a-z_]{2,20}!"
 ```
 
-### Фиксированный baseline + target диапазон
-```yaml
-input:
-  baseline:
-    mode: "date_range"
-    start: "2025-06-01"
-    end: "2025-11-30"
-  december:
-    mode: "date_range"
-    start: "2026-03-01"
-    end: "2026-03-31"
-```
+3) Перезапустите Stage 1 pilot и проверьте, что в `pilot_cluster_summaries.csv` и `pilot_report.md` эти артефакты исчезли.
 
 ---
 
-## 6) Как читать отчет `reports/report.md`
+## 9) Как читать отчёты
 
-Разделы:
-1. **How to read this report** — базовые определения (category/complaint/novel).
-2. **Dataset sizes** — объем baseline и target.
-3. **Topic clustering overview** — крупные кластеры, top terms и примеры сообщений.
-4. **Complaint detection overview** — precision/recall/f1 на seed-валидации.
-5. **Novelty detection** — порог, доля novel-жалоб, emerging terms, группы новых жалоб.
+### `reports/pilot_report.md`
+- раздел “How to review” — чеклист проверки качества;
+- кластеры: `cluster_id`, `top_terms`, `count`, `example_messages`;
+- complaint-примеры: top / borderline / non-complaints.
 
-Главное правило интерпретации:
-- сначала смотрите **examples**,
-- затем `top_terms` как краткое описание темы,
-- `novel complaints` используйте как сигнал новых сценариев проблем.
+### `reports/train_report.md`
+- итог обучения baseline;
+- метрики weak supervision;
+- baseline cluster overview.
 
----
-
-## 7) Куда добавлять свои стоп-слова и deny-токены
-
-- Файл пользовательских стоп-слов: `configs/extra_stopwords.txt`
-- Файл запрещенных токенов/артефактов: `configs/deny_tokens.txt`
-
-Добавляйте туда служебные слова и маски, которые не должны попадать в словарь и в `top terms`.
-
-Примеры для denylist:
-- `<num>`, `<phone>`, `<email>`, `<name>`
-- `xxxx`, `хххх`, `***`, `####`
-- технические маркеры/шаблоны вашей системы
+### `reports/december_report.md`
+- сравнение baseline vs december;
+- порог новизны;
+- emerging terms;
+- группы новых complaint-контекстов.
 
 ---
 
-## 8) Основные команды
+## 10) Пример полного процесса (рекомендуемый)
+
 ```bash
-python -m app.train --config configs/config.yaml
-python -m app.predict --config configs/config.yaml
-pytest -q
-```
+# 1) pilot на одном месяце
+python -m app.pilot --config configs/config.yaml --month 2025-10
 
-Для быстрых итераций:
-```bash
-python -m app.train --config configs/config.yaml --sample 50000
+# 2) вручную открыть reports/pilot_approval.txt и написать APPROVED
+
+# 3) полный train
+python -m app.train_full --config configs/config.yaml
+
+# 4) сравнение с декабрем
+python -m app.compare_december --config configs/config.yaml
 ```

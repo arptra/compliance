@@ -4,6 +4,8 @@
 <name>
 <id>
 <uuid>
+!num!
+!fio!
 xxx
 xxxx
 ххх
