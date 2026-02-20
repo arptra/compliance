@@ -15,6 +15,15 @@ from .gigachat_schema import NormalizeTicket
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
 
 
+def _validate_mtls_files(ca_bundle_file: str, cert_file: str, key_file: str) -> None:
+    missing = [p for p in [ca_bundle_file, cert_file, key_file] if not p or not Path(p).exists()]
+    if missing:
+        raise FileNotFoundError(
+            "mTLS files are missing for GigaChat: " + ", ".join(missing) +
+            ". Set llm.ca_bundle_file/cert_file/key_file (or corresponding GIGACHAT_* env overrides)."
+        )
+
+
 class LLMCache:
     def __init__(self, db_path: str):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +58,7 @@ class GigaChatNormalizer:
             self.loan_products = ["NONE"]
 
         if not mock:
+            _validate_mtls_files(cfg.ca_bundle_file, cfg.cert_file, cfg.key_file)
             self.client = GigaChat(
                 base_url=cfg.base_url,
                 ca_bundle_file=cfg.ca_bundle_file,
@@ -107,30 +117,48 @@ class GigaChatNormalizer:
             },
             ensure_ascii=False,
         )
-        response = self.client.chat(
-            {
-                "model": self.cfg.model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            }
-        )
+        try:
+            response = self.client.chat(
+                {
+                    "model": self.cfg.model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+            )
+        except Exception as e:
+            msg = str(e)
+            if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
+                raise RuntimeError(
+                    "GigaChat mTLS handshake failed: server requires client certificate. "
+                    "Check cert_file/key_file/ca_bundle_file paths and that env overrides are not pointing to empty files."
+                ) from e
+            raise
         content = response.choices[0].message.content
         try:
             parsed = json.loads(content)
             obj = NormalizeTicket.model_validate(parsed)
         except Exception:
             repair_prompt = f"Исправь: верни JSON по схеме, убери запрещенные токены.\n{content}"
-            response2 = self.client.chat(
-                {
-                    "model": self.cfg.model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": repair_prompt},
-                    ],
-                }
-            )
+            try:
+                response2 = self.client.chat(
+                    {
+                        "model": self.cfg.model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": repair_prompt},
+                        ],
+                    }
+                )
+            except Exception as e:
+                msg = str(e)
+                if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
+                    raise RuntimeError(
+                        "GigaChat mTLS handshake failed on repair request: certificate required by server. "
+                        "Verify mTLS cert/key/CA configuration."
+                    ) from e
+                raise
             obj = NormalizeTicket.model_validate(json.loads(response2.choices[0].message.content))
         self.cache.set(k, obj.model_dump())
         return obj

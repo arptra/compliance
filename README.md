@@ -689,14 +689,19 @@ PYTHONPATH=src python -m complaints_trends.cli demo
    - Проверьте `input.datetime_column` и `input.datetime_format`.
    - Ожидаемый формат: `2025-01-09 12:55:29`.
 
+7. **`TLSV13_ALERT_CERTIFICATE_REQUIRED` при обращении к GigaChat**
+   - Это ошибка mTLS: сервер не получил клиентский сертификат.
+   - Проверьте пути `llm.ca_bundle_file`, `llm.cert_file`, `llm.key_file` и env overrides `GIGACHAT_CA_BUNDLE_FILE`, `GIGACHAT_CERT_FILE`, `GIGACHAT_KEY_FILE`.
+   - Убедитесь, что файлы реально существуют и не пустые.
+
 7. **`KeyError: is_complaint_llm` в pilot prepare**
    - Обычно это пустой диапазон `date_from/date_to` (после фильтра 0 строк).
    - Сейчас пайплайн корректно обрабатывает пустой диапазон и строит пустой pilot-отчет без падения.
 
-8. **Несколько файлов для обработки**
+9. **Несколько файлов для обработки**
    - Используйте `input.file_names` для явного списка файлов.
 
-9. **Что указывать для периода обучения?**
+10. **Что указывать для периода обучения?**
    - Всегда используйте datetime-колонку Excel: `input.datetime_column` + `input.datetime_format`.
    - Выборку задавайте только через `prepare.date_from` / `prepare.date_to` или CLI `--date-from` / `--date-to`.
 
