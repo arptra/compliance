@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+*.log
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+
+# artifacts
+data/raw/*.xlsx
+data/interim/*
+!data/interim/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+models/*
+!models/.gitkeep
+reports/*
+!reports/.gitkeep
+exports/*
+!exports/.gitkeep
+certs/*
+!certs/.gitkeep
