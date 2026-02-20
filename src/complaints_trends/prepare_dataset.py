@@ -65,7 +65,7 @@ def _build_signal_payload(row: pd.Series, signal_columns: list[str], dialog_fiel
             out[c] = str(v).strip()
     return out
 
-def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None = None, limit: int | None = None, llm_mock: bool = False, date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
+def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None = None, llm_mock: bool = False, date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
     df = read_all_excels(cfg.input)
     if df.empty:
         raise ValueError("No input files found")
@@ -73,10 +73,6 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None =
         df["row_id"] = df[cfg.input.id_column].astype(str)
     else:
         df["row_id"] = [f"row_{i}" for i in range(len(df))]
-    if month:
-        # backward compatibility
-        df = df[df["month"] == month].copy()
-
     eff_from = date_from or cfg.prepare.date_from
     eff_to = date_to or cfg.prepare.date_to
     if eff_from:

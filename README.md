@@ -160,11 +160,6 @@ input:
   input_dir: "data/raw"
   file_glob: "*.xlsx"
   file_names: null  # можно явно перечислить файлы
-  month_source: "filename"
-  month_regex: "(\d{4})[-_](\d{2})"
-  month_regexes: null  # можно задать список regex для разных шаблонов имен
-  month_column: "created_at"
-  month_column_datetime_format: "%Y-%m-%d %H:%M:%S"
   datetime_column: "created_at"
   datetime_format: "%Y-%m-%d %H:%M:%S"
   id_column: null
@@ -209,7 +204,6 @@ llm:
   prompt_version: "v1"
 
 prepare:
-  pilot_month: null
   pilot_limit: 1000
   date_from: null
   date_to: null
@@ -232,7 +226,6 @@ training:
     category: "linearsvc"
   validation:
     split_mode: "time"
-    val_month: null
   model_dir: "models"
 
 analysis:
@@ -321,18 +314,13 @@ python -m complaints_trends.cli demo
 
 ## 5.1 `input`
 - `input_dir`, `file_glob`: где искать Excel.
-- `month_source`: `filename` или `column`.
-- `month_regex`: основной regex для извлечения `YYYY-MM` из имени файла.
-- `month_regexes`: список regex-паттернов, если имена файлов различаются между месяцами/каналами.
 - `id_column`: если нет стабильного ID, `row_id` будет сгенерирован.
 - `signal_columns`: дополнительные поля для LLM/аналитики (например `subject/channel/product/status`). **Диалоговые поля (`dialog_columns`) сюда включать не обязательно** — они и так обрабатываются отдельно.
-- `month_column_datetime_format`: формат даты для `month_column`, если в колонке timestamp вида `2025-01-09 12:55:29`.
 - `dialog_column`: legacy-колонка с полным диалогом (fallback).
 - `dialog_columns`: список нескольких текстовых полей (например чат/звонок/комментарий/суммаризация). Пайплайн автоматически выберет наиболее содержательное непустое поле как `raw_dialog`, а также передаст все непустые поля в `dialog_context` для GigaChat.
 - `signal_columns` и `dialog_columns` логически разделены: из `signal_columns` в prompt уходят только недиалоговые поля (`signal_fields`).
 
 **Практика:**
-- Если именование файлов нестабильно, лучше `month_source: column`.
 - Если есть надежный бизнес-идентификатор, обязательно задайте `id_column` (упростит merge с gold-разметкой).
 
 ## 5.2 `client_first_extraction`
@@ -363,7 +351,8 @@ python -m complaints_trends.cli demo
 - `prompt_version`: меняйте при изменении промпта, чтобы не смешивать старые кэши.
 
 ## 5.5 `prepare`
-- `pilot_month`, `pilot_limit`: пилотный режим.
+- `pilot_limit`: пилотный режим (ограничение строк).
+- `date_from`/`date_to`: период отбора данных по `event_time`.
 - `output_parquet`, `pilot_parquet`, `pilot_review_xlsx`: куда сохранять артефакты.
 
 ## 5.6 `training`
@@ -393,7 +382,7 @@ python -m complaints_trends.cli demo
 Команды:
 
 ```bash
-python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --month 2025-09 --limit 5000
+python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --date-from "2025-09-01 00:00:00" --date-to "2025-09-30 23:59:59" --limit 5000
 python -m complaints_trends.cli prepare --config configs/project.yaml
 ```
 
@@ -655,7 +644,7 @@ python -m complaints_trends.cli compare --config configs/project.yaml --new-mont
 ## 11. Полный список CLI команд
 
 ```bash
-python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --month 2025-09 --limit 5000
+python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --date-from "2025-09-01 00:00:00" --date-to "2025-09-30 23:59:59" --limit 5000
 python -m complaints_trends.cli prepare --config configs/project.yaml
 python -m complaints_trends.cli train --config configs/project.yaml
 python -m complaints_trends.cli trends --config configs/project.yaml
@@ -682,8 +671,8 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 1. **Нет входных файлов**
    - Проверьте `input_dir`, `file_glob`, имена файлов.
 
-2. **Месяц не извлекается**
-   - Проверьте `month_regex` и формат имен.
+2. **Неправильный период выборки**
+   - Проверьте `prepare.date_from`/`prepare.date_to` и timezone/формат дат.
 
 3. **Много мусора в summary/keywords**
    - Обновите deny tokens, prompt и логику repair.
@@ -696,23 +685,17 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 5. **Слишком много/мало novel topics**
    - Подстройте `threshold_percentile`, `kmeans_k`, `svd_components`.
 
+6. **Дата в колонке Excel не парсится**
+   - Проверьте `input.datetime_column` и `input.datetime_format`.
+   - Ожидаемый формат: `2025-01-09 12:55:29`.
 
-6. **Дата в month_column в формате `2025-01-09 12:55:29`**
-   - Поддерживается: пайплайн парсит datetime и приводит к `YYYY-MM`.
-   - При нестандартном формате задайте `month_column_datetime_format`.
+7. **Несколько файлов для обработки**
+   - Используйте `input.file_names` для явного списка файлов.
 
-7. **Несколько разных шаблонов имен файлов при `month_source: filename`**
-   - Используйте `month_regexes` (список regex) — пайплайн применит их по очереди.
-   - Если нужно обработать только конкретные файлы, задайте `file_names`.
+8. **Что указывать для периода обучения?**
+   - Всегда используйте datetime-колонку Excel: `input.datetime_column` + `input.datetime_format`.
+   - Выборку задавайте только через `prepare.date_from` / `prepare.date_to` или CLI `--date-from` / `--date-to`.
 
-
-8. **Что указывать в `month_source` и почему "ошибка ввода"?**
-   - Допустимые режимы: только `filename` или `column`.
-   - Если у вас дата в колонке Excel (например `2025-01-09 12:55:29`), используйте:
-     - `month_source: column`
-     - `month_column: <имя_колонки>`
-   - Если у вас месяц в имени файла, используйте `month_source: filename` и настройте `month_regex`/`month_regexes`.
-   - Частая ошибка: ставить в `month_source` имя файла (`filename.xlsx`) или имя колонки. Пайплайн теперь старается это авто-исправить, но лучше задавать режим явно.
 
 ---
 

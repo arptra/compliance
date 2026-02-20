@@ -16,70 +16,29 @@ def discover_excel_files(cfg: InputConfig) -> list[Path]:
     return [p for p in files if p.exists()]
 
 
-def _resolve_datetime_column(cfg: InputConfig, columns: list[str]) -> str:
-    candidates = [cfg.datetime_column, cfg.month_column]
-    for c in candidates:
-        if c and c in columns:
-            return c
-    raise ValueError(
-        f"No datetime column found. Configure input.datetime_column (current={cfg.datetime_column!r}); "
-        f"available columns: {columns[:20]}"
-    )
-
-
 def parse_event_time(series: pd.Series, dt_format: str | None = None) -> pd.Series:
     if dt_format:
-        dt = pd.to_datetime(series, format=dt_format, errors="coerce")
-    else:
-        dt = pd.to_datetime(series, errors="coerce")
-    return dt
+        return pd.to_datetime(series, format=dt_format, errors="coerce")
+    return pd.to_datetime(series, errors="coerce")
 
-
-
-
-def extract_month_from_filename(path: Path, pattern: str | None = None, patterns: list[str] | None = None) -> str | None:
-    import re
-    candidates = patterns or ([] if pattern is None else [pattern])
-    for p in candidates:
-        m = re.search(p, path.name)
-        if m and m.lastindex and m.lastindex >= 2:
-            return f"{m.group(1)}-{m.group(2)}"
-    m = re.search(r"(\d{4})[-_](\d{2})", path.name)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}"
-    return None
-
-
-def extract_month_from_column(series: pd.Series, explicit_format: str | None = None) -> pd.Series:
-    dt = parse_event_time(series, explicit_format)
-    out = dt.dt.strftime("%Y-%m")
-    return out.fillna("")
 
 def load_excel_with_month(path: Path, cfg: InputConfig) -> pd.DataFrame:
     df = pd.read_excel(path)
-    if cfg.month_source == "filename":
-        month = extract_month_from_filename(path, cfg.month_regex, cfg.month_regexes)
-        if not month:
-            raise ValueError(
-                f"Cannot parse month from filename: {path.name}. "
-                f"Check input.month_regex/month_regexes (current: {cfg.month_regex!r}, {cfg.month_regexes!r}) "
-                "or set month_source=column with month_column."
-            )
-        df["month"] = month
-        # still require event_time for downstream period filtering
-        dt_col = _resolve_datetime_column(cfg, list(df.columns))
-        df["event_time"] = parse_event_time(df[dt_col], cfg.datetime_format or cfg.month_column_datetime_format)
-    else:
-        dt_col = _resolve_datetime_column(cfg, list(df.columns))
-        df["event_time"] = parse_event_time(df[dt_col], cfg.datetime_format or cfg.month_column_datetime_format)
+    if cfg.datetime_column not in df.columns:
+        raise ValueError(
+            f"No datetime column '{cfg.datetime_column}' in {path.name}. "
+            f"Available: {list(df.columns)[:20]}"
+        )
+
+    df["event_time"] = parse_event_time(df[cfg.datetime_column], cfg.datetime_format)
     bad = int(df["event_time"].isna().sum())
     if bad:
         raise ValueError(
-            f"Cannot parse {bad} values in datetime column '{dt_col}' for file {path.name}. "
+            f"Cannot parse {bad} values in datetime column '{cfg.datetime_column}' for file {path.name}. "
             "Expected values like '2025-01-09 12:55:29'."
         )
-    if "month" not in df.columns:
-        df["month"] = df["event_time"].dt.strftime("%Y-%m")
+
+    df["month"] = df["event_time"].dt.strftime("%Y-%m")
     df["source_file"] = path.name
     return df
 

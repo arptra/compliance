@@ -21,14 +21,13 @@ console = Console()
 def prepare_cmd(
     config: str = typer.Option(..., "--config", help="Path to project yaml config"),
     pilot: bool = typer.Option(False, "--pilot"),
-    month: str | None = typer.Option(None, "--month"),
     date_from: str | None = typer.Option(None, "--date-from"),
     date_to: str | None = typer.Option(None, "--date-to"),
     limit: int | None = typer.Option(None, "--limit"),
     mock_llm: bool = typer.Option(False, "--mock-llm"),
 ):
     cfg = load_config(config)
-    df = prepare_dataset(cfg, pilot=pilot, month=month, date_from=date_from, date_to=date_to, limit=limit or cfg.prepare.pilot_limit, llm_mock=mock_llm)
+    df = prepare_dataset(cfg, pilot=pilot, date_from=date_from, date_to=date_to, limit=limit or cfg.prepare.pilot_limit, llm_mock=mock_llm)
     console.log(f"Prepared rows: {len(df)}")
 
 
@@ -90,7 +89,7 @@ def demo_cmd(config: str = typer.Option("configs/project.yaml", "--config", help
     mk("2025-11", 140)
     mk("2025-12", 80)
 
-    prepare_dataset(cfg, pilot=True, month="2025-10", limit=200, llm_mock=True)
+    prepare_dataset(cfg, pilot=True, date_from="2025-10-01 00:00:00", date_to="2025-10-31 23:59:59", limit=200, llm_mock=True)
     prepare_dataset(cfg, pilot=False, llm_mock=True)
     train(cfg)
     build_trends(cfg)

@@ -6,19 +6,14 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class InputConfig(BaseModel):
     input_dir: str
     file_glob: str = "*.xlsx"
     file_names: list[str] | None = None
-    month_source: Literal["filename", "column"] = "filename"
-    month_regex: str
-    month_regexes: list[str] | None = None
-    month_column: str | None = None
-    month_column_datetime_format: str | None = None
-    datetime_column: str | None = "created_at"
+    datetime_column: str = "created_at"
     datetime_format: str | None = None
     id_column: str | None = None
     signal_columns: list[str]
@@ -26,33 +21,6 @@ class InputConfig(BaseModel):
     dialog_columns: list[str] | None = None
     encoding: str = "utf-8"
 
-
-
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_month_source(cls, data: dict):
-        if not isinstance(data, dict):
-            return data
-        raw = str(data.get("month_source", "filename")).strip()
-        norm = raw.lower()
-        if norm in {"filename", "column"}:
-            data["month_source"] = norm
-            return data
-
-        # user passed a file-like value instead of mode
-        if norm.endswith(".xlsx") or "file" in norm:
-            data["month_source"] = "filename"
-            return data
-
-        # user passed a column name in month_source by mistake
-        if raw and data.get("month_column") in {None, "", "null"}:
-            data["month_source"] = "column"
-            data["month_column"] = raw
-            return data
-
-        data["month_source"] = "filename"
-        return data
 
 class ClientFirstConfig(BaseModel):
     enabled: bool = True
@@ -93,7 +61,6 @@ class LLMConfig(BaseModel):
 
 
 class PrepareConfig(BaseModel):
-    pilot_month: str | None = None
     pilot_limit: int = 5000
     date_from: str | None = None
     date_to: str | None = None
@@ -118,7 +85,6 @@ class ClassifierConfig(BaseModel):
 
 class ValidationConfig(BaseModel):
     split_mode: Literal["time", "random"] = "time"
-    val_month: str | None = None
     val_from: str | None = None
     val_to: str | None = None
 
