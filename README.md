@@ -145,8 +145,9 @@ input:
   month_regex: "(\d{4})[-_](\d{2})"
   month_column: null
   id_column: null
-  signal_columns: ["dialog_text", "subject", "channel", "product", "status"]
-  dialog_column: "dialog_text"
+  signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
+  dialog_column: "dialog_text"  # legacy fallback
+  dialog_columns: ["dialog_text", "call_text", "comment_text", "summary_text"]
   encoding: "utf-8"
 
 client_first_extraction:
@@ -290,7 +291,8 @@ python -m complaints_trends.cli demo
 - `month_regex`: как извлекать `YYYY-MM` из имени файла.
 - `id_column`: если нет стабильного ID, `row_id` будет сгенерирован.
 - `signal_columns`: поля, которые могут помочь LLM/аналитике (subject/channel/product/status).
-- `dialog_column`: колонка с полным диалогом.
+- `dialog_column`: legacy-колонка с полным диалогом (fallback).
+- `dialog_columns`: список нескольких текстовых полей (например чат/звонок/комментарий/суммаризация). Пайплайн автоматически выберет наиболее содержательное непустое поле как `raw_dialog`, а также передаст все непустые поля в `dialog_context` для GigaChat.
 
 **Практика:**
 - Если именование файлов нестабильно, лучше `month_source: column`.
@@ -360,8 +362,8 @@ python -m complaints_trends.cli prepare --config configs/project.yaml
 
 Что делает:
 1. Читает все Excel и определяет месяц.
-2. Сохраняет исходный диалог в `raw_dialog`.
-3. Извлекает `client_first_message`.
+2. Собирает несколько текстовых полей (`dialog_columns`), выбирает основной источник `dialog_source_field`, сохраняет его в `raw_dialog` и весь контекст в `dialog_context_map`.
+3. Извлекает `client_first_message` из выбранного основного поля.
 4. Делает PII-редакцию.
 5. Формирует компактный payload для LLM (без простыни полного диалога).
 6. Нормализует в строгий JSON-контракт.

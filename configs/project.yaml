@@ -5,8 +5,9 @@ input:
   month_regex: "(\\d{4})[-_](\\d{2})"
   month_column: null
   id_column: null
-  signal_columns: ["dialog_text", "subject", "channel", "product", "status"]
-  dialog_column: "dialog_text"
+  signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
+  dialog_column: "dialog_text"  # legacy fallback
+  dialog_columns: ["dialog_text", "call_text", "comment_text", "summary_text"]
   encoding: "utf-8"
 
 client_first_extraction:

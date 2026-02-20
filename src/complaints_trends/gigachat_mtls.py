@@ -97,6 +97,8 @@ class GigaChatNormalizer:
                     "category_must_be_from_allowed": True,
                     "subcategory_should_match_chosen_category": True,
                     "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                    "multi_dialog_fields": "Вход может содержать несколько текстовых полей (чат/звонок/комментарий/summary). Используй client_first_message как основной источник, dialog_context как доп.контекст.",
+                    "ignore_empty_context_fields": True,
                 },
                 "allowed_categories": self.categories,
                 "allowed_subcategories_by_category": self.subcategories_by_category,

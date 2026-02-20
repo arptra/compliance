@@ -15,7 +15,8 @@ class InputConfig(BaseModel):
     month_column: str | None = None
     id_column: str | None = None
     signal_columns: list[str]
-    dialog_column: str
+    dialog_column: str | None = "dialog_text"
+    dialog_columns: list[str] | None = None
     encoding: str = "utf-8"
 
 
