@@ -8,6 +8,7 @@ import pandas as pd
 from .config import ProjectConfig
 from .extract_client_first import extract_client_first_message
 from .gigachat_mtls import GigaChatNormalizer
+from .gigachat_schema import NormalizeTicket
 from .io_excel import read_all_excels
 from .pii_redaction import redact_pii
 from .reports.render import render_template, write_md
@@ -120,6 +121,8 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         out = normalizer.normalize(payload)
         llm_rows.append(out.model_dump())
     llm_df = pd.DataFrame(llm_rows)
+    if llm_df.empty:
+        llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))
     out_df = pd.concat([df.reset_index(drop=True), llm_df.add_suffix("_llm")], axis=1)
 
     out_path = cfg.prepare.pilot_parquet if pilot else cfg.prepare.output_parquet
@@ -143,13 +146,21 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
 
 
 def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
+    if "is_complaint_llm" not in df.columns:
+        df = df.copy()
+        df["is_complaint_llm"] = False
+    if "complaint_category_llm" not in df.columns:
+        df["complaint_category_llm"] = "OTHER"
+    if "short_summary_llm" not in df.columns:
+        df["short_summary_llm"] = ""
+
     complaints = df[df["is_complaint_llm"] == True]
     non_complaints = df[df["is_complaint_llm"] == False]
     top = complaints["complaint_category_llm"].value_counts().head(10).to_dict()
     warn = df["short_summary_llm"].astype(str).str.contains(r"CLIENT|OPERATOR|CHATBOT", case=False).any()
     context = {
         "n": len(df),
-        "complaint_share": float(df["is_complaint_llm"].mean()),
+        "complaint_share": float(df["is_complaint_llm"].mean()) if len(df) else 0.0,
         "top_categories": top,
         "complaint_examples": complaints.head(30).to_dict(orient="records"),
         "non_examples": non_complaints.head(30).to_dict(orient="records"),
