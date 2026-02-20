@@ -1,9 +1,12 @@
 input:
   input_dir: "data/raw"
   file_glob: "*.xlsx"
+  file_names: null  # optional explicit list, e.g. ["2025-01.xlsx", "2025_02_part1.xlsx"]
   month_source: "filename"
   month_regex: "(\\d{4})[-_](\\d{2})"
+  month_regexes: null  # optional list of regex patterns for mixed file naming
   month_column: null
+  month_column_datetime_format: null  # optional strptime format for month_column, e.g. "%Y-%m-%d %H:%M:%S"
   id_column: null
   signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
   dialog_column: "dialog_text"  # legacy fallback

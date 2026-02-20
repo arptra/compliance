@@ -10,9 +10,12 @@ from pydantic import BaseModel, Field
 class InputConfig(BaseModel):
     input_dir: str
     file_glob: str = "*.xlsx"
+    file_names: list[str] | None = None
     month_source: Literal["filename", "column"] = "filename"
     month_regex: str
+    month_regexes: list[str] | None = None
     month_column: str | None = None
+    month_column_datetime_format: str | None = None
     id_column: str | None = None
     signal_columns: list[str]
     dialog_column: str | None = "dialog_text"

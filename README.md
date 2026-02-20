@@ -141,9 +141,12 @@ GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
 input:
   input_dir: "data/raw"
   file_glob: "*.xlsx"
+  file_names: null  # можно явно перечислить файлы
   month_source: "filename"
   month_regex: "(\d{4})[-_](\d{2})"
+  month_regexes: null  # можно задать список regex для разных шаблонов имен
   month_column: null
+  month_column_datetime_format: null  # для month_source=column, например "%Y-%m-%d %H:%M:%S"
   id_column: null
   signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
   dialog_column: "dialog_text"  # legacy fallback
@@ -288,9 +291,11 @@ python -m complaints_trends.cli demo
 ## 5.1 `input`
 - `input_dir`, `file_glob`: где искать Excel.
 - `month_source`: `filename` или `column`.
-- `month_regex`: как извлекать `YYYY-MM` из имени файла.
+- `month_regex`: основной regex для извлечения `YYYY-MM` из имени файла.
+- `month_regexes`: список regex-паттернов, если имена файлов различаются между месяцами/каналами.
 - `id_column`: если нет стабильного ID, `row_id` будет сгенерирован.
 - `signal_columns`: дополнительные поля для LLM/аналитики (например `subject/channel/product/status`). **Диалоговые поля (`dialog_columns`) сюда включать не обязательно** — они и так обрабатываются отдельно.
+- `month_column_datetime_format`: формат даты для `month_column`, если в колонке timestamp вида `2025-01-09 12:55:29`.
 - `dialog_column`: legacy-колонка с полным диалогом (fallback).
 - `dialog_columns`: список нескольких текстовых полей (например чат/звонок/комментарий/суммаризация). Пайплайн автоматически выберет наиболее содержательное непустое поле как `raw_dialog`, а также передаст все непустые поля в `dialog_context` для GigaChat.
 - `signal_columns` и `dialog_columns` логически разделены: из `signal_columns` в prompt уходят только недиалоговые поля (`signal_fields`).
@@ -659,6 +664,15 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 
 5. **Слишком много/мало novel topics**
    - Подстройте `threshold_percentile`, `kmeans_k`, `svd_components`.
+
+
+6. **Дата в month_column в формате `2025-01-09 12:55:29`**
+   - Поддерживается: пайплайн парсит datetime и приводит к `YYYY-MM`.
+   - При нестандартном формате задайте `month_column_datetime_format`.
+
+7. **Несколько разных шаблонов имен файлов при `month_source: filename`**
+   - Используйте `month_regexes` (список regex) — пайплайн применит их по очереди.
+   - Если нужно обработать только конкретные файлы, задайте `file_names`.
 
 ---
 
