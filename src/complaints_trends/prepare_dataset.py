@@ -52,6 +52,19 @@ def _select_primary_dialog(row: pd.Series, dialog_fields: list[str]) -> tuple[st
     return best_field, best_text, snippets
 
 
+
+
+def _build_signal_payload(row: pd.Series, signal_columns: list[str], dialog_fields: list[str]) -> dict[str, str]:
+    skip = set(dialog_fields)
+    out: dict[str, str] = {}
+    for c in signal_columns:
+        if c in skip:
+            continue
+        v = row.get(c)
+        if _non_empty(v):
+            out[c] = str(v).strip()
+    return out
+
 def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None = None, limit: int | None = None, llm_mock: bool = False) -> pd.DataFrame:
     df = read_all_excels(cfg.input)
     if df.empty:
@@ -89,14 +102,16 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None =
 
     llm_rows = []
     for _, row in df.iterrows():
+        signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
         payload = {
             "client_first_message": row["client_first_message_redacted"][: cfg.llm.max_text_chars],
             "dialog_source_field": row.get("dialog_source_field"),
             "dialog_context": json.loads(row.get("dialog_context_map_redacted", "{}")),
-            "subject": row.get("subject"),
-            "product": row.get("product"),
-            "channel": row.get("channel"),
-            "status": row.get("status"),
+            "signal_fields": signal_fields,
+            "subject": signal_fields.get("subject"),
+            "product": signal_fields.get("product"),
+            "channel": signal_fields.get("channel"),
+            "status": signal_fields.get("status"),
         }
         out = normalizer.normalize(payload)
         llm_rows.append(out.model_dump())

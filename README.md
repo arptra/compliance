@@ -290,9 +290,10 @@ python -m complaints_trends.cli demo
 - `month_source`: `filename` или `column`.
 - `month_regex`: как извлекать `YYYY-MM` из имени файла.
 - `id_column`: если нет стабильного ID, `row_id` будет сгенерирован.
-- `signal_columns`: поля, которые могут помочь LLM/аналитике (subject/channel/product/status).
+- `signal_columns`: дополнительные поля для LLM/аналитики (например `subject/channel/product/status`). **Диалоговые поля (`dialog_columns`) сюда включать не обязательно** — они и так обрабатываются отдельно.
 - `dialog_column`: legacy-колонка с полным диалогом (fallback).
 - `dialog_columns`: список нескольких текстовых полей (например чат/звонок/комментарий/суммаризация). Пайплайн автоматически выберет наиболее содержательное непустое поле как `raw_dialog`, а также передаст все непустые поля в `dialog_context` для GigaChat.
+- `signal_columns` и `dialog_columns` логически разделены: из `signal_columns` в prompt уходят только недиалоговые поля (`signal_fields`).
 
 **Практика:**
 - Если именование файлов нестабильно, лучше `month_source: column`.
