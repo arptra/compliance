@@ -1,0 +1,13 @@
+categories:
+  BILLING:
+    subcategories: ["duplicate_charge", "wrong_amount", "refund_delay"]
+  DELIVERY:
+    subcategories: ["delay", "lost", "damaged"]
+  TECHNICAL:
+    subcategories: ["app_crash", "login_issue", "payment_error"]
+  SERVICE_QUALITY:
+    subcategories: ["rude_support", "slow_response", "wrong_info"]
+  ACCOUNT:
+    subcategories: ["blocked", "kyc", "data_change"]
+  OTHER:
+    subcategories: []
