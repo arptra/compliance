@@ -54,7 +54,7 @@ class GigaChatNormalizer:
                 ca_bundle_file=cfg.ca_bundle_file,
                 cert_file=cfg.cert_file,
                 key_file=cfg.key_file,
-                key_file_password=os.getenv(cfg.key_file_password_env) or None,
+                key_file_password=(os.getenv(cfg.key_file_password_env) if cfg.key_file_password_env else os.getenv("GIGACHAT_KEY_PASSWORD")) or None,
                 verify_ssl_certs=cfg.verify_ssl_certs,
                 timeout=60.0,
                 max_retries=3,

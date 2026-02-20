@@ -140,7 +140,7 @@ GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
 - `GIGACHAT_KEY_FILE` -> `llm.key_file`
 - `GIGACHAT_MODEL` -> `llm.model`
 - `GIGACHAT_VERIFY_SSL_CERTS` -> `llm.verify_ssl_certs`
-- `GIGACHAT_KEY_PASSWORD_ENV` -> `llm.key_file_password_env`
+- `GIGACHAT_KEY_PASSWORD_ENV` -> `llm.key_file_password_env` (опционально)
 
 Важно: пароль ключа хранится в переменной, имя которой задается через `llm.key_file_password_env` (по умолчанию `GIGACHAT_KEY_PASSWORD`).
 
@@ -344,7 +344,7 @@ python -m complaints_trends.cli demo
 - `enabled`: включение/выключение GigaChat.
 - `mode: mtls`: обязательный режим.
 - `ca_bundle_file/cert_file/key_file`: mTLS-пути.
-- `key_file_password_env`: имя env-переменной для пароля ключа.
+- `key_file_password_env`: опционально, имя env-переменной для пароля ключа (можно не задавать).
 - `max_workers`, `batch_size`: скорость/нагрузка.
 - `max_text_chars`: ограничение длины входа в LLM.
 - `cache_db`: sqlite-кэш ответов.

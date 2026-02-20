@@ -50,7 +50,7 @@ class LLMConfig(BaseModel):
     ca_bundle_file: str
     cert_file: str
     key_file: str
-    key_file_password_env: str = "GIGACHAT_KEY_PASSWORD"
+    key_file_password_env: str | None = None
     verify_ssl_certs: bool = True
     model: str = "GigaChat"
     max_workers: int = 8

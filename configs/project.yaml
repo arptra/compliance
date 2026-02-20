@@ -36,7 +36,6 @@ llm:
   ca_bundle_file: "certs/ca.pem"
   cert_file: "certs/client.pem"
   key_file: "certs/client.key"
-  key_file_password_env: "GIGACHAT_KEY_PASSWORD"
   verify_ssl_certs: true
   model: "GigaChat"
   max_workers: 8
