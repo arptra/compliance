@@ -6,7 +6,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class InputConfig(BaseModel):
@@ -24,6 +24,33 @@ class InputConfig(BaseModel):
     dialog_columns: list[str] | None = None
     encoding: str = "utf-8"
 
+
+
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_month_source(cls, data: dict):
+        if not isinstance(data, dict):
+            return data
+        raw = str(data.get("month_source", "filename")).strip()
+        norm = raw.lower()
+        if norm in {"filename", "column"}:
+            data["month_source"] = norm
+            return data
+
+        # user passed a file-like value instead of mode
+        if norm.endswith(".xlsx") or "file" in norm:
+            data["month_source"] = "filename"
+            return data
+
+        # user passed a column name in month_source by mistake
+        if raw and data.get("month_column") in {None, "", "null"}:
+            data["month_source"] = "column"
+            data["month_column"] = raw
+            return data
+
+        data["month_source"] = "filename"
+        return data
 
 class ClientFirstConfig(BaseModel):
     enabled: bool = True

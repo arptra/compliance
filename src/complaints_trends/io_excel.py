@@ -61,6 +61,12 @@ def load_excel_with_month(path: Path, cfg: InputConfig) -> pd.DataFrame:
     df = pd.read_excel(path)
     if cfg.month_source == "filename":
         month = extract_month_from_filename(path, cfg.month_regex, cfg.month_regexes)
+        if not month:
+            raise ValueError(
+                f"Cannot parse month from filename: {path.name}. "
+                f"Check input.month_regex/month_regexes (current: {cfg.month_regex!r}, {cfg.month_regexes!r}) "
+                "or set month_source=column with month_column."
+            )
         df["month"] = month
     else:
         if not cfg.month_column:
