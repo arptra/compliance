@@ -108,11 +108,13 @@ class GigaChatNormalizer:
             ensure_ascii=False,
         )
         response = self.client.chat(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            model=self.cfg.model,
+            {
+                "model": self.cfg.model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            }
         )
         content = response.choices[0].message.content
         try:
@@ -121,11 +123,13 @@ class GigaChatNormalizer:
         except Exception:
             repair_prompt = f"Исправь: верни JSON по схеме, убери запрещенные токены.\n{content}"
             response2 = self.client.chat(
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": repair_prompt},
-                ],
-                model=self.cfg.model,
+                {
+                    "model": self.cfg.model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": repair_prompt},
+                    ],
+                }
             )
             obj = NormalizeTicket.model_validate(json.loads(response2.choices[0].message.content))
         self.cache.set(k, obj.model_dump())
