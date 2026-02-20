@@ -103,6 +103,7 @@ novelty:
   examples_per_novel_cluster: 10
   emerging_terms_topn: 30
   emerging_terms_min_df: 10
+  december_complaint_subclusters: 8
 
 output:
   keep_full_raw_text: true

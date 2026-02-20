@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.cluster import assign_clusters
 from app.io import load_and_split, save_labeled_outputs
-from app.novelty import cluster_novel_complaints, compute_novelty_flags, emerging_terms, save_novelty_reports
+from app.novelty import cluster_december_complaints, cluster_novel_complaints, compute_novelty_flags, emerging_terms, save_novelty_reports
 from app.preprocess import TextPreprocessor
 from app.report import build_december_report, save_report
 from app.utils import load_yaml, setup_logging
@@ -53,16 +53,19 @@ def run_compare_december(config_path: str) -> None:
     dec["max_sim_to_baseline_centroid"], dec["is_novel"] = compute_novelty_flags(x_dec, km.cluster_centers_, n_th)
 
     terms = emerging_terms(x_base, x_dec, vec.get_feature_names_out(), pre, cfg)
-    novel_mask = (dec["is_complaint"] == 1) & (dec["is_novel"] == 1)
-    novel_clusters = cluster_novel_complaints(x_dec[novel_mask.values], dec.loc[novel_mask, msg_col].astype(str).tolist(), vec.get_feature_names_out(), cfg, pre)
+    complaint_mask = (dec["is_complaint"] == 1).values
+    novel_mask = ((dec["is_complaint"] == 1) & (dec["is_novel"] == 1)).values
+    novel_clusters = cluster_novel_complaints(x_dec[novel_mask], dec.loc[novel_mask, msg_col].astype(str).tolist(), vec.get_feature_names_out(), cfg, pre)
+    complaint_clusters = cluster_december_complaints(x_dec, complaint_mask, dec[msg_col].astype(str).tolist(), vec.get_feature_names_out(), cfg, pre)
     save_novelty_reports(terms, novel_clusters, "reports")
+    complaint_clusters.to_csv("reports/december_complaint_clusters.csv", index=False)
 
     combined = pd.concat([base.assign(split="baseline"), dec.assign(split="december")], ignore_index=True)
     save_labeled_outputs(base, dec, combined, cfg["output"])
 
     cl_sum = pd.read_csv("reports/cluster_summaries.csv")
     metrics = json.loads(Path("reports/complaint_seed_metrics.json").read_text(encoding="utf-8")) if Path("reports/complaint_seed_metrics.json").exists() else {}
-    report = build_december_report(base, dec, cl_sum, metrics, n_th, float(meta["novelty_percentile"]), terms, novel_clusters)
+    report = build_december_report(base, dec, cl_sum, metrics, n_th, float(meta["novelty_percentile"]), terms, novel_clusters, complaint_clusters)
     save_report(report, "reports/december_report.md")
 
 

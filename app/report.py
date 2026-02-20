@@ -53,6 +53,7 @@ def build_december_report(
     novelty_percentile: float,
     emerging_df: pd.DataFrame,
     novel_clusters_df: pd.DataFrame,
+    complaint_clusters_df: pd.DataFrame,
 ) -> str:
     novel = december_df[(december_df["is_complaint"] == 1) & (december_df["is_novel"] == 1)]
     return f"""# December/Target comparison report
@@ -66,13 +67,20 @@ def build_december_report(
 - Target rows: **{len(december_df)}**
 - Novelty threshold percentile: **{novelty_percentile}**
 - Novelty threshold value: **{novelty_threshold:.4f}**
+- Target complaints (all): **{int((december_df["is_complaint"]==1).sum())}**
 - Novel complaints: **{len(novel)}**
+- Non-novel complaints: **{int(((december_df["is_complaint"]==1)&(december_df["is_novel"]==0)).sum())}**
+
+> Важно: число baseline-кластеров фиксировано моделью Stage 2. Для декабря дополнительно смотрите отдельные complaint-кластеры ниже.
 
 ## Cluster overview
 {_md(cluster_summary_df, ['cluster_id','size','top_terms','example_messages'], n=10)}
 
 ## Emerging terms
 {_md(emerging_df, [c for c in ['term','december_df','lift'] if c in emerging_df.columns], n=20)}
+
+## December complaint groups (all complaints)
+{_md(complaint_clusters_df, ['cluster_id','size','top_terms','example_messages'], n=10)}
 
 ## Novel complaint groups
 {_md(novel_clusters_df, ['cluster_id','size','top_terms','example_messages'], n=10)}

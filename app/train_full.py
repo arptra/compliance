@@ -36,7 +36,8 @@ def run_train_full(config_path: str) -> None:
     ensure_dir(cfg["output"]["model_dir"])
     ensure_dir("reports")
 
-    vec, x_base, _ = fit_transform(baseline["message_client_first"].tolist(), splits.december["message_client_first"].tolist(), cfg, analyzer=pre.analyzer)
+    dec_texts = splits.december["message_client_first"].tolist() if len(splits.december) else baseline["message_client_first"].tolist()[:1]
+    vec, x_base, _ = fit_transform(baseline["message_client_first"].tolist(), dec_texts, cfg, analyzer=pre.analyzer)
     save_vectorizer(vec, cfg["output"]["model_dir"])
 
     km = train_cluster_model(x_base, cfg)

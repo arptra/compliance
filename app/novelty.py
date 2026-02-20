@@ -119,3 +119,21 @@ def save_novelty_reports(
     rdir.mkdir(parents=True, exist_ok=True)
     emerging_df.to_csv(rdir / "emerging_terms.csv", index=False)
     novel_clusters_df.to_csv(rdir / "december_novel_complaints_clusters.csv", index=False)
+
+
+
+def cluster_december_complaints(
+    x_december: csr_matrix,
+    complaint_mask: np.ndarray,
+    texts: List[str],
+    feature_names: np.ndarray,
+    cfg: Dict,
+    preprocessor: TextPreprocessor,
+) -> pd.DataFrame:
+    """Cluster all december complaints (not only novel) for better visibility."""
+    x_cmp = x_december[complaint_mask]
+    cmp_texts = [t for i, t in enumerate(texts) if complaint_mask[i]]
+    if x_cmp.shape[0] == 0:
+        return pd.DataFrame(columns=["cluster_id", "size", "top_terms", "example_messages"])
+    local_cfg = {**cfg, "novelty": {**cfg.get("novelty", {}), "novel_december_subclusters": cfg.get("novelty", {}).get("december_complaint_subclusters", 8)}}
+    return cluster_novel_complaints(x_cmp, cmp_texts, feature_names, local_cfg, preprocessor)

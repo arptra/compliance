@@ -209,3 +209,22 @@ python -m app.train_full --config configs/config.yaml
 # 4) сравнение с декабрем
 python -m app.compare_december --config configs/config.yaml
 ```
+
+
+## Почему в декабре жалоб может быть в 2 раза больше, а кластеры "не меняются"
+
+Это ожидаемо для текущей архитектуры:
+- baseline-кластеры обучаются на Stage 2 и их количество фиксировано (`clustering.n_clusters`),
+- в Stage 3 декабрь **не переобучает** baseline-кластеры, а только проектируется на них.
+
+Что теперь добавлено:
+- `reports/december_complaint_clusters.csv` — отдельные кластеры **всех** жалоб декабря,
+- `reports/december_report.md` показывает:
+  - все жалобы декабря,
+  - novel жалобы,
+  - non-novel жалобы,
+  - отдельные complaint-группы декабря.
+
+Если хотите больше чувствительности к декабрю:
+- увеличьте `novelty.percentile` (например, с 2 до 5),
+- настройте `novelty.december_complaint_subclusters`.
