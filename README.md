@@ -344,7 +344,7 @@ python -m complaints_trends.cli demo
 ## 5.8 `files`
 - `deny_tokens_path`: мусорные токены (client/operator/chatbot и т.п.).
 - `extra_stopwords_path`: доменные стоп-слова.
-- `categories_seed_path`: начальное стабильное дерево категорий.
+- `categories_seed_path`: начальное стабильное дерево категорий. Поддерживается расширенный формат: `label_ru`, `subcategories` как словарь объектов и отдельный блок `loan_products` (используется в LLM-правилах как независимый признак).
 
 ---
 

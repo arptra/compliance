@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
 from .config import ProjectConfig
 from .extract_client_first import extract_client_first_message
@@ -12,11 +11,7 @@ from .gigachat_mtls import GigaChatNormalizer
 from .io_excel import read_all_excels
 from .pii_redaction import redact_pii
 from .reports.render import render_template, write_md
-
-
-def _load_categories(path: str) -> list[str]:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    return list(data["categories"].keys())
+from .taxonomy import load_taxonomy
 
 
 def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None = None, limit: int | None = None, llm_mock: bool = False) -> pd.DataFrame:
@@ -41,8 +36,8 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None =
     else:
         df["client_first_message_redacted"] = df["client_first_message"]
 
-    categories = _load_categories(cfg.files.categories_seed_path)
-    normalizer = GigaChatNormalizer(cfg.llm, categories, mock=llm_mock or (not cfg.llm.enabled))
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
     llm_rows = []
     for _, row in df.iterrows():

@@ -15,6 +15,7 @@ class NormalizeTicket(BaseModel):
     complaint_category: str
     complaint_subcategory: str | None = None
     product_area: str | None = None
+    loan_product: str | None = None
     severity: Literal["low", "medium", "high"]
     keywords: list[str] = Field(min_length=3, max_length=8)
     confidence: float = Field(ge=0.0, le=1.0)

@@ -33,12 +33,21 @@ class LLMCache:
 
 
 class GigaChatNormalizer:
-    def __init__(self, cfg: LLMConfig, categories: list[str], mock: bool = False):
+    def __init__(self, cfg: LLMConfig, taxonomy: dict | list[str], mock: bool = False):
         self.cfg = cfg
         self.cache = LLMCache(cfg.cache_db)
-        self.categories = categories
         self.mock = mock
         self.client = None
+
+        if isinstance(taxonomy, dict):
+            self.categories = taxonomy.get("category_codes", [])
+            self.subcategories_by_category = taxonomy.get("subcategories_by_category", {})
+            self.loan_products = taxonomy.get("loan_products", ["NONE"])
+        else:
+            self.categories = taxonomy
+            self.subcategories_by_category = {}
+            self.loan_products = ["NONE"]
+
         if not mock:
             self.client = GigaChat(
                 base_url=cfg.base_url,
@@ -71,6 +80,7 @@ class GigaChatNormalizer:
                 complaint_category="TECHNICAL" if is_complaint else "OTHER",
                 complaint_subcategory="payment_error" if is_complaint else None,
                 product_area=payload.get("product"),
+                loan_product="CONSUMER_LOAN" if ("кредит" in txt.lower()) else "NONE",
                 severity="medium" if is_complaint else "low",
                 keywords=["ошибка", "оплата", "приложение"] if is_complaint else ["вопрос", "инфо", "уточнение"],
                 confidence=0.8,
@@ -82,7 +92,15 @@ class GigaChatNormalizer:
         user_prompt = json.dumps(
             {
                 "task": "normalize_ticket",
+                "rules": {
+                    "choose_exactly_one_category": True,
+                    "category_must_be_from_allowed": True,
+                    "subcategory_should_match_chosen_category": True,
+                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                },
                 "allowed_categories": self.categories,
+                "allowed_subcategories_by_category": self.subcategories_by_category,
+                "allowed_loan_products": self.loan_products,
                 "input": payload,
             },
             ensure_ascii=False,
