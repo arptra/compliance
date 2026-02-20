@@ -65,7 +65,7 @@ def _build_signal_payload(row: pd.Series, signal_columns: list[str], dialog_fiel
             out[c] = str(v).strip()
     return out
 
-def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None = None, limit: int | None = None, llm_mock: bool = False) -> pd.DataFrame:
+def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None = None, limit: int | None = None, llm_mock: bool = False, date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
     df = read_all_excels(cfg.input)
     if df.empty:
         raise ValueError("No input files found")
@@ -74,12 +74,20 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, month: str | None =
     else:
         df["row_id"] = [f"row_{i}" for i in range(len(df))]
     if month:
+        # backward compatibility
         df = df[df["month"] == month].copy()
+
+    eff_from = date_from or cfg.prepare.date_from
+    eff_to = date_to or cfg.prepare.date_to
+    if eff_from:
+        df = df[df["event_time"] >= pd.to_datetime(eff_from)].copy()
+    if eff_to:
+        df = df[df["event_time"] <= pd.to_datetime(eff_to)].copy()
     if pilot and limit:
         df = df.head(limit).copy()
 
     dialog_fields = _get_dialog_fields(cfg, df)
-    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, "month", "source_file", "row_id"]))
+    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, "event_time", "month", "source_file", "row_id"]))
     df = df[[c for c in keep if c in df.columns]].copy()
 
     selected = df.apply(lambda r: _select_primary_dialog(r, dialog_fields), axis=1)

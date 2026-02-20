@@ -163,8 +163,10 @@ input:
   month_source: "filename"
   month_regex: "(\d{4})[-_](\d{2})"
   month_regexes: null  # можно задать список regex для разных шаблонов имен
-  month_column: null
-  month_column_datetime_format: null  # для month_source=column, например "%Y-%m-%d %H:%M:%S"
+  month_column: "created_at"
+  month_column_datetime_format: "%Y-%m-%d %H:%M:%S"
+  datetime_column: "created_at"
+  datetime_format: "%Y-%m-%d %H:%M:%S"
   id_column: null
   signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
   dialog_column: "dialog_text"  # legacy fallback
@@ -209,6 +211,8 @@ llm:
 prepare:
   pilot_month: null
   pilot_limit: 1000
+  date_from: null
+  date_to: null
   output_parquet: "data/processed/all_prepared.parquet"
   pilot_parquet: "data/processed/pilot_prepared.parquet"
   pilot_review_xlsx: "exports/pilot_review.xlsx"
@@ -256,7 +260,7 @@ files:
 3. Запустите pilot-подготовку:
 
 ```bash
-python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --month 2025-10 --limit 1000
+python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --date-from "2025-10-01 00:00:00" --date-to "2025-10-31 23:59:59" --limit 1000
 ```
 
 4. Проверьте руками:
@@ -301,6 +305,15 @@ python -m complaints_trends.cli demo
 ---
 
 ## 5. Как конфигурировать проект (ПОДРОБНО)
+
+
+### Важно: обучение теперь строится по фильтру периода `event_time`
+- Основной сценарий: `input.datetime_column` (например `created_at`) с форматом `2025-01-09 12:55:29`.
+- Для отбора данных используйте диапазон:
+  - `prepare.date_from`
+  - `prepare.date_to`
+- Также можно передать через CLI: `prepare --date-from ... --date-to ...`.
+
 
 Главный файл: `configs/project.yaml`.
 

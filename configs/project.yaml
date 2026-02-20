@@ -2,11 +2,13 @@ input:
   input_dir: "data/raw"
   file_glob: "*.xlsx"
   file_names: null  # optional explicit list, e.g. ["2025-01.xlsx", "2025_02_part1.xlsx"]
-  month_source: "filename"
+  month_source: "column"  # legacy, training now relies on datetime filter from excel column
   month_regex: "(\\d{4})[-_](\\d{2})"
-  month_regexes: null  # optional list of regex patterns for mixed file naming
-  month_column: null
-  month_column_datetime_format: null  # optional strptime format for month_column, e.g. "%Y-%m-%d %H:%M:%S"
+  month_regexes: null
+  month_column: "created_at"
+  month_column_datetime_format: "%Y-%m-%d %H:%M:%S"
+  datetime_column: "created_at"
+  datetime_format: "%Y-%m-%d %H:%M:%S"
   id_column: null
   signal_columns: ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
   dialog_column: "dialog_text"  # legacy fallback
@@ -51,6 +53,8 @@ llm:
 prepare:
   pilot_month: null
   pilot_limit: 5000
+  date_from: null
+  date_to: null
   output_parquet: "data/processed/all_prepared.parquet"
   pilot_parquet: "data/processed/pilot_prepared.parquet"
   pilot_review_xlsx: "exports/pilot_review.xlsx"
@@ -71,6 +75,8 @@ training:
   validation:
     split_mode: "time"
     val_month: null
+    val_from: null
+    val_to: null
   model_dir: "models"
 
 analysis:

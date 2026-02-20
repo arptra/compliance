@@ -18,6 +18,8 @@ class InputConfig(BaseModel):
     month_regexes: list[str] | None = None
     month_column: str | None = None
     month_column_datetime_format: str | None = None
+    datetime_column: str | None = "created_at"
+    datetime_format: str | None = None
     id_column: str | None = None
     signal_columns: list[str]
     dialog_column: str | None = "dialog_text"
@@ -93,6 +95,8 @@ class LLMConfig(BaseModel):
 class PrepareConfig(BaseModel):
     pilot_month: str | None = None
     pilot_limit: int = 5000
+    date_from: str | None = None
+    date_to: str | None = None
     output_parquet: str
     pilot_parquet: str
     pilot_review_xlsx: str
@@ -115,6 +119,8 @@ class ClassifierConfig(BaseModel):
 class ValidationConfig(BaseModel):
     split_mode: Literal["time", "random"] = "time"
     val_month: str | None = None
+    val_from: str | None = None
+    val_to: str | None = None
 
 
 class TrainingConfig(BaseModel):

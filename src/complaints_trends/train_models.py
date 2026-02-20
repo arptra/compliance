@@ -98,6 +98,21 @@ def train(cfg: ProjectConfig) -> dict:
 
 def _split(df: pd.DataFrame, cfg: ProjectConfig):
     if cfg.training.validation.split_mode == "time":
-        val_month = cfg.training.validation.val_month or sorted(df["month"].dropna().unique())[-1]
-        return df[df["month"] != val_month].copy(), df[df["month"] == val_month].copy()
+        if "event_time" not in df.columns:
+            return train_test_split(df, test_size=0.2, random_state=42)
+        d = df.sort_values("event_time").copy()
+        vf = cfg.training.validation.val_from
+        vt = cfg.training.validation.val_to
+        if vf or vt:
+            m = pd.Series(True, index=d.index)
+            if vf:
+                m &= d["event_time"] >= pd.to_datetime(vf)
+            if vt:
+                m &= d["event_time"] <= pd.to_datetime(vt)
+            val_df = d[m].copy()
+            train_df = d[~m].copy()
+            if len(val_df) > 0 and len(train_df) > 0:
+                return train_df, val_df
+        cut = int(len(d) * 0.8)
+        return d.iloc[:cut].copy(), d.iloc[cut:].copy()
     return train_test_split(df, test_size=0.2, random_state=42)

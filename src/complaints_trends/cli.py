@@ -22,11 +22,13 @@ def prepare_cmd(
     config: str = typer.Option(..., "--config", help="Path to project yaml config"),
     pilot: bool = typer.Option(False, "--pilot"),
     month: str | None = typer.Option(None, "--month"),
+    date_from: str | None = typer.Option(None, "--date-from"),
+    date_to: str | None = typer.Option(None, "--date-to"),
     limit: int | None = typer.Option(None, "--limit"),
     mock_llm: bool = typer.Option(False, "--mock-llm"),
 ):
     cfg = load_config(config)
-    df = prepare_dataset(cfg, pilot=pilot, month=month, limit=limit or cfg.prepare.pilot_limit, llm_mock=mock_llm)
+    df = prepare_dataset(cfg, pilot=pilot, month=month, date_from=date_from, date_to=date_to, limit=limit or cfg.prepare.pilot_limit, llm_mock=mock_llm)
     console.log(f"Prepared rows: {len(df)}")
 
 
@@ -80,7 +82,8 @@ def demo_cmd(config: str = typer.Option("configs/project.yaml", "--config", help
                 if bad
                 else "CLIENT: Подскажите график работы отделения.\nOPERATOR: 9-18"
             )
-            rows.append({"dialog_text": txt, "subject": "demo", "channel": "chat", "product": "app", "status": "closed"})
+            ts = "2025-10-09 12:55:29" if month=="2025-10" else ("2025-11-09 12:55:29" if month=="2025-11" else "2025-12-09 12:55:29")
+            rows.append({"dialog_text": txt, "subject": "demo", "channel": "chat", "product": "app", "status": "closed", "created_at": ts})
         pd.DataFrame(rows).to_excel(Path(cfg.input.input_dir) / f"{month}.xlsx", index=False)
 
     mk("2025-10", 120)
