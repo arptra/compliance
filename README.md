@@ -131,6 +131,151 @@ GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
 2. Укажите валидный CA bundle (например Russian Trusted Root CA).
 3. Рекомендуется оставлять `verify_ssl_certs: true`.
 
+
+
+## 4.5 Минимальный пример `configs/project.yaml` (MVP)
+
+Если хотите стартовать быстро, можно начать с такого минимального конфига:
+
+```yaml
+input:
+  input_dir: "data/raw"
+  file_glob: "*.xlsx"
+  month_source: "filename"
+  month_regex: "(\d{4})[-_](\d{2})"
+  month_column: null
+  id_column: null
+  signal_columns: ["dialog_text", "subject", "channel", "product", "status"]
+  dialog_column: "dialog_text"
+  encoding: "utf-8"
+
+client_first_extraction:
+  enabled: true
+  client_markers: ["CLIENT", "КЛИЕНТ", "USER"]
+  operator_markers: ["OPERATOR", "ОПЕРАТОР", "SUPPORT"]
+  chatbot_markers: ["CHATBOT", "БОТ"]
+  stop_on_markers: ["OPERATOR", "ОПЕРАТОР", "CHATBOT", "БОТ"]
+  fallback_mode: "first_paragraph"
+  fallback_first_n_chars: 600
+  min_client_len: 20
+  take_second_client_if_too_short: true
+
+pii:
+  enabled: true
+  replace_email: "<EMAIL>"
+  replace_phone: "<PHONE>"
+  replace_url: "<URL>"
+  replace_card: "<CARD>"
+  replace_account: "<ACCOUNT>"
+
+llm:
+  enabled: true
+  mode: "mtls"
+  base_url: "https://gigachat.devices.sberbank.ru/api/v1"
+  ca_bundle_file: "certs/ca.pem"
+  cert_file: "certs/client.pem"
+  key_file: "certs/client.key"
+  key_file_password_env: "GIGACHAT_KEY_PASSWORD"
+  verify_ssl_certs: true
+  model: "GigaChat"
+  max_workers: 4
+  batch_size: 10
+  max_text_chars: 1200
+  cache_db: "data/interim/gigachat_cache.sqlite"
+  prompt_version: "v1"
+
+prepare:
+  pilot_month: null
+  pilot_limit: 1000
+  output_parquet: "data/processed/all_prepared.parquet"
+  pilot_parquet: "data/processed/pilot_prepared.parquet"
+  pilot_review_xlsx: "exports/pilot_review.xlsx"
+
+training:
+  text_field: "client_first_message"
+  complaint_threshold: 0.5
+  vectorizer:
+    word_ngram: [1, 2]
+    char_ngram: [3, 5]
+    max_features_word: 100000
+    max_features_char: 50000
+    min_df: 3
+    max_df: 0.8
+  classifier:
+    complaint: "logreg"
+    category: "linearsvc"
+  validation:
+    split_mode: "time"
+    val_month: null
+  model_dir: "models"
+
+analysis:
+  novelty:
+    enabled: true
+    method: "kmeans_distance"
+    svd_components: 100
+    kmeans_k: 20
+    threshold_percentile: 98
+    min_cluster_size: 10
+  reports_dir: "reports"
+
+files:
+  deny_tokens_path: "configs/deny_tokens.txt"
+  extra_stopwords_path: "configs/extra_stopwords.txt"
+  categories_seed_path: "configs/categories_seed.yaml"
+```
+
+---
+
+## 4.6 Первый запуск (пошагово)
+
+1. Положите 1–2 Excel файла в `data/raw/` (например `2025-10.xlsx`, `2025-11.xlsx`).
+2. Проверьте сертификаты в `certs/` и `.env`.
+3. Запустите pilot-подготовку:
+
+```bash
+python -m complaints_trends.cli prepare --config configs/project.yaml --pilot --month 2025-10 --limit 1000
+```
+
+4. Проверьте руками:
+   - `exports/pilot_review.xlsx`
+   - `reports/pilot_report.html`
+5. Запустите полную подготовку:
+
+```bash
+python -m complaints_trends.cli prepare --config configs/project.yaml
+```
+
+6. Обучите модели:
+
+```bash
+python -m complaints_trends.cli train --config configs/project.yaml
+```
+
+7. Постройте тренды:
+
+```bash
+python -m complaints_trends.cli trends --config configs/project.yaml
+```
+
+8. Прогон нового месяца:
+
+```bash
+python -m complaints_trends.cli infer-month --config configs/project.yaml --excel data/raw/2025-12.xlsx --month 2025-12
+```
+
+9. Сравните с baseline:
+
+```bash
+python -m complaints_trends.cli compare --config configs/project.yaml --new-month 2025-12 --baseline-range 2025-10..2025-11
+```
+
+Для полностью локального smoke без реального GigaChat используйте:
+
+```bash
+python -m complaints_trends.cli demo
+```
+
 ---
 
 ## 5. Как конфигурировать проект (ПОДРОБНО)
