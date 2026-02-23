@@ -1,0 +1,5 @@
+<html><body><h1>Month report {{month}}</h1>
+<p>Complaint share: {{ '%.2f'|format(complaint_share*100) }}%</p>
+<ul>{% for k,v in top_categories.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+{% for r in examples %}<div><b>{{r.category_pred}}</b><p>{{r.client_first_message}}</p></div>{% endfor %}
+</body></html>

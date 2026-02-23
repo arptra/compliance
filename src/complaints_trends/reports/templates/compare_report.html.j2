@@ -1,0 +1,6 @@
+<html><body><h1>Compare report</h1>
+<table border="1"><tr>{% for k in monthly[0].keys() if monthly %}<th>{{k}}</th>{% endfor %}</tr>
+{% for r in monthly %}<tr>{% for v in r.values() %}<td>{{v}}</td>{% endfor %}</tr>{% endfor %}</table>
+<h2>Examples</h2>
+{% for r in by_cat %}<div><p>{{r.get('client_first_message', '')}}</p></div>{% endfor %}
+</body></html>
