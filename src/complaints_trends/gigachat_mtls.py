@@ -15,8 +15,9 @@ from .gigachat_schema import NormalizeTicket
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
 
 
-def _validate_mtls_files(ca_bundle_file: str, cert_file: str, key_file: str) -> None:
-    missing = [p for p in [ca_bundle_file, cert_file, key_file] if not p or not Path(p).exists()]
+def _validate_mtls_files(ca_bundle_file: str | None, cert_file: str | None, key_file: str | None) -> None:
+    required = [ca_bundle_file, cert_file, key_file]
+    missing = [str(p) for p in required if not p or not Path(p).exists()]
     if missing:
         raise FileNotFoundError(
             "mTLS files are missing for GigaChat: " + ", ".join(missing) +
@@ -58,18 +59,28 @@ class GigaChatNormalizer:
             self.loan_products = ["NONE"]
 
         if not mock:
-            _validate_mtls_files(cfg.ca_bundle_file, cfg.cert_file, cfg.key_file)
-            self.client = GigaChat(
-                base_url=cfg.base_url,
-                ca_bundle_file=cfg.ca_bundle_file,
-                cert_file=cfg.cert_file,
-                key_file=cfg.key_file,
-                key_file_password=(os.getenv(cfg.key_file_password_env) if cfg.key_file_password_env else os.getenv("GIGACHAT_KEY_PASSWORD")) or None,
-                verify_ssl_certs=cfg.verify_ssl_certs,
-                timeout=60.0,
-                max_retries=3,
-                retry_backoff_factor=0.5,
-            )
+            if cfg.mode == "mtls":
+                _validate_mtls_files(cfg.ca_bundle_file, cfg.cert_file, cfg.key_file)
+                self.client = GigaChat(
+                    base_url=cfg.base_url,
+                    ca_bundle_file=cfg.ca_bundle_file,
+                    cert_file=cfg.cert_file,
+                    key_file=cfg.key_file,
+                    key_file_password=(os.getenv(cfg.key_file_password_env) if cfg.key_file_password_env else os.getenv("GIGACHAT_KEY_PASSWORD")) or None,
+                    verify_ssl_certs=cfg.verify_ssl_certs,
+                    timeout=60.0,
+                    max_retries=3,
+                    retry_backoff_factor=0.5,
+                )
+            else:
+                self.client = GigaChat(
+                    base_url=cfg.base_url,
+                    ca_bundle_file=cfg.ca_bundle_file,
+                    verify_ssl_certs=cfg.verify_ssl_certs,
+                    timeout=60.0,
+                    max_retries=3,
+                    retry_backoff_factor=0.5,
+                )
 
     def _key(self, payload: dict) -> str:
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version
@@ -130,6 +141,11 @@ class GigaChatNormalizer:
         except Exception as e:
             msg = str(e)
             if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
+                if self.cfg.mode == "tls":
+                    raise RuntimeError(
+                        "GigaChat TLS handshake failed: server requires client certificate. "
+                        "Switch llm.mode to mtls and set cert_file/key_file, or use an endpoint that does not require mTLS."
+                    ) from e
                 raise RuntimeError(
                     "GigaChat mTLS handshake failed: server requires client certificate. "
                     "Check cert_file/key_file/ca_bundle_file paths and that env overrides are not pointing to empty files."
@@ -154,6 +170,11 @@ class GigaChatNormalizer:
             except Exception as e:
                 msg = str(e)
                 if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
+                    if self.cfg.mode == "tls":
+                        raise RuntimeError(
+                            "GigaChat TLS handshake failed on repair request: server requires client certificate. "
+                            "Switch llm.mode to mtls or use a non-mTLS endpoint."
+                        ) from e
                     raise RuntimeError(
                         "GigaChat mTLS handshake failed on repair request: certificate required by server. "
                         "Verify mTLS cert/key/CA configuration."

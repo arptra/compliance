@@ -45,11 +45,11 @@ class PIIConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     enabled: bool = True
-    mode: str = "mtls"
+    mode: Literal["mtls", "tls"] = "mtls"
     base_url: str
-    ca_bundle_file: str
-    cert_file: str
-    key_file: str
+    ca_bundle_file: str | None = None
+    cert_file: str | None = None
+    key_file: str | None = None
     key_file_password_env: str | None = None
     verify_ssl_certs: bool = True
     model: str = "GigaChat"

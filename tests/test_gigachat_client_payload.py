@@ -40,6 +40,11 @@ class DummyClient:
         return _Resp(json.dumps(body, ensure_ascii=False))
 
 
+class FailTLSClient:
+    def chat(self, payload):
+        raise RuntimeError("TLSV13_ALERT_CERTIFICATE_REQUIRED")
+
+
 def test_normalizer_uses_payload_dict_for_chat(tmp_path):
     cfg = LLMConfig(
         enabled=True,
@@ -57,3 +62,46 @@ def test_normalizer_uses_payload_dict_for_chat(tmp_path):
     n.client = DummyClient()
     out = n.normalize({"client_first_message": "привет"})
     assert out.complaint_category == "OTHER"
+
+
+def test_tls_mode_initializes_client_without_mtls_files(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeGigaChat:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("complaints_trends.gigachat_mtls.GigaChat", FakeGigaChat)
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="tls",
+        base_url="https://x",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+    )
+    GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=False)
+
+    assert captured["base_url"] == "https://x"
+    assert "cert_file" not in captured
+    assert "key_file" not in captured
+
+
+def test_tls_mode_raises_explicit_message_when_server_requires_client_cert(tmp_path):
+    cfg = LLMConfig(
+        enabled=True,
+        mode="tls",
+        base_url="https://x",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = FailTLSClient()
+    try:
+        n.normalize({"client_first_message": "привет"})
+        assert False, "Expected RuntimeError"
+    except RuntimeError as e:
+        assert "Switch llm.mode to mtls" in str(e)
