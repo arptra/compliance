@@ -64,14 +64,17 @@ def test_normalizer_uses_payload_dict_for_chat(tmp_path):
     assert out.complaint_category == "OTHER"
 
 
-def test_tls_mode_initializes_client_without_mtls_files(monkeypatch, tmp_path):
+def test_tls_mode_initializes_httpx_client_without_mtls_files(monkeypatch, tmp_path):
     captured = {}
 
-    class FakeGigaChat:
+    class FakeHTTPXClient:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("complaints_trends.gigachat_mtls.GigaChat", FakeGigaChat)
+        def post(self, *args, **kwargs):
+            raise AssertionError("not expected")
+
+    monkeypatch.setattr("complaints_trends.gigachat_mtls.httpx.Client", FakeHTTPXClient)
 
     cfg = LLMConfig(
         enabled=True,
@@ -84,8 +87,8 @@ def test_tls_mode_initializes_client_without_mtls_files(monkeypatch, tmp_path):
     GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=False)
 
     assert captured["base_url"] == "https://x"
-    assert "cert_file" not in captured
-    assert "key_file" not in captured
+    assert captured["verify"] is True
+    assert captured["trust_env"] is False
 
 
 def test_tls_mode_raises_explicit_message_when_server_requires_client_cert(tmp_path):
@@ -107,7 +110,7 @@ def test_tls_mode_raises_explicit_message_when_server_requires_client_cert(tmp_p
         assert "Switch llm.mode to mtls" in str(e)
 
 
-def test_mtls_mode_uses_ssl_context_for_client(monkeypatch, tmp_path):
+def test_mtls_mode_uses_ssl_context_for_httpx_client(monkeypatch, tmp_path):
     ca = tmp_path / "ca.pem"
     cert = tmp_path / "cert.pem"
     key = tmp_path / "key.pem"
@@ -132,12 +135,15 @@ def test_mtls_mode_uses_ssl_context_for_client(monkeypatch, tmp_path):
         captured["cafile"] = cafile
         return fake_context
 
-    class FakeGigaChat:
+    class FakeHTTPXClient:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
+        def post(self, *args, **kwargs):
+            raise AssertionError("not expected")
+
     monkeypatch.setattr("complaints_trends.gigachat_mtls.ssl.create_default_context", fake_create_default_context)
-    monkeypatch.setattr("complaints_trends.gigachat_mtls.GigaChat", FakeGigaChat)
+    monkeypatch.setattr("complaints_trends.gigachat_mtls.httpx.Client", FakeHTTPXClient)
 
     cfg = LLMConfig(
         enabled=True,
@@ -153,52 +159,6 @@ def test_mtls_mode_uses_ssl_context_for_client(monkeypatch, tmp_path):
 
     GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=False)
 
-    assert captured["ssl_context"] is fake_context
-    assert "cert_file" not in captured
-    assert "key_file" not in captured
+    assert captured["verify"] is fake_context
     assert captured["cafile"] == str(ca)
     assert fake_context.loaded == (str(cert), str(key), None)
-
-
-
-def test_client_forces_no_env_auth_credentials_in_mtls(monkeypatch, tmp_path):
-    ca = tmp_path / "ca.pem"
-    cert = tmp_path / "cert.pem"
-    key = tmp_path / "key.pem"
-    ca.write_text("ca", encoding="utf-8")
-    cert.write_text("cert", encoding="utf-8")
-    key.write_text("key", encoding="utf-8")
-
-    captured = {}
-
-    class FakeContext:
-        def load_cert_chain(self, certfile, keyfile, password=None):
-            return None
-
-    def fake_create_default_context(*, cafile=None):
-        return FakeContext()
-
-    class FakeGigaChat:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr("complaints_trends.gigachat_mtls.ssl.create_default_context", fake_create_default_context)
-    monkeypatch.setattr("complaints_trends.gigachat_mtls.GigaChat", FakeGigaChat)
-    monkeypatch.setenv("GIGACHAT_CREDENTIALS", "should_not_be_used")
-
-    cfg = LLMConfig(
-        enabled=True,
-        mode="mtls",
-        base_url="https://x",
-        ca_bundle_file=str(ca),
-        cert_file=str(cert),
-        key_file=str(key),
-        verify_ssl_certs=True,
-        cache_db=str(tmp_path / "cache.sqlite"),
-    )
-
-    GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=False)
-
-    assert captured["credentials"] == ""
-    assert captured["user"] == ""
-    assert captured["password"] == ""

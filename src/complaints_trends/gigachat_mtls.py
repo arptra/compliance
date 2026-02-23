@@ -4,12 +4,12 @@ import hashlib
 import json
 import os
 import sqlite3
-import subprocess
 import ssl
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
-from gigachat import GigaChat
+import httpx
 
 from .config import LLMConfig
 from .gigachat_schema import NormalizeTicket
@@ -23,13 +23,9 @@ def _validate_mtls_files(ca_bundle_file: str | None, cert_file: str | None, key_
     missing = [str(p) for p in required if not p or not Path(p).exists()]
     if missing:
         raise FileNotFoundError(
-            "mTLS files are missing for GigaChat: " + ", ".join(missing) +
-            ". Set llm.ca_bundle_file/cert_file/key_file (or corresponding GIGACHAT_* env overrides)."
+            "mTLS files are missing for GigaChat: " + ", ".join(missing)
+            + ". Set llm.ca_bundle_file/cert_file/key_file (or corresponding GIGACHAT_* env overrides)."
         )
-
-
-
-
 
 
 def _safe_cert_summary(cert_file: str | None) -> str:
@@ -59,6 +55,7 @@ def _base_url_host_port(base_url: str) -> tuple[str, int | None]:
         port = 443 if parsed.scheme == "https" else 80
     return host, port
 
+
 def _tls_debug_context(cfg: LLMConfig) -> str:
     proxy_vars = [name for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY") if os.getenv(name)]
     proxy_hint = ",".join(proxy_vars) if proxy_vars else "none"
@@ -66,6 +63,7 @@ def _tls_debug_context(cfg: LLMConfig) -> str:
         f"mode={cfg.mode}; base_url={cfg.base_url}; verify_ssl_certs={cfg.verify_ssl_certs}; "
         f"proxies={proxy_hint}"
     )
+
 
 def _build_mtls_ssl_context(
     ca_bundle_file: str | None,
@@ -80,6 +78,33 @@ def _build_mtls_ssl_context(
         context.verify_mode = ssl.CERT_NONE
     context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file), password=key_file_password)
     return context
+
+
+class _Msg:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class _Choice:
+    def __init__(self, content: str):
+        self.message = _Msg(content)
+
+
+class _ChatResp:
+    def __init__(self, content: str):
+        self.choices = [_Choice(content)]
+
+
+class _HTTPXChatClient:
+    def __init__(self, *, base_url: str, verify: bool | str | ssl.SSLContext, timeout: float = 60.0):
+        self._client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
+
+    def chat(self, payload: dict) -> _ChatResp:
+        response = self._client.post("/chat/completions", json=payload)
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        return _ChatResp(content)
 
 
 class LLMCache:
@@ -126,29 +151,12 @@ class GigaChatNormalizer:
                     key_file_password=key_password,
                     verify_ssl_certs=cfg.verify_ssl_certs,
                 )
-                self.client = GigaChat(
-                    base_url=cfg.base_url,
-                    ssl_context=ssl_context,
-                    credentials="",
-                    user="",
-                    password="",
-                    verify_ssl_certs=cfg.verify_ssl_certs,
-                    timeout=60.0,
-                    max_retries=3,
-                    retry_backoff_factor=0.5,
-                )
+                self.client = _HTTPXChatClient(base_url=cfg.base_url, verify=ssl_context, timeout=60.0)
             else:
-                self.client = GigaChat(
-                    base_url=cfg.base_url,
-                    ca_bundle_file=cfg.ca_bundle_file,
-                    credentials="",
-                    user="",
-                    password="",
-                    verify_ssl_certs=cfg.verify_ssl_certs,
-                    timeout=60.0,
-                    max_retries=3,
-                    retry_backoff_factor=0.5,
-                )
+                verify: bool | str = cfg.verify_ssl_certs
+                if cfg.ca_bundle_file:
+                    verify = cfg.ca_bundle_file
+                self.client = _HTTPXChatClient(base_url=cfg.base_url, verify=verify, timeout=60.0)
 
     def _key(self, payload: dict) -> str:
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version
