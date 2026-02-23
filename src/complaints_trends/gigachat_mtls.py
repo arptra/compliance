@@ -4,8 +4,10 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
 import ssl
 from pathlib import Path
+from urllib.parse import urlparse
 
 from gigachat import GigaChat
 
@@ -27,6 +29,35 @@ def _validate_mtls_files(ca_bundle_file: str | None, cert_file: str | None, key_
 
 
 
+
+
+
+def _safe_cert_summary(cert_file: str | None) -> str:
+    if not cert_file:
+        return "cert_file=<empty>"
+    cert_path = Path(cert_file)
+    if not cert_path.exists():
+        return f"cert_file={cert_file} (missing)"
+    try:
+        out = subprocess.run(
+            ["openssl", "x509", "-in", str(cert_path), "-noout", "-subject", "-issuer", "-serial"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        summary = " | ".join(line.strip() for line in out.stdout.splitlines() if line.strip())
+        return f"cert_file={cert_path}; {summary}"
+    except Exception:
+        return f"cert_file={cert_path}; openssl_summary=unavailable"
+
+
+def _base_url_host_port(base_url: str) -> tuple[str, int | None]:
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "<unknown-host>"
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return host, port
 
 def _tls_debug_context(cfg: LLMConfig) -> str:
     proxy_vars = [name for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY") if os.getenv(name)]
@@ -183,11 +214,13 @@ class GigaChatNormalizer:
                         "GigaChat TLS handshake failed: server requires client certificate. "
                         "Switch llm.mode to mtls and set cert_file/key_file, or use an endpoint that does not require mTLS."
                     ) from e
+                host, port = _base_url_host_port(self.cfg.base_url)
+                cert_summary = _safe_cert_summary(self.cfg.cert_file)
                 raise RuntimeError(
-                    "GigaChat mTLS handshake failed: server requires client certificate. "
-                    "Common causes: wrong endpoint/mode, cert chain not accepted by server, or proxy interference. "
-                    "Check cert_file/key_file/ca_bundle_file and try disabling proxy env vars. "
-                    f"Debug: {_tls_debug_context(self.cfg)}"
+                    "GigaChat mTLS handshake failed: server requires/rejects client certificate during TLS. "
+                    "This usually means the cert was not accepted by endpoint policy (DN/issuer/chain) for this host. "
+                    "Check endpoint host, mTLS cert mapping/whitelist on server side, full certificate chain, and proxy interference. "
+                    f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
                 ) from e
             raise
         content = response.choices[0].message.content
@@ -214,10 +247,12 @@ class GigaChatNormalizer:
                             "GigaChat TLS handshake failed on repair request: server requires client certificate. "
                             "Switch llm.mode to mtls or use a non-mTLS endpoint."
                         ) from e
+                    host, port = _base_url_host_port(self.cfg.base_url)
+                    cert_summary = _safe_cert_summary(self.cfg.cert_file)
                     raise RuntimeError(
-                        "GigaChat mTLS handshake failed on repair request: certificate required by server. "
-                        "Verify mTLS cert/key/CA configuration and check proxy env vars. "
-                        f"Debug: {_tls_debug_context(self.cfg)}"
+                        "GigaChat mTLS handshake failed on repair request: certificate required/rejected by server. "
+                        "Verify endpoint host mapping, cert chain, and server-side client cert policy. "
+                        f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
                     ) from e
                 raise
             obj = NormalizeTicket.model_validate(json.loads(response2.choices[0].message.content))
