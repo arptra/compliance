@@ -88,6 +88,9 @@ class GigaChatNormalizer:
                 self.client = GigaChat(
                     base_url=cfg.base_url,
                     ssl_context=ssl_context,
+                    credentials="",
+                    user="",
+                    password="",
                     verify_ssl_certs=cfg.verify_ssl_certs,
                     timeout=60.0,
                     max_retries=3,
@@ -97,6 +100,9 @@ class GigaChatNormalizer:
                 self.client = GigaChat(
                     base_url=cfg.base_url,
                     ca_bundle_file=cfg.ca_bundle_file,
+                    credentials="",
+                    user="",
+                    password="",
                     verify_ssl_certs=cfg.verify_ssl_certs,
                     timeout=60.0,
                     max_retries=3,

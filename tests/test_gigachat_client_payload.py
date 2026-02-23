@@ -158,3 +158,47 @@ def test_mtls_mode_uses_ssl_context_for_client(monkeypatch, tmp_path):
     assert "key_file" not in captured
     assert captured["cafile"] == str(ca)
     assert fake_context.loaded == (str(cert), str(key), None)
+
+
+
+def test_client_forces_no_env_auth_credentials_in_mtls(monkeypatch, tmp_path):
+    ca = tmp_path / "ca.pem"
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    ca.write_text("ca", encoding="utf-8")
+    cert.write_text("cert", encoding="utf-8")
+    key.write_text("key", encoding="utf-8")
+
+    captured = {}
+
+    class FakeContext:
+        def load_cert_chain(self, certfile, keyfile, password=None):
+            return None
+
+    def fake_create_default_context(*, cafile=None):
+        return FakeContext()
+
+    class FakeGigaChat:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("complaints_trends.gigachat_mtls.ssl.create_default_context", fake_create_default_context)
+    monkeypatch.setattr("complaints_trends.gigachat_mtls.GigaChat", FakeGigaChat)
+    monkeypatch.setenv("GIGACHAT_CREDENTIALS", "should_not_be_used")
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file=str(ca),
+        cert_file=str(cert),
+        key_file=str(key),
+        verify_ssl_certs=True,
+        cache_db=str(tmp_path / "cache.sqlite"),
+    )
+
+    GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=False)
+
+    assert captured["credentials"] == ""
+    assert captured["user"] == ""
+    assert captured["password"] == ""
