@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import LLMConfig
-from .gigachat_schema import NormalizeTicket, schema_dict
+from .gigachat_schema import NormalizeTicket
 
 
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
@@ -253,13 +253,6 @@ class GigaChatNormalizer:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "NormalizeTicket",
-                            "schema": schema_dict(),
-                        },
-                    },
                 }
             )
         except Exception as e:
@@ -293,13 +286,6 @@ class GigaChatNormalizer:
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": repair_prompt},
                         ],
-                        "response_format": {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "NormalizeTicket",
-                                "schema": schema_dict(),
-                            },
-                        },
                     }
                 )
             except Exception as e:
