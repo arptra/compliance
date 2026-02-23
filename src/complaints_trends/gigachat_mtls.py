@@ -26,6 +26,16 @@ def _validate_mtls_files(ca_bundle_file: str | None, cert_file: str | None, key_
         )
 
 
+
+
+def _tls_debug_context(cfg: LLMConfig) -> str:
+    proxy_vars = [name for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY") if os.getenv(name)]
+    proxy_hint = ",".join(proxy_vars) if proxy_vars else "none"
+    return (
+        f"mode={cfg.mode}; base_url={cfg.base_url}; verify_ssl_certs={cfg.verify_ssl_certs}; "
+        f"proxies={proxy_hint}"
+    )
+
 def _build_mtls_ssl_context(
     ca_bundle_file: str | None,
     cert_file: str | None,
@@ -175,7 +185,9 @@ class GigaChatNormalizer:
                     ) from e
                 raise RuntimeError(
                     "GigaChat mTLS handshake failed: server requires client certificate. "
-                    "Check cert_file/key_file/ca_bundle_file paths and that env overrides are not pointing to empty files."
+                    "Common causes: wrong endpoint/mode, cert chain not accepted by server, or proxy interference. "
+                    "Check cert_file/key_file/ca_bundle_file and try disabling proxy env vars. "
+                    f"Debug: {_tls_debug_context(self.cfg)}"
                 ) from e
             raise
         content = response.choices[0].message.content
@@ -204,7 +216,8 @@ class GigaChatNormalizer:
                         ) from e
                     raise RuntimeError(
                         "GigaChat mTLS handshake failed on repair request: certificate required by server. "
-                        "Verify mTLS cert/key/CA configuration."
+                        "Verify mTLS cert/key/CA configuration and check proxy env vars. "
+                        f"Debug: {_tls_debug_context(self.cfg)}"
                     ) from e
                 raise
             obj = NormalizeTicket.model_validate(json.loads(response2.choices[0].message.content))
