@@ -162,3 +162,33 @@ def test_mtls_mode_uses_ssl_context_for_httpx_client(monkeypatch, tmp_path):
     assert captured["verify"] is fake_context
     assert captured["cafile"] == str(ca)
     assert fake_context.loaded == (str(cert), str(key), None)
+
+
+
+def test_compact_api_response_is_coerced_to_schema(tmp_path):
+    class CompactClient:
+        def chat(self, payload):
+            body = {
+                "category": "CREDITING",
+                "product": "CONSUMER_LOAN",
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER", "CREDITING"], "subcategories_by_category": {"OTHER": [], "CREDITING": []}, "loan_products": ["NONE", "CONSUMER_LOAN"]}, mock=True)
+    n.mock = False
+    n.client = CompactClient()
+    out = n.normalize({"client_first_message": "Не получается оплатить"})
+    assert out.complaint_category == "CREDITING"
+    assert out.loan_product == "CONSUMER_LOAN"
+    assert out.client_first_message == "Не получается оплатить"

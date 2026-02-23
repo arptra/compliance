@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import LLMConfig
-from .gigachat_schema import NormalizeTicket
+from .gigachat_schema import NormalizeTicket, schema_dict
 
 
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
@@ -64,6 +64,47 @@ def _tls_debug_context(cfg: LLMConfig) -> str:
         f"proxies={proxy_hint}"
     )
 
+
+
+
+def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
+    client_msg = str(payload.get("client_first_message", "") or "")
+    category = parsed.get("complaint_category") or parsed.get("category") or "OTHER"
+    subcategory = parsed.get("complaint_subcategory") or parsed.get("subcategory")
+    product = parsed.get("product_area") or parsed.get("product")
+    loan_product = parsed.get("loan_product") or parsed.get("product")
+    is_complaint = parsed.get("is_complaint")
+    if is_complaint is None:
+        is_complaint = str(category).upper() not in {"OTHER", "NONE", "NON_COMPLAINT"}
+    severity = parsed.get("severity") or ("medium" if is_complaint else "low")
+    if severity not in {"low", "medium", "high"}:
+        severity = "medium" if is_complaint else "low"
+    keywords = parsed.get("keywords")
+    if not isinstance(keywords, list) or not keywords:
+        keywords = ["жалоба", "обращение", "сервис"] if is_complaint else ["вопрос", "инфо", "уточнение"]
+    keywords = [str(k) for k in keywords][:8]
+    while len(keywords) < 3:
+        keywords.append("уточнение")
+    confidence = parsed.get("confidence")
+    try:
+        confidence = float(confidence)
+    except Exception:
+        confidence = 0.6 if is_complaint else 0.5
+    confidence = max(0.0, min(1.0, confidence))
+
+    return {
+        "client_first_message": parsed.get("client_first_message") or client_msg,
+        "short_summary": parsed.get("short_summary") or parsed.get("summary") or client_msg[:120],
+        "is_complaint": bool(is_complaint),
+        "complaint_category": str(category),
+        "complaint_subcategory": subcategory,
+        "product_area": product,
+        "loan_product": loan_product or "NONE",
+        "severity": severity,
+        "keywords": keywords,
+        "confidence": confidence,
+        "notes": parsed.get("notes"),
+    }
 
 def _build_mtls_ssl_context(
     ca_bundle_file: str | None,
@@ -212,6 +253,13 @@ class GigaChatNormalizer:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
                     ],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "NormalizeTicket",
+                            "schema": schema_dict(),
+                        },
+                    },
                 }
             )
         except Exception as e:
@@ -234,7 +282,7 @@ class GigaChatNormalizer:
         content = response.choices[0].message.content
         try:
             parsed = json.loads(content)
-            obj = NormalizeTicket.model_validate(parsed)
+            obj = NormalizeTicket.model_validate(_coerce_response_fields(parsed, payload))
         except Exception:
             repair_prompt = f"Исправь: верни JSON по схеме, убери запрещенные токены.\n{content}"
             try:
@@ -245,6 +293,13 @@ class GigaChatNormalizer:
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": repair_prompt},
                         ],
+                        "response_format": {
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "NormalizeTicket",
+                                "schema": schema_dict(),
+                            },
+                        },
                     }
                 )
             except Exception as e:
@@ -263,6 +318,7 @@ class GigaChatNormalizer:
                         f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
                     ) from e
                 raise
-            obj = NormalizeTicket.model_validate(json.loads(response2.choices[0].message.content))
+            repaired = json.loads(response2.choices[0].message.content)
+            obj = NormalizeTicket.model_validate(_coerce_response_fields(repaired, payload))
         self.cache.set(k, obj.model_dump())
         return obj
