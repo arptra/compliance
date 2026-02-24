@@ -110,6 +110,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
     llm_rows = []
+    llm_errors: list[dict[str, str]] = []
     total_rows = len(df)
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
@@ -126,23 +127,49 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
             "channel": signal_fields.get("channel"),
             "status": signal_fields.get("status"),
         }
-        out = normalizer.normalize(payload)
-        llm_rows.append(out.model_dump())
+        try:
+            out = normalizer.normalize(payload)
+            llm_rows.append(out.model_dump())
+        except Exception as e:
+            llm_errors.append({"row_id": str(row.get("row_id", i)), "error": str(e)})
+            llm_rows.append(
+                {
+                    "client_first_message": payload.get("client_first_message", ""),
+                    "short_summary": payload.get("client_first_message", "")[:120],
+                    "is_complaint": False,
+                    "complaint_category": "OTHER",
+                    "complaint_subcategory": None,
+                    "product_area": payload.get("product"),
+                    "loan_product": "NONE",
+                    "severity": "low",
+                    "keywords": ["вопрос", "инфо", "уточнение"],
+                    "confidence": 0.0,
+                    "notes": f"LLM_ERROR: {e}",
+                }
+            )
         if i == 1 or i % 50 == 0 or i == total_rows:
             logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
     llm_df = pd.DataFrame(llm_rows)
     if llm_df.empty:
         llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))
     out_df = pd.concat([df.reset_index(drop=True), llm_df.add_suffix("_llm")], axis=1)
+    out_df["llm_error"] = out_df.get("notes_llm", "").astype(str).where(out_df.get("notes_llm", "").astype(str).str.startswith("LLM_ERROR:"), "")
 
     out_path = cfg.prepare.pilot_parquet if pilot else cfg.prepare.output_parquet
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
 
+    if llm_errors:
+        err_path = Path(cfg.analysis.reports_dir) / "llm_errors.json"
+        err_path.parent.mkdir(parents=True, exist_ok=True)
+        err_path.write_text(json.dumps(llm_errors, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.warning("[stage=prepare/llm] rows with LLM errors: %s; saved to %s", len(llm_errors), err_path)
+        logger.warning("[stage=prepare/llm] sample errors: %s", llm_errors[:3])
+
     if pilot:
         review_cols = [
             "row_id", "month", "dialog_source_field", "raw_dialog", "client_first_message", "short_summary_llm", "is_complaint_llm", "complaint_category_llm",
-            "complaint_subcategory_llm", "severity_llm", "keywords_llm", "confidence_llm",
+            "complaint_subcategory_llm", "loan_product_llm", "severity_llm", "keywords_llm", "confidence_llm", "llm_error",
         ]
         review = out_df[[c for c in review_cols if c in out_df.columns]].copy()
         review["is_complaint_gold"] = ""
