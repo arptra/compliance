@@ -8,6 +8,7 @@ import os
 import sqlite3
 import ssl
 import subprocess
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -203,18 +204,22 @@ class _HTTPXChatClient:
 class LLMCache:
     def __init__(self, db_path: str):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(db_path)
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
-        )
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.Lock()
+        with self._lock:
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+            )
 
     def get(self, key: str) -> dict | None:
-        row = self.conn.execute("SELECT v FROM cache WHERE k=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else None
+        with self._lock:
+            row = self.conn.execute("SELECT v FROM cache WHERE k=?", (key,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def set(self, key: str, value: dict) -> None:
-        self.conn.execute("INSERT OR REPLACE INTO cache(k,v) VALUES (?,?)", (key, json.dumps(value, ensure_ascii=False)))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("INSERT OR REPLACE INTO cache(k,v) VALUES (?,?)", (key, json.dumps(value, ensure_ascii=False)))
+            self.conn.commit()
 
 
 class GigaChatNormalizer:
