@@ -77,3 +77,61 @@ def test_normalize_batch_uses_single_chat_request(tmp_path):
     ])
     assert len(out) == 2
     assert n.client.chat_calls == 1
+
+
+def test_normalize_batch_retries_only_missing_rows(tmp_path):
+    class PartialBatchClient:
+        def __init__(self):
+            self.chat_calls = 0
+
+        def count_tokens(self, *, model, input_text):
+            return 100
+
+        def chat(self, payload):
+            self.chat_calls += 1
+            if self.chat_calls == 1:
+                # first attempt returns only one record out of two
+                content = '[{"_batch_index":0,"complaint_category":"OTHER","is_complaint":false,"loan_product":"NONE","severity":"low","keywords":["вопрос","инфо","уточнение"],"confidence":0.9}]'
+            else:
+                # retry should request and return only missing index=1
+                content = '[{"_batch_index":1,"complaint_category":"OTHER","is_complaint":false,"loan_product":"NONE","severity":"low","keywords":["вопрос","инфо","уточнение"],"confidence":0.8}]'
+
+            class _Msg:
+                def __init__(self, c):
+                    self.content = c
+
+            class _Choice:
+                def __init__(self, c):
+                    self.message = _Msg(c)
+
+            class _Resp:
+                def __init__(self, c):
+                    self.choices = [_Choice(c)]
+
+            return _Resp(content)
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+    )
+    n = GigaChatNormalizer(
+        cfg,
+        {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]},
+        mock=True,
+    )
+    n.mock = False
+    n.client = PartialBatchClient()
+
+    out = n.normalize_batch([
+        {"full_dialog_text": "one", "dialog_context": {"dialog_text": "one"}},
+        {"full_dialog_text": "two", "dialog_context": {"dialog_text": "two"}},
+    ])
+    assert len(out) == 2
+    assert n.client.chat_calls == 2

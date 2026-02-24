@@ -298,78 +298,135 @@ class GigaChatNormalizer:
 
         results: list[NormalizeTicket | None] = [None] * len(payloads)
         uncached_idx: list[int] = []
-        uncached_payloads: list[dict] = []
+        uncached_payloads: dict[int, dict] = {}
         for i, payload in enumerate(payloads):
             cached = self.cache.get(self._key(payload))
             if cached:
                 results[i] = NormalizeTicket.model_validate(cached)
             else:
                 uncached_idx.append(i)
-                uncached_payloads.append(payload)
+                uncached_payloads[i] = payload
 
         if not uncached_payloads:
             return [r for r in results if r is not None]
 
-        user_prompt = json.dumps(
-            {
-                "task": "normalize_tickets",
-                "rules": {
-                    "choose_exactly_one_category": True,
-                    "category_must_be_from_allowed": True,
-                    "subcategory_should_match_chosen_category": True,
-                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
-                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
-                    "ignore_empty_context_fields": True,
-                    "return_one_result_per_input": True,
-                },
-                "allowed_categories": self.categories,
-                "allowed_subcategories_by_category": self.subcategories_by_category,
-                "allowed_loan_products": self.loan_products,
-                "taxonomy_raw": self.taxonomy_raw,
-                "inputs": [self._llm_input(p) for p in uncached_payloads],
-            },
-            ensure_ascii=False,
-        )
+        max_attempts = 3
+        pending = set(uncached_idx)
 
-        req_token_count = None
-        if self.client and hasattr(self.client, "count_tokens"):
-            token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
-            req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
-            logger.info("[stage=prepare/llm] tokens per batch request: %s", req_token_count if req_token_count is not None else "n/a")
+        for attempt in range(1, max_attempts + 1):
+            if not pending:
+                break
 
-        chat_started = time.perf_counter()
-        try:
-            response = self.client.chat(
+            batch_indexes = sorted(pending)
+            batch_payloads = [uncached_payloads[idx] for idx in batch_indexes]
+
+            user_prompt = json.dumps(
                 {
-                    "model": self.cfg.model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
+                    "task": "normalize_tickets",
+                    "rules": {
+                        "choose_exactly_one_category": True,
+                        "category_must_be_from_allowed": True,
+                        "subcategory_should_match_chosen_category": True,
+                        "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                        "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                        "ignore_empty_context_fields": True,
+                        "return_one_result_per_input": True,
+                        "must_return_batch_index": True,
+                    },
+                    "allowed_categories": self.categories,
+                    "allowed_subcategories_by_category": self.subcategories_by_category,
+                    "allowed_loan_products": self.loan_products,
+                    "taxonomy_raw": self.taxonomy_raw,
+                    "inputs": [
+                        {"_batch_index": idx, **self._llm_input(payload)}
+                        for idx, payload in zip(batch_indexes, batch_payloads)
                     ],
-                }
+                },
+                ensure_ascii=False,
             )
-        except Exception as e:
-            hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
-            if hinted is not None:
-                raise hinted from e
-            raise
-        elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
-        logger.info("[stage=prepare/llm] batch request latency_ms=%s tokens=%s size=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a", len(uncached_payloads))
 
-        parsed = json.loads(response.choices[0].message.content)
-        if isinstance(parsed, dict):
-            items = parsed.get("items") or parsed.get("results") or parsed.get("tickets") or []
-        elif isinstance(parsed, list):
-            items = parsed
-        else:
-            items = []
-        if len(items) != len(uncached_payloads):
-            raise RuntimeError(f"Batch response size mismatch: expected={len(uncached_payloads)} got={len(items)}")
+            req_token_count = None
+            if self.client and hasattr(self.client, "count_tokens"):
+                token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
+                req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
+                logger.info("[stage=prepare/llm] tokens per batch request: %s", req_token_count if req_token_count is not None else "n/a")
 
-        for idx, payload, item in zip(uncached_idx, uncached_payloads, items):
-            obj = NormalizeTicket.model_validate(_coerce_response_fields(item if isinstance(item, dict) else {}, payload))
-            self.cache.set(self._key(payload), obj.model_dump())
-            results[idx] = obj
+            chat_started = time.perf_counter()
+            try:
+                response = self.client.chat(
+                    {
+                        "model": self.cfg.model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    }
+                )
+            except Exception as e:
+                hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
+                if hinted is not None:
+                    raise hinted from e
+                raise
+            elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
+            logger.info(
+                "[stage=prepare/llm] batch request latency_ms=%s tokens=%s size=%s attempt=%s",
+                elapsed_ms,
+                req_token_count if req_token_count is not None else "n/a",
+                len(batch_payloads),
+                attempt,
+            )
+
+            parsed = json.loads(response.choices[0].message.content)
+            if isinstance(parsed, dict):
+                items = parsed.get("items") or parsed.get("results") or parsed.get("tickets") or []
+            elif isinstance(parsed, list):
+                items = parsed
+            else:
+                items = []
+
+            if not isinstance(items, list):
+                items = []
+
+            assigned: set[int] = set()
+            leftovers: list[dict] = []
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                raw_idx = item.get("_batch_index")
+                try:
+                    idx = int(raw_idx)
+                except Exception:
+                    idx = None
+                if idx is None or idx not in pending or idx in assigned:
+                    leftovers.append(item)
+                    continue
+                obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
+                results[idx] = obj
+                assigned.add(idx)
+
+            unassigned_pending = [idx for idx in batch_indexes if idx not in assigned]
+            for idx, item in zip(unassigned_pending, leftovers):
+                obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
+                results[idx] = obj
+                assigned.add(idx)
+
+            pending -= assigned
+            if pending:
+                logger.warning(
+                    "[stage=prepare/llm] batch missing %s/%s rows, retrying pending subset (attempt=%s/%s)",
+                    len(pending),
+                    len(batch_indexes),
+                    attempt,
+                    max_attempts,
+                )
+
+        if pending:
+            raise RuntimeError(
+                f"Batch response incomplete after retries: unresolved={len(pending)} indexes={sorted(pending)}"
+            )
 
         return [r for r in results if r is not None]
 
