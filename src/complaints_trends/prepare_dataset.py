@@ -70,6 +70,43 @@ def _build_signal_payload(row: pd.Series, signal_columns: list[str], dialog_fiel
             out[c] = str(v).strip()
     return out
 
+
+def _fallback_llm_row(payload: dict, err: Exception) -> dict:
+    txt = str(payload.get("full_dialog_text", "") or payload.get("dialog_context", "") or "")
+    return {
+        "client_first_message": txt,
+        "short_summary": txt[:120],
+        "is_complaint": False,
+        "complaint_category": "OTHER",
+        "complaint_subcategory": None,
+        "product_area": payload.get("product"),
+        "loan_product": "NONE",
+        "severity": "low",
+        "keywords": ["вопрос", "инфо", "уточнение"],
+        "confidence": 0.0,
+        "notes": f"LLM_ERROR: {err}",
+    }
+
+
+def _split_payload_batches(normalizer: GigaChatNormalizer, indexed_payloads: list[tuple[int, dict]], token_batch_size: int) -> list[list[tuple[int, dict]]]:
+    if not indexed_payloads:
+        return []
+    batches: list[list[tuple[int, dict]]] = []
+    current: list[tuple[int, dict]] = []
+    current_tokens = 0
+    limit = max(1, int(token_batch_size))
+    for idx, payload in indexed_payloads:
+        row_tokens = normalizer.estimate_tokens(payload)
+        if current and current_tokens + row_tokens > limit:
+            batches.append(current)
+            current = []
+            current_tokens = 0
+        current.append((idx, payload))
+        current_tokens += row_tokens
+    if current:
+        batches.append(current)
+    return batches
+
 def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None = None, llm_mock: bool = False, date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
     df = read_all_excels(cfg.input)
     if df.empty:
@@ -109,8 +146,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     taxonomy = load_taxonomy(cfg.files.categories_seed_path)
     normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
-    llm_rows = []
-    llm_errors: list[dict[str, str]] = []
+    payloads: list[tuple[int, str, dict]] = []
     total_rows = len(df)
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
@@ -127,29 +163,52 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
             "channel": signal_fields.get("channel"),
             "status": signal_fields.get("status"),
         }
-        try:
-            out = normalizer.normalize(payload)
-            llm_rows.append(out.model_dump())
-        except Exception as e:
-            llm_errors.append({"row_id": str(row.get("row_id", i)), "error": str(e)})
-            llm_rows.append(
-                {
-                    "client_first_message": payload.get("client_first_message", ""),
-                    "short_summary": payload.get("client_first_message", "")[:120],
-                    "is_complaint": False,
-                    "complaint_category": "OTHER",
-                    "complaint_subcategory": None,
-                    "product_area": payload.get("product"),
-                    "loan_product": "NONE",
-                    "severity": "low",
-                    "keywords": ["вопрос", "инфо", "уточнение"],
-                    "confidence": 0.0,
-                    "notes": f"LLM_ERROR: {e}",
-                }
-            )
-        if i == 1 or i % 50 == 0 or i == total_rows:
-            logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
-    llm_df = pd.DataFrame(llm_rows)
+        payloads.append((i - 1, str(row.get("row_id", i)), payload))
+
+    llm_rows: list[dict | None] = [None] * total_rows
+    llm_errors: list[dict[str, str]] = []
+
+    if cfg.llm.batch_mode:
+        indexed_payloads = [(idx, payload) for idx, _, payload in payloads]
+        batches = _split_payload_batches(normalizer, indexed_payloads, cfg.llm.token_batch_size)
+        processed = 0
+        for batch in batches:
+            batch_indexes = [idx for idx, _ in batch]
+            batch_payloads = [p for _, p in batch]
+            try:
+                outs = normalizer.normalize_batch(batch_payloads)
+                if len(outs) != len(batch):
+                    raise RuntimeError(f"Batch output size mismatch: expected={len(batch)} got={len(outs)}")
+                for idx, out in zip(batch_indexes, outs):
+                    llm_rows[idx] = out.model_dump()
+            except Exception as e:
+                for idx, payload in batch:
+                    try:
+                        out = normalizer.normalize(payload)
+                        llm_rows[idx] = out.model_dump()
+                    except Exception as single_e:
+                        row_id = payloads[idx][1]
+                        llm_errors.append({"row_id": row_id, "error": str(single_e)})
+                        llm_rows[idx] = _fallback_llm_row(payload, single_e)
+            processed += len(batch)
+            if processed == len(batch) or processed % 50 == 0 or processed == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", processed, total_rows, total_rows - processed)
+    else:
+        for i, (idx, row_id, payload) in enumerate(payloads, start=1):
+            try:
+                out = normalizer.normalize(payload)
+                llm_rows[idx] = out.model_dump()
+            except Exception as e:
+                llm_errors.append({"row_id": row_id, "error": str(e)})
+                llm_rows[idx] = _fallback_llm_row(payload, e)
+            if i == 1 or i % 50 == 0 or i == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
+
+    llm_rows_filled = [
+        (llm_rows[idx] if llm_rows[idx] is not None else _fallback_llm_row(payload, RuntimeError("empty llm row")))
+        for idx, _, payload in payloads
+    ]
+    llm_df = pd.DataFrame(llm_rows_filled)
     if llm_df.empty:
         llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))
     out_df = pd.concat([df.reset_index(drop=True), llm_df.add_suffix("_llm")], axis=1)

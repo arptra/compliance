@@ -191,6 +191,8 @@ llm:
   max_text_chars: 1200
   cache_db: "data/interim/gigachat_cache.sqlite"
   prompt_version: "v1"
+  token_batch_size: 12000
+  batch_mode: false
 
 prepare:
   pilot_limit: 1000
@@ -380,6 +382,8 @@ llm:
 - `max_text_chars`: ограничение длины входа в LLM.
 - `cache_db`: sqlite-кэш ответов.
 - `prompt_version`: меняйте при изменении промпта, чтобы не смешивать старые кэши.
+- `token_batch_size`: лимит суммарных токенов в одном batch-запросе к LLM.
+- `batch_mode`: если `true`, `prepare` группирует строки в батчи так, чтобы сумма токенов по строкам в одном POST была меньше `token_batch_size`.
 
 ## 5.5 `prepare`
 - `pilot_limit`: пилотный режим (ограничение строк).
@@ -432,6 +436,27 @@ python -m complaints_trends.cli prepare --config configs/project.yaml
 - `data/processed/pilot_prepared.parquet`
 - `exports/pilot_review.xlsx`
 - `reports/pilot_report.html`, `reports/pilot_report.md`
+
+
+### 6.1.1 Batch-режим LLM по токенам (`llm.batch_mode`)
+
+Если включить:
+
+```yaml
+llm:
+  batch_mode: true
+  token_batch_size: 12000
+```
+
+то `prepare` работает так:
+1. Для каждой записи считает токены через `POST /tokens/count` (тот же механизм, что уже используется для токен-оценки запросов).
+2. Собирает батчи жадно в исходном порядке строк: добавляет запись в текущий batch, пока сумма токенов не превысит `token_batch_size`.
+3. Отправляет один POST `/chat/completions` на весь batch (`task=normalize_tickets`, `inputs=[...]`).
+4. Если batch-запрос не удался или вернулся некорректный размер ответа — делает fallback на поштучную обработку записей из этого batch.
+
+Важно:
+- Ограничение применяется к **сумме токенов записей** в batch.
+- Если `/tokens/count` недоступен, используется безопасная оценка по длине prompt (эвристика), чтобы batching не ломал pipeline.
 
 ## 6.2 `train`
 Команда:

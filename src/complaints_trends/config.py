@@ -58,6 +58,8 @@ class LLMConfig(BaseModel):
     max_text_chars: int = 1200
     cache_db: str = "data/interim/gigachat_cache.sqlite"
     prompt_version: str = "v1"
+    token_batch_size: int = 12000
+    batch_mode: bool = False
 
 
 class PrepareConfig(BaseModel):

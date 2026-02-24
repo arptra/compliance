@@ -112,6 +112,36 @@ def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
         "notes": parsed.get("notes"),
     }
 
+
+def _normalize_error_with_tls_hint(cfg: LLMConfig, e: Exception, *, phase: str) -> RuntimeError | None:
+    msg = str(e)
+    if "TLSV13_ALERT_CERTIFICATE_REQUIRED" not in msg and "certificate required" not in msg.lower():
+        return None
+    if cfg.mode == "tls":
+        if phase == "repair":
+            return RuntimeError(
+                "GigaChat TLS handshake failed on repair request: server requires client certificate. "
+                "Switch llm.mode to mtls or use a non-mTLS endpoint."
+            )
+        return RuntimeError(
+            "GigaChat TLS handshake failed: server requires client certificate. "
+            "Switch llm.mode to mtls and set cert_file/key_file, or use an endpoint that does not require mTLS."
+        )
+    host, port = _base_url_host_port(cfg.base_url)
+    cert_summary = _safe_cert_summary(cfg.cert_file)
+    if phase == "repair":
+        return RuntimeError(
+            "GigaChat mTLS handshake failed on repair request: certificate required/rejected by server. "
+            "Verify endpoint host mapping, cert chain, and server-side client cert policy. "
+            f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(cfg)}"
+        )
+    return RuntimeError(
+        "GigaChat mTLS handshake failed: server requires/rejects client certificate during TLS. "
+        "This usually means the cert was not accepted by endpoint policy (DN/issuer/chain) for this host. "
+        "Check endpoint host, mTLS cert mapping/whitelist on server side, full certificate chain, and proxy interference. "
+        f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(cfg)}"
+    )
+
 def _build_mtls_ssl_context(
     ca_bundle_file: str | None,
     cert_file: str | None,
@@ -227,6 +257,122 @@ class GigaChatNormalizer:
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    def _llm_input(self, payload: dict) -> dict:
+        return {k: v for k, v in payload.items() if k != "client_first_message"}
+
+    def _single_user_prompt(self, payload: dict) -> str:
+        return json.dumps(
+            {
+                "task": "normalize_ticket",
+                "rules": {
+                    "choose_exactly_one_category": True,
+                    "category_must_be_from_allowed": True,
+                    "subcategory_should_match_chosen_category": True,
+                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                    "ignore_empty_context_fields": True,
+                },
+                "allowed_categories": self.categories,
+                "allowed_subcategories_by_category": self.subcategories_by_category,
+                "allowed_loan_products": self.loan_products,
+                "taxonomy_raw": self.taxonomy_raw,
+                "input": self._llm_input(payload),
+            },
+            ensure_ascii=False,
+        )
+
+    def estimate_tokens(self, payload: dict) -> int:
+        prompt = self._single_user_prompt(payload)
+        if self.client and hasattr(self.client, "count_tokens"):
+            token_input = f"{SYSTEM_PROMPT}\n{prompt}"
+            count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
+            if count is not None:
+                return max(1, int(count))
+        return max(1, len(prompt) // 4)
+
+    def normalize_batch(self, payloads: list[dict]) -> list[NormalizeTicket]:
+        if not payloads:
+            return []
+        if self.mock:
+            return [self.normalize(p) for p in payloads]
+
+        results: list[NormalizeTicket | None] = [None] * len(payloads)
+        uncached_idx: list[int] = []
+        uncached_payloads: list[dict] = []
+        for i, payload in enumerate(payloads):
+            cached = self.cache.get(self._key(payload))
+            if cached:
+                results[i] = NormalizeTicket.model_validate(cached)
+            else:
+                uncached_idx.append(i)
+                uncached_payloads.append(payload)
+
+        if not uncached_payloads:
+            return [r for r in results if r is not None]
+
+        user_prompt = json.dumps(
+            {
+                "task": "normalize_tickets",
+                "rules": {
+                    "choose_exactly_one_category": True,
+                    "category_must_be_from_allowed": True,
+                    "subcategory_should_match_chosen_category": True,
+                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                    "ignore_empty_context_fields": True,
+                    "return_one_result_per_input": True,
+                },
+                "allowed_categories": self.categories,
+                "allowed_subcategories_by_category": self.subcategories_by_category,
+                "allowed_loan_products": self.loan_products,
+                "taxonomy_raw": self.taxonomy_raw,
+                "inputs": [self._llm_input(p) for p in uncached_payloads],
+            },
+            ensure_ascii=False,
+        )
+
+        req_token_count = None
+        if self.client and hasattr(self.client, "count_tokens"):
+            token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
+            req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
+            logger.info("[stage=prepare/llm] tokens per batch request: %s", req_token_count if req_token_count is not None else "n/a")
+
+        chat_started = time.perf_counter()
+        try:
+            response = self.client.chat(
+                {
+                    "model": self.cfg.model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+            )
+        except Exception as e:
+            hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
+            if hinted is not None:
+                raise hinted from e
+            raise
+        elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
+        logger.info("[stage=prepare/llm] batch request latency_ms=%s tokens=%s size=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a", len(uncached_payloads))
+
+        parsed = json.loads(response.choices[0].message.content)
+        if isinstance(parsed, dict):
+            items = parsed.get("items") or parsed.get("results") or parsed.get("tickets") or []
+        elif isinstance(parsed, list):
+            items = parsed
+        else:
+            items = []
+        if len(items) != len(uncached_payloads):
+            raise RuntimeError(f"Batch response size mismatch: expected={len(uncached_payloads)} got={len(items)}")
+
+        for idx, payload, item in zip(uncached_idx, uncached_payloads, items):
+            obj = NormalizeTicket.model_validate(_coerce_response_fields(item if isinstance(item, dict) else {}, payload))
+            self.cache.set(self._key(payload), obj.model_dump())
+            results[idx] = obj
+
+        return [r for r in results if r is not None]
+
     def normalize(self, payload: dict) -> NormalizeTicket:
         k = self._key(payload)
         cached = self.cache.get(k)
@@ -251,27 +397,7 @@ class GigaChatNormalizer:
             self.cache.set(k, resp.model_dump())
             return resp
 
-        llm_input = {k: v for k, v in payload.items() if k != "client_first_message"}
-
-        user_prompt = json.dumps(
-            {
-                "task": "normalize_ticket",
-                "rules": {
-                    "choose_exactly_one_category": True,
-                    "category_must_be_from_allowed": True,
-                    "subcategory_should_match_chosen_category": True,
-                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
-                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
-                    "ignore_empty_context_fields": True,
-                },
-                "allowed_categories": self.categories,
-                "allowed_subcategories_by_category": self.subcategories_by_category,
-                "allowed_loan_products": self.loan_products,
-                "taxonomy_raw": self.taxonomy_raw,
-                "input": llm_input,
-            },
-            ensure_ascii=False,
-        )
+        user_prompt = self._single_user_prompt(payload)
         req_token_count = None
         if self.client and hasattr(self.client, "count_tokens"):
             token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
@@ -290,21 +416,9 @@ class GigaChatNormalizer:
                 }
             )
         except Exception as e:
-            msg = str(e)
-            if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
-                if self.cfg.mode == "tls":
-                    raise RuntimeError(
-                        "GigaChat TLS handshake failed: server requires client certificate. "
-                        "Switch llm.mode to mtls and set cert_file/key_file, or use an endpoint that does not require mTLS."
-                    ) from e
-                host, port = _base_url_host_port(self.cfg.base_url)
-                cert_summary = _safe_cert_summary(self.cfg.cert_file)
-                raise RuntimeError(
-                    "GigaChat mTLS handshake failed: server requires/rejects client certificate during TLS. "
-                    "This usually means the cert was not accepted by endpoint policy (DN/issuer/chain) for this host. "
-                    "Check endpoint host, mTLS cert mapping/whitelist on server side, full certificate chain, and proxy interference. "
-                    f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
-                ) from e
+            hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
+            if hinted is not None:
+                raise hinted from e
             raise
         elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
         logger.info("[stage=prepare/llm] request latency_ms=%s tokens=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a")
@@ -325,20 +439,9 @@ class GigaChatNormalizer:
                     }
                 )
             except Exception as e:
-                msg = str(e)
-                if "TLSV13_ALERT_CERTIFICATE_REQUIRED" in msg or "certificate required" in msg.lower():
-                    if self.cfg.mode == "tls":
-                        raise RuntimeError(
-                            "GigaChat TLS handshake failed on repair request: server requires client certificate. "
-                            "Switch llm.mode to mtls or use a non-mTLS endpoint."
-                        ) from e
-                    host, port = _base_url_host_port(self.cfg.base_url)
-                    cert_summary = _safe_cert_summary(self.cfg.cert_file)
-                    raise RuntimeError(
-                        "GigaChat mTLS handshake failed on repair request: certificate required/rejected by server. "
-                        "Verify endpoint host mapping, cert chain, and server-side client cert policy. "
-                        f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
-                    ) from e
+                hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="repair")
+                if hinted is not None:
+                    raise hinted from e
                 raise
             repaired = json.loads(response2.choices[0].message.content)
             obj = NormalizeTicket.model_validate(_coerce_response_fields(repaired, payload))

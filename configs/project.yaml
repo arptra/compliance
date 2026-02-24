@@ -43,6 +43,8 @@ llm:
   max_text_chars: 1200
   cache_db: "data/interim/gigachat_cache.sqlite"
   prompt_version: "v1"
+  token_batch_size: 12000
+  batch_mode: false
 
 prepare:
   pilot_limit: 5000
