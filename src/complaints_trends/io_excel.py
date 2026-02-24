@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 
 import pandas as pd
 
 from .config import InputConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 def discover_excel_files(cfg: InputConfig) -> list[Path]:
@@ -44,7 +48,13 @@ def load_excel_with_month(path: Path, cfg: InputConfig) -> pd.DataFrame:
 
 
 def read_all_excels(cfg: InputConfig) -> pd.DataFrame:
-    frames = [load_excel_with_month(path, cfg) for path in discover_excel_files(cfg)]
+    files = discover_excel_files(cfg)
+    total = len(files)
+    frames = []
+    for idx, path in enumerate(files, start=1):
+        remaining = total - idx
+        logger.info("[stage=prepare/read] loading file %s/%s: %s (remaining=%s)", idx, total, path.name, remaining)
+        frames.append(load_excel_with_month(path, cfg))
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)

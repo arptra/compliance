@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 
 import pandas as pd
 import typer
@@ -15,6 +16,8 @@ from .trends import build_trends
 
 app = typer.Typer(help="complaints-trends CLI")
 console = Console()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 
 @app.command("prepare")
@@ -26,22 +29,28 @@ def prepare_cmd(
     limit: int | None = typer.Option(None, "--limit"),
     mock_llm: bool = typer.Option(False, "--mock-llm"),
 ):
+    logger.info("[stage=prepare] start")
     cfg = load_config(config)
     df = prepare_dataset(cfg, pilot=pilot, date_from=date_from, date_to=date_to, limit=limit or cfg.prepare.pilot_limit, llm_mock=mock_llm)
+    logger.info("[stage=prepare] done")
     console.log(f"Prepared rows: {len(df)}")
 
 
 @app.command("train")
 def train_cmd(config: str = typer.Option(..., "--config", help="Path to project yaml config")):
+    logger.info("[stage=train] start")
     cfg = load_config(config)
     metrics = train(cfg)
+    logger.info("[stage=train] done")
     console.log(metrics)
 
 
 @app.command("trends")
 def trends_cmd(config: str = typer.Option(..., "--config", help="Path to project yaml config")):
+    logger.info("[stage=trends] start")
     cfg = load_config(config)
     m = build_trends(cfg)
+    logger.info("[stage=trends] done")
     console.log(m.tail(3))
 
 
@@ -51,8 +60,10 @@ def infer_month_cmd(
     excel: str = typer.Option(..., "--excel"),
     month: str = typer.Option(..., "--month"),
 ):
+    logger.info("[stage=infer-month] start")
     cfg = load_config(config)
     df = infer_month(cfg, excel, month)
+    logger.info("[stage=infer-month] done")
     console.log(f"Inferred rows: {len(df)}")
 
 
@@ -62,13 +73,16 @@ def compare_cmd(
     new_month: str = typer.Option(..., "--new-month"),
     baseline_range: str = typer.Option(..., "--baseline-range"),
 ):
+    logger.info("[stage=compare] start")
     cfg = load_config(config)
     df = compare_month(cfg, new_month, baseline_range)
+    logger.info("[stage=compare] done")
     console.log(f"Novel rows: {int(df['is_novel'].sum())}")
 
 
 @app.command("demo")
 def demo_cmd(config: str = typer.Option("configs/project.yaml", "--config", help="Path to project yaml config")):
+    logger.info("[stage=demo] start")
     cfg = load_config(config)
     Path(cfg.input.input_dir).mkdir(parents=True, exist_ok=True)
 
@@ -95,6 +109,7 @@ def demo_cmd(config: str = typer.Option("configs/project.yaml", "--config", help
     build_trends(cfg)
     infer_month(cfg, f"{cfg.input.input_dir}/2025-12.xlsx", "2025-12")
     compare_month(cfg, "2025-12", "2025-10..2025-11")
+    logger.info("[stage=demo] done")
     console.log("Demo pipeline completed")
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,9 @@ from .io_excel import read_all_excels
 from .pii_redaction import redact_pii
 from .reports.render import render_template, write_md
 from .taxonomy import load_taxonomy
+
+
+logger = logging.getLogger(__name__)
 
 
 def _non_empty(v) -> bool:
@@ -106,7 +110,8 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
     llm_rows = []
-    for _, row in df.iterrows():
+    total_rows = len(df)
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
         payload = {
             "client_first_message": row["client_first_message_redacted"][: cfg.llm.max_text_chars],
@@ -120,6 +125,8 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         }
         out = normalizer.normalize(payload)
         llm_rows.append(out.model_dump())
+        if i == 1 or i % 50 == 0 or i == total_rows:
+            logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
     llm_df = pd.DataFrame(llm_rows)
     if llm_df.empty:
         llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))
