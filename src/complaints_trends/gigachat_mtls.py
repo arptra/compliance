@@ -176,10 +176,12 @@ class GigaChatNormalizer:
             self.categories = taxonomy.get("category_codes", [])
             self.subcategories_by_category = taxonomy.get("subcategories_by_category", {})
             self.loan_products = taxonomy.get("loan_products", ["NONE"])
+            self.taxonomy_raw = taxonomy.get("raw", {})
         else:
             self.categories = taxonomy
             self.subcategories_by_category = {}
             self.loan_products = ["NONE"]
+            self.taxonomy_raw = {}
 
         if not mock:
             if cfg.mode == "mtls":
@@ -235,12 +237,13 @@ class GigaChatNormalizer:
                     "category_must_be_from_allowed": True,
                     "subcategory_should_match_chosen_category": True,
                     "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
-                    "multi_dialog_fields": "Вход может содержать несколько текстовых полей (чат/звонок/комментарий/summary). Используй client_first_message как основной источник, dialog_context как доп.контекст.",
+                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (client_first_message, full_dialog_text, dialog_context, signal_fields). Не опирайся только на первое сообщение.",
                     "ignore_empty_context_fields": True,
                 },
                 "allowed_categories": self.categories,
                 "allowed_subcategories_by_category": self.subcategories_by_category,
                 "allowed_loan_products": self.loan_products,
+                "taxonomy_raw": self.taxonomy_raw,
                 "input": payload,
             },
             ensure_ascii=False,

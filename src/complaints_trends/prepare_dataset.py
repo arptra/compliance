@@ -113,10 +113,13 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     total_rows = len(df)
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
+        dialog_context = json.loads(row.get("dialog_context_map_redacted", "{}"))
+        full_dialog_text = "\n".join(f"{k}: {v}" for k, v in dialog_context.items())
         payload = {
             "client_first_message": row["client_first_message_redacted"][: cfg.llm.max_text_chars],
+            "full_dialog_text": full_dialog_text[: cfg.llm.max_text_chars * 3],
             "dialog_source_field": row.get("dialog_source_field"),
-            "dialog_context": json.loads(row.get("dialog_context_map_redacted", "{}")),
+            "dialog_context": dialog_context,
             "signal_fields": signal_fields,
             "subject": signal_fields.get("subject"),
             "product": signal_fields.get("product"),
@@ -163,12 +166,26 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
 
     complaints = df[df["is_complaint_llm"] == True]
     non_complaints = df[df["is_complaint_llm"] == False]
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    cat_labels = taxonomy.get("category_labels", {})
+    sub_labels = taxonomy.get("subcategory_labels", {})
+    loan_labels = taxonomy.get("loan_product_labels", {})
+
     top = complaints["complaint_category_llm"].value_counts().head(10).to_dict()
+    top_sub = complaints["complaint_subcategory_llm"].value_counts().head(10).to_dict() if "complaint_subcategory_llm" in complaints.columns else {}
+    top_loan = complaints["loan_product_llm"].value_counts().head(10).to_dict() if "loan_product_llm" in complaints.columns else {}
     warn = df["short_summary_llm"].astype(str).str.contains(r"CLIENT|OPERATOR|CHATBOT", case=False).any()
     context = {
         "n": len(df),
         "complaint_share": float(df["is_complaint_llm"].mean()) if len(df) else 0.0,
         "top_categories": top,
+        "top_categories_ru": {f"{k} ({cat_labels.get(k, k)})": v for k, v in top.items()},
+        "top_subcategories_ru": {
+            f"{k} ({sub_labels.get(complaints.loc[complaints['complaint_subcategory_llm'] == k, 'complaint_category_llm'].iloc[0], {}).get(k, k)})": v
+            for k, v in top_sub.items()
+            if "complaint_subcategory_llm" in complaints.columns and not complaints.loc[complaints['complaint_subcategory_llm'] == k, 'complaint_category_llm'].empty
+        },
+        "top_loan_products_ru": {f"{k} ({loan_labels.get(k, k)})": v for k, v in top_loan.items()},
         "complaint_examples": complaints.head(30).to_dict(orient="records"),
         "non_examples": non_complaints.head(30).to_dict(orient="records"),
         "warning": warn,

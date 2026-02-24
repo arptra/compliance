@@ -3,8 +3,12 @@
 <p>Rows: {{ n }}</p>
 <p>Complaint share: {{ '%.2f'|format(complaint_share*100) }}%</p>
 {% if warning %}<p style="color:red">WARNING: Found role tokens in summary.</p>{% endif %}
-<h2>Top categories</h2>
-<ul>{% for k,v in top_categories.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+<h2>Top categories (RU)</h2>
+<ul>{% for k,v in top_categories_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+<h2>Top subcategories (RU)</h2>
+<ul>{% for k,v in top_subcategories_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+<h2>Top loan products (RU)</h2>
+<ul>{% for k,v in top_loan_products_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
 <h2>Complaint examples</h2>
 {% for r in complaint_examples %}<div><b>{{r.complaint_category_llm}}</b><p>{{r.client_first_message}}</p><p>{{r.short_summary_llm}}</p></div>{% endfor %}
 </body></html>
