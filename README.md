@@ -11,12 +11,12 @@
 
 Проект предназначен для обработки ежемесячных Excel-файлов контакт-центра/поддержки (десятки колонок, длинные диалоги, шумные роли вроде `CLIENT/OPERATOR/CHATBOT`).
 
-Ключевая задача: из полного диалога извлекать **только первый осмысленный запрос клиента** (`client_first_message`) и использовать именно его для:
-1. нормализации и слабой разметки через GigaChat;
-2. обучения локальных моделей;
-3. инференса, трендов и поиска новых тем.
+Ключевая задача: нормализовать обращения на основе полного контекста диалога и затем обучить локальные модели на подготовленном текстовом поле.
 
-Это снижает шум от операторских реплик и служебных вставок, повышает стабильность категорий и улучшает интерпретируемость результатов.
+- На этапе `prepare` в LLM уходит **контекст всего диалога** (`full_dialog_text` + `dialog_context` + `signal_fields`) — поле `client_first_message` не используется для принятия решения LLM.
+- На этапе `train` итоговая локальная модель обучается на поле `training.text_field` из prepared parquet (по умолчанию `client_first_message`, но это настраивается в `configs/project.yaml`).
+
+Такой подход позволяет разделить: (1) богатую контекстную нормализацию через LLM и (2) стабильное локальное ML-обучение на фиксированном текстовом представлении.
 
 ---
 
@@ -387,7 +387,7 @@ llm:
 - `output_parquet`, `pilot_parquet`, `pilot_review_xlsx`: куда сохранять артефакты.
 
 ## 5.6 `training`
-- `text_field`: обычно `client_first_message`.
+- `text_field`: поле из prepared parquet, которое реально идет в обучение локальных моделей. По умолчанию `client_first_message` (см. `configs/project.yaml`), но можно переключить, например, на `raw_dialog` или другое текстовое поле из датасета.
 - `complaint_threshold`: порог бинарной классификации.
 - `vectorizer.*`: диапазоны n-gram и ограничения словаря.
 - `classifier.complaint/category`: выбор модели.
@@ -440,16 +440,51 @@ python -m complaints_trends.cli prepare --config configs/project.yaml
 python -m complaints_trends.cli train --config configs/project.yaml
 ```
 
+### На каких полях обучается итоговая модель (точно по коду)
+
+Ниже поля, которые участвуют именно в обучении локальной модели (`train_models.py`):
+
+| Поле | Откуда берется | Где используется | Зачем |
+|---|---|---|---|
+| `training.text_field` (обычно `client_first_message`) | `data/processed/all_prepared.parquet` | `df[text_field] -> text_clean -> TF-IDF` | Основной текстовый вход в модель |
+| `is_complaint_gold` | `exports/pilot_review.xlsx` (если есть) | `y_bin` | Приоритетная ручная метка бинарного класса |
+| `is_complaint_llm` | результат `prepare` (LLM) | fallback для `y_bin` | Weak label, когда нет gold |
+| `category_gold` | `exports/pilot_review.xlsx` (если есть) | `y_cat` | Приоритетная ручная метка категории |
+| `complaint_category_llm` | результат `prepare` (LLM) | fallback для `y_cat` | Weak label категории |
+| `event_time` | исходные Excel | split при `validation.split_mode: time` | Временная валидация |
+
+Важно:
+- Модель **не обучается напрямую** на `full_dialog_text`, `dialog_context`, `signal_fields`.
+- Эти поля используются в `prepare` для LLM-нормализации и генерации weak labels, которые затем попадают в `*_llm` колонки.
+
+### Какая именно модель обучается
+
+Фактически это двухступенчатый локальный пайплайн `scikit-learn`:
+1. **Векторизация**: `TF-IDF(word) + TF-IDF(char)` (hstack).
+2. **Бинарная модель жалобы**:
+   - `LogisticRegression(class_weight='balanced')`, если `training.classifier.complaint=logreg`,
+   - или `LinearSVC` + `CalibratedClassifierCV`, если `linearsvc`.
+3. **Модель категории** (только для строк, где `is_complaint=True`):
+   - `LinearSVC(class_weight='balanced')` (по умолчанию),
+   - либо `LogisticRegression(multinomial, class_weight='balanced')`.
+
+Итоговые артефакты: `vectorizers.joblib`, `complaint_model.joblib`, `category_model.joblib`, `label_encoder.joblib`.
+
 Что делает:
 1. Загружает prepared parquet.
 2. Подмешивает gold-разметку из `pilot_review.xlsx` (если есть).
-3. Очищает тексты от мусора/плейсхолдеров.
-4. Строит TF-IDF (word + char).
-5. Обучает:
-   - бинарную модель жалоб,
-   - модель категорий для жалоб.
-6. Валидирует (time split/random split).
-7. Сохраняет артефакты и training report.
+3. Формирует целевые переменные:
+   - `y_bin`: `is_complaint_gold` (если размечено) иначе `is_complaint_llm`.
+   - `y_cat`: `category_gold` (если размечено) иначе `complaint_category_llm`.
+4. Берет текстовое поле `training.text_field` (по умолчанию `client_first_message`) и чистит его в `text_clean`.
+5. Строит объединенные TF-IDF признаки:
+   - word n-gram (`TfidfVectorizer`, `training.vectorizer.word_ngram`),
+   - char n-gram (`analyzer=char_wb`, `training.vectorizer.char_ngram`).
+6. Обучает 2 локальные модели scikit-learn:
+   - бинарный классификатор жалобы (`training.classifier.complaint`: `logreg` или `linearsvc` + калибровка),
+   - классификатор категорий только на жалобах (`training.classifier.category`: `linearsvc` или `logreg`).
+7. Валидирует (time split/random split) и считает метрики (`complaint_f1`, `category_macro_f1`).
+8. Сохраняет артефакты и training report.
 
 Выход:
 - `models/vectorizers.joblib`
@@ -483,7 +518,7 @@ python -m complaints_trends.cli infer-month --config configs/project.yaml --exce
 
 Что делает:
 1. Читает новый сырой Excel.
-2. Извлекает `client_first_message` тем же кодом, что в train.
+2. Извлекает `client_first_message` (или другое поле, если вы сменили `training.text_field` и синхронизировали preprocessing) и подает его в тот же векторизатор.
 3. Применяет локальные модели.
 4. Сохраняет разметку и отчет.
 
