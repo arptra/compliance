@@ -60,7 +60,7 @@ def test_normalizer_uses_payload_dict_for_chat(tmp_path):
     n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
     n.mock = False
     n.client = DummyClient()
-    out = n.normalize({"client_first_message": "привет"})
+    out = n.normalize({"full_dialog_text": "привет"})
     assert out.complaint_category == "OTHER"
 
 
@@ -104,7 +104,7 @@ def test_tls_mode_raises_explicit_message_when_server_requires_client_cert(tmp_p
     n.mock = False
     n.client = FailTLSClient()
     try:
-        n.normalize({"client_first_message": "привет"})
+        n.normalize({"full_dialog_text": "привет"})
         assert False, "Expected RuntimeError"
     except RuntimeError as e:
         assert "Switch llm.mode to mtls" in str(e)
@@ -188,7 +188,7 @@ def test_compact_api_response_is_coerced_to_schema(tmp_path):
     n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER", "CREDITING"], "subcategories_by_category": {"OTHER": [], "CREDITING": []}, "loan_products": ["NONE", "CONSUMER_LOAN"]}, mock=True)
     n.mock = False
     n.client = CompactClient()
-    out = n.normalize({"client_first_message": "Не получается оплатить"})
+    out = n.normalize({"full_dialog_text": "Не получается оплатить"})
     assert out.complaint_category == "CREDITING"
     assert out.loan_product == "CONSUMER_LOAN"
     assert out.client_first_message == "Не получается оплатить"

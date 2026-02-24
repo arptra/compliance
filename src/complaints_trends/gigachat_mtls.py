@@ -72,7 +72,9 @@ def _tls_debug_context(cfg: LLMConfig) -> str:
 
 
 def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
-    client_msg = str(payload.get("client_first_message", "") or "")
+    full_dialog = str(payload.get("full_dialog_text", "") or "")
+    dialog_context = str(payload.get("dialog_context", "") or "")
+    dialog_text = full_dialog or dialog_context or ""
     category = parsed.get("complaint_category") or parsed.get("category") or "OTHER"
     subcategory = parsed.get("complaint_subcategory") or parsed.get("subcategory")
     product = parsed.get("product_area") or parsed.get("product")
@@ -97,8 +99,8 @@ def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
     confidence = max(0.0, min(1.0, confidence))
 
     return {
-        "client_first_message": parsed.get("client_first_message") or client_msg,
-        "short_summary": parsed.get("short_summary") or parsed.get("summary") or client_msg[:120],
+        "client_first_message": dialog_text,
+        "short_summary": parsed.get("short_summary") or parsed.get("summary") or dialog_text[:120],
         "is_complaint": bool(is_complaint),
         "complaint_category": str(category),
         "complaint_subcategory": subcategory,
@@ -231,7 +233,7 @@ class GigaChatNormalizer:
         if cached:
             return NormalizeTicket.model_validate(cached)
         if self.mock:
-            txt = payload.get("client_first_message", "")
+            txt = str(payload.get("full_dialog_text", "") or payload.get("dialog_context", "") or "")
             is_complaint = any(w in txt.lower() for w in ["жалоб", "не работает", "ошибка", "проблем"])
             resp = NormalizeTicket(
                 client_first_message=txt,
@@ -249,6 +251,8 @@ class GigaChatNormalizer:
             self.cache.set(k, resp.model_dump())
             return resp
 
+        llm_input = {k: v for k, v in payload.items() if k != "client_first_message"}
+
         user_prompt = json.dumps(
             {
                 "task": "normalize_ticket",
@@ -257,14 +261,14 @@ class GigaChatNormalizer:
                     "category_must_be_from_allowed": True,
                     "subcategory_should_match_chosen_category": True,
                     "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
-                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (client_first_message, full_dialog_text, dialog_context, signal_fields). Не опирайся только на первое сообщение.",
+                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
                     "ignore_empty_context_fields": True,
                 },
                 "allowed_categories": self.categories,
                 "allowed_subcategories_by_category": self.subcategories_by_category,
                 "allowed_loan_products": self.loan_products,
                 "taxonomy_raw": self.taxonomy_raw,
-                "input": payload,
+                "input": llm_input,
             },
             ensure_ascii=False,
         )
