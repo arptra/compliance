@@ -192,3 +192,39 @@ def test_compact_api_response_is_coerced_to_schema(tmp_path):
     assert out.complaint_category == "CREDITING"
     assert out.loan_product == "CONSUMER_LOAN"
     assert out.client_first_message == "Не получается оплатить"
+
+
+def test_request_metrics_can_be_disabled(tmp_path):
+    class NoMetricsClient:
+        def count_tokens(self, *, model, input_text):
+            raise AssertionError("count_tokens must not be called when request_metrics_enabled=false")
+
+        def chat(self, payload):
+            body = {
+                "complaint_category": "OTHER",
+                "is_complaint": False,
+                "loan_product": "NONE",
+                "severity": "low",
+                "keywords": ["вопрос", "инфо", "уточнение"],
+                "confidence": 0.9,
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        request_metrics_enabled=False,
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = NoMetricsClient()
+
+    out = n.normalize({"full_dialog_text": "привет"})
+    assert out.complaint_category == "OTHER"

@@ -60,6 +60,7 @@ class LLMConfig(BaseModel):
     prompt_version: str = "v1"
     token_batch_size: int = 12000
     batch_mode: bool = False
+    request_metrics_enabled: bool = True
 
 
 class PrepareConfig(BaseModel):

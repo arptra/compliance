@@ -45,6 +45,7 @@ llm:
   prompt_version: "v1"
   token_batch_size: 12000
   batch_mode: false
+  request_metrics_enabled: true
 
 prepare:
   pilot_limit: 5000

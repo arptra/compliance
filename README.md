@@ -193,6 +193,7 @@ llm:
   prompt_version: "v1"
   token_batch_size: 12000
   batch_mode: false
+  request_metrics_enabled: true
 
 prepare:
   pilot_limit: 1000
@@ -384,6 +385,7 @@ llm:
 - `prompt_version`: меняйте при изменении промпта, чтобы не смешивать старые кэши.
 - `token_batch_size`: лимит суммарных токенов в одном batch-запросе к LLM.
 - `batch_mode`: если `true`, `prepare` группирует строки в батчи так, чтобы сумма токенов по строкам в одном POST была меньше `token_batch_size`.
+- `request_metrics_enabled`: включает подсчет токенов через `/tokens/count` и INFO-логи об успешной доставке/латентности LLM-запросов.
 
 ## 5.5 `prepare`
 - `pilot_limit`: пилотный режим (ограничение строк).
@@ -446,6 +448,7 @@ python -m complaints_trends.cli prepare --config configs/project.yaml
 llm:
   batch_mode: true
   token_batch_size: 12000
+  request_metrics_enabled: true
 ```
 
 то `prepare` работает так:

@@ -283,7 +283,7 @@ class GigaChatNormalizer:
 
     def estimate_tokens(self, payload: dict) -> int:
         prompt = self._single_user_prompt(payload)
-        if self.client and hasattr(self.client, "count_tokens"):
+        if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
             token_input = f"{SYSTEM_PROMPT}\n{prompt}"
             count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
             if count is not None:
@@ -346,7 +346,7 @@ class GigaChatNormalizer:
             )
 
             req_token_count = None
-            if self.client and hasattr(self.client, "count_tokens"):
+            if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
                 token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
                 req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
                 logger.info("[stage=prepare/llm] tokens per batch request: %s", req_token_count if req_token_count is not None else "n/a")
@@ -368,13 +368,15 @@ class GigaChatNormalizer:
                     raise hinted from e
                 raise
             elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
-            logger.info(
-                "[stage=prepare/llm] batch request latency_ms=%s tokens=%s size=%s attempt=%s",
-                elapsed_ms,
-                req_token_count if req_token_count is not None else "n/a",
-                len(batch_payloads),
-                attempt,
-            )
+            if self.cfg.request_metrics_enabled:
+                logger.info(
+                    "[stage=prepare/llm] batch request latency_ms=%s tokens=%s size=%s attempt=%s",
+                    elapsed_ms,
+                    req_token_count if req_token_count is not None else "n/a",
+                    len(batch_payloads),
+                    attempt,
+                )
+                logger.info("[stage=prepare/llm] batch request delivered successfully size=%s attempt=%s", len(batch_payloads), attempt)
 
             parsed = json.loads(response.choices[0].message.content)
             if isinstance(parsed, dict):
@@ -456,7 +458,7 @@ class GigaChatNormalizer:
 
         user_prompt = self._single_user_prompt(payload)
         req_token_count = None
-        if self.client and hasattr(self.client, "count_tokens"):
+        if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
             token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
             req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
             logger.info("[stage=prepare/llm] tokens per request: %s", req_token_count if req_token_count is not None else "n/a")
@@ -478,7 +480,9 @@ class GigaChatNormalizer:
                 raise hinted from e
             raise
         elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
-        logger.info("[stage=prepare/llm] request latency_ms=%s tokens=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a")
+        if self.cfg.request_metrics_enabled:
+            logger.info("[stage=prepare/llm] request latency_ms=%s tokens=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a")
+            logger.info("[stage=prepare/llm] request delivered successfully")
         content = response.choices[0].message.content
         try:
             parsed = json.loads(content)
