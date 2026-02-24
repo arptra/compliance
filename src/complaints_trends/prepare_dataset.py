@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 from pathlib import Path
@@ -107,6 +109,183 @@ def _split_payload_batches(normalizer: GigaChatNormalizer, indexed_payloads: lis
         batches.append(current)
     return batches
 
+
+def _run_one(normalizer: GigaChatNormalizer, idx: int, row_id: str, payload: dict) -> tuple[int, dict, dict[str, str] | None]:
+    try:
+        out = normalizer.normalize(payload)
+        return idx, out.model_dump(), None
+    except Exception as e:
+        return idx, _fallback_llm_row(payload, e), {"row_id": row_id, "error": str(e)}
+
+
+def _run_sync_payloads(
+    cfg: ProjectConfig,
+    normalizer: GigaChatNormalizer,
+    payloads: list[tuple[int, str, dict]],
+) -> tuple[list[dict], list[dict[str, str]]]:
+    total_rows = len(payloads)
+    llm_rows: list[dict | None] = [None] * total_rows
+    llm_errors: list[dict[str, str]] = []
+
+    if cfg.llm.batch_mode:
+        indexed_payloads = [(idx, payload) for idx, _, payload in payloads]
+        batches = _split_payload_batches(normalizer, indexed_payloads, cfg.llm.token_batch_size)
+        processed = 0
+        for batch in batches:
+            batch_indexes = [idx for idx, _ in batch]
+            batch_payloads = [p for _, p in batch]
+            try:
+                outs = normalizer.normalize_batch(batch_payloads)
+                if len(outs) != len(batch):
+                    raise RuntimeError(f"Batch output size mismatch: expected={len(batch)} got={len(outs)}")
+                for idx, out in zip(batch_indexes, outs):
+                    llm_rows[idx] = out.model_dump()
+            except Exception:
+                for idx, payload in batch:
+                    rid = payloads[idx][1]
+                    _, row_out, err = _run_one(normalizer, idx, rid, payload)
+                    llm_rows[idx] = row_out
+                    if err:
+                        llm_errors.append(err)
+            processed += len(batch)
+            if processed == len(batch) or processed % 50 == 0 or processed == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", processed, total_rows, total_rows - processed)
+    else:
+        for i, (idx, row_id, payload) in enumerate(payloads, start=1):
+            _, row_out, err = _run_one(normalizer, idx, row_id, payload)
+            llm_rows[idx] = row_out
+            if err:
+                llm_errors.append(err)
+            if i == 1 or i % 50 == 0 or i == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
+
+    filled = [
+        (llm_rows[idx] if llm_rows[idx] is not None else _fallback_llm_row(payload, RuntimeError("empty llm row")))
+        for idx, _, payload in payloads
+    ]
+    return filled, llm_errors
+
+
+def _run_parallel_payloads(
+    cfg: ProjectConfig,
+    normalizer: GigaChatNormalizer,
+    payloads: list[tuple[int, str, dict]],
+) -> tuple[list[dict], list[dict[str, str]]]:
+    total_rows = len(payloads)
+    llm_rows: list[dict | None] = [None] * total_rows
+    llm_errors: list[dict[str, str]] = []
+    max_workers = max(1, int(cfg.llm.max_workers))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        if cfg.llm.batch_mode:
+            indexed_payloads = [(idx, payload) for idx, _, payload in payloads]
+            batches = _split_payload_batches(normalizer, indexed_payloads, cfg.llm.token_batch_size)
+
+            def _process_batch(batch: list[tuple[int, dict]]):
+                idxs = [idx for idx, _ in batch]
+                batch_payloads = [p for _, p in batch]
+                try:
+                    outs = normalizer.normalize_batch(batch_payloads)
+                    if len(outs) != len(batch):
+                        raise RuntimeError(f"Batch output size mismatch: expected={len(batch)} got={len(outs)}")
+                    return [(i, o.model_dump(), None) for i, o in zip(idxs, outs)]
+                except Exception:
+                    out = []
+                    for idx, payload in batch:
+                        rid = payloads[idx][1]
+                        out.append(_run_one(normalizer, idx, rid, payload))
+                    return out
+
+            futs = [ex.submit(_process_batch, b) for b in batches]
+            done = 0
+            for fut in concurrent.futures.as_completed(futs):
+                for idx, row_out, err in fut.result():
+                    llm_rows[idx] = row_out
+                    if err:
+                        llm_errors.append(err)
+                    done += 1
+                if done == 1 or done % 50 == 0 or done == total_rows:
+                    logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", done, total_rows, total_rows - done)
+        else:
+            futs = [ex.submit(_run_one, normalizer, idx, row_id, payload) for idx, row_id, payload in payloads]
+            done = 0
+            for fut in concurrent.futures.as_completed(futs):
+                idx, row_out, err = fut.result()
+                llm_rows[idx] = row_out
+                if err:
+                    llm_errors.append(err)
+                done += 1
+                if done == 1 or done % 50 == 0 or done == total_rows:
+                    logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", done, total_rows, total_rows - done)
+
+    filled = [
+        (llm_rows[idx] if llm_rows[idx] is not None else _fallback_llm_row(payload, RuntimeError("empty llm row")))
+        for idx, _, payload in payloads
+    ]
+    return filled, llm_errors
+
+
+async def _run_async_payloads(
+    cfg: ProjectConfig,
+    normalizer: GigaChatNormalizer,
+    payloads: list[tuple[int, str, dict]],
+) -> tuple[list[dict], list[dict[str, str]]]:
+    sem = asyncio.Semaphore(max(1, int(cfg.llm.max_workers)))
+    total_rows = len(payloads)
+    llm_rows: list[dict | None] = [None] * total_rows
+    llm_errors: list[dict[str, str]] = []
+
+    if cfg.llm.batch_mode:
+        indexed_payloads = [(idx, payload) for idx, _, payload in payloads]
+        batches = _split_payload_batches(normalizer, indexed_payloads, cfg.llm.token_batch_size)
+
+        async def _batch_task(batch):
+            idxs = [idx for idx, _ in batch]
+            b_payloads = [p for _, p in batch]
+            async with sem:
+                try:
+                    outs = await asyncio.to_thread(normalizer.normalize_batch, b_payloads)
+                    if len(outs) != len(batch):
+                        raise RuntimeError(f"Batch output size mismatch: expected={len(batch)} got={len(outs)}")
+                    return [(i, o.model_dump(), None) for i, o in zip(idxs, outs)]
+                except Exception:
+                    ret = []
+                    for idx, payload in batch:
+                        rid = payloads[idx][1]
+                        ret.append(await asyncio.to_thread(_run_one, normalizer, idx, rid, payload))
+                    return ret
+
+        done = 0
+        for coro in asyncio.as_completed([_batch_task(b) for b in batches]):
+            for idx, row_out, err in await coro:
+                llm_rows[idx] = row_out
+                if err:
+                    llm_errors.append(err)
+                done += 1
+            if done == 1 or done % 50 == 0 or done == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", done, total_rows, total_rows - done)
+    else:
+        async def _single_task(item):
+            idx, row_id, payload = item
+            async with sem:
+                return await asyncio.to_thread(_run_one, normalizer, idx, row_id, payload)
+
+        done = 0
+        for coro in asyncio.as_completed([_single_task(p) for p in payloads]):
+            idx, row_out, err = await coro
+            llm_rows[idx] = row_out
+            if err:
+                llm_errors.append(err)
+            done += 1
+            if done == 1 or done % 50 == 0 or done == total_rows:
+                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", done, total_rows, total_rows - done)
+
+    filled = [
+        (llm_rows[idx] if llm_rows[idx] is not None else _fallback_llm_row(payload, RuntimeError("empty llm row")))
+        for idx, _, payload in payloads
+    ]
+    return filled, llm_errors
+
 def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None = None, llm_mock: bool = False, date_from: str | None = None, date_to: str | None = None) -> pd.DataFrame:
     df = read_all_excels(cfg.input)
     if df.empty:
@@ -165,49 +344,14 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         }
         payloads.append((i - 1, str(row.get("row_id", i)), payload))
 
-    llm_rows: list[dict | None] = [None] * total_rows
-    llm_errors: list[dict[str, str]] = []
-
-    if cfg.llm.batch_mode:
-        indexed_payloads = [(idx, payload) for idx, _, payload in payloads]
-        batches = _split_payload_batches(normalizer, indexed_payloads, cfg.llm.token_batch_size)
-        processed = 0
-        for batch in batches:
-            batch_indexes = [idx for idx, _ in batch]
-            batch_payloads = [p for _, p in batch]
-            try:
-                outs = normalizer.normalize_batch(batch_payloads)
-                if len(outs) != len(batch):
-                    raise RuntimeError(f"Batch output size mismatch: expected={len(batch)} got={len(outs)}")
-                for idx, out in zip(batch_indexes, outs):
-                    llm_rows[idx] = out.model_dump()
-            except Exception as e:
-                for idx, payload in batch:
-                    try:
-                        out = normalizer.normalize(payload)
-                        llm_rows[idx] = out.model_dump()
-                    except Exception as single_e:
-                        row_id = payloads[idx][1]
-                        llm_errors.append({"row_id": row_id, "error": str(single_e)})
-                        llm_rows[idx] = _fallback_llm_row(payload, single_e)
-            processed += len(batch)
-            if processed == len(batch) or processed % 50 == 0 or processed == total_rows:
-                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", processed, total_rows, total_rows - processed)
+    if cfg.llm.async_mode:
+        if cfg.llm.parallel_mode:
+            logger.info("[stage=prepare/llm] async_mode=true (parallel_mode ignored)")
+        llm_rows_filled, llm_errors = asyncio.run(_run_async_payloads(cfg, normalizer, payloads))
+    elif cfg.llm.parallel_mode:
+        llm_rows_filled, llm_errors = _run_parallel_payloads(cfg, normalizer, payloads)
     else:
-        for i, (idx, row_id, payload) in enumerate(payloads, start=1):
-            try:
-                out = normalizer.normalize(payload)
-                llm_rows[idx] = out.model_dump()
-            except Exception as e:
-                llm_errors.append({"row_id": row_id, "error": str(e)})
-                llm_rows[idx] = _fallback_llm_row(payload, e)
-            if i == 1 or i % 50 == 0 or i == total_rows:
-                logger.info("[stage=prepare/llm] processed rows %s/%s (remaining=%s)", i, total_rows, total_rows - i)
-
-    llm_rows_filled = [
-        (llm_rows[idx] if llm_rows[idx] is not None else _fallback_llm_row(payload, RuntimeError("empty llm row")))
-        for idx, _, payload in payloads
-    ]
+        llm_rows_filled, llm_errors = _run_sync_payloads(cfg, normalizer, payloads)
     llm_df = pd.DataFrame(llm_rows_filled)
     if llm_df.empty:
         llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))

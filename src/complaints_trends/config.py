@@ -61,6 +61,8 @@ class LLMConfig(BaseModel):
     token_batch_size: int = 12000
     batch_mode: bool = False
     request_metrics_enabled: bool = True
+    async_mode: bool = False
+    parallel_mode: bool = False
 
 
 class PrepareConfig(BaseModel):

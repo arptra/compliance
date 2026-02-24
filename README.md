@@ -194,6 +194,8 @@ llm:
   token_batch_size: 12000
   batch_mode: false
   request_metrics_enabled: true
+  async_mode: false
+  parallel_mode: false
 
 prepare:
   pilot_limit: 1000
@@ -386,6 +388,8 @@ llm:
 - `token_batch_size`: лимит суммарных токенов в одном batch-запросе к LLM.
 - `batch_mode`: если `true`, `prepare` группирует строки в батчи так, чтобы сумма токенов по строкам в одном POST была меньше `token_batch_size`.
 - `request_metrics_enabled`: включает подсчет токенов через `/tokens/count` и INFO-логи об успешной доставке/латентности LLM-запросов.
+- `async_mode`: включает асинхронный режим отправки запросов к LLM (конкурентные задачи через `asyncio`, ограничение по `max_workers`).
+- `parallel_mode`: включает параллельный режим через пул потоков (`ThreadPoolExecutor`, ограничение по `max_workers`).
 
 ## 5.5 `prepare`
 - `pilot_limit`: пилотный режим (ограничение строк).
@@ -461,6 +465,54 @@ llm:
 Важно:
 - Ограничение применяется к **сумме токенов записей** в batch.
 - Если `/tokens/count` недоступен, используется безопасная оценка по длине prompt (эвристика), чтобы batching не ломал pipeline.
+
+
+### 6.1.2 Режимы ускорения LLM: async и parallel
+
+В `llm` добавлены два переключателя:
+
+```yaml
+llm:
+  max_workers: 8
+  async_mode: false
+  parallel_mode: false
+```
+
+Как это работает:
+- `async_mode: true` — асинхронный режим (паттерн *Producer/Consumer* + ограничение конкуренции через `Semaphore`), запросы выполняются конкурентно через `asyncio`.
+- `parallel_mode: true` — параллельный режим (паттерн *Thread Pool*), запросы выполняются в нескольких потоках.
+- если оба режима выключены — классический синхронный режим.
+- если включены оба, приоритет у `async_mode` (он уже конкурентный), `parallel_mode` игнорируется с логом.
+
+Рекомендации по включению:
+- для I/O-bound API (GigaChat) сначала пробуйте `async_mode: true`;
+- если в окружении нельзя/неудобно использовать async event-loop в этом шаге — используйте `parallel_mode: true`;
+- тюнинг скорости делается через `max_workers` (слишком большое значение может упереться в лимиты API).
+
+Примеры:
+
+**Асинхронный режим**
+```yaml
+llm:
+  async_mode: true
+  parallel_mode: false
+  max_workers: 8
+```
+
+**Параллельный режим**
+```yaml
+llm:
+  async_mode: false
+  parallel_mode: true
+  max_workers: 8
+```
+
+**Полностью синхронный режим**
+```yaml
+llm:
+  async_mode: false
+  parallel_mode: false
+```
 
 ## 6.2 `train`
 Команда:
