@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import time
 import json
 import os
 import sqlite3
@@ -16,6 +18,8 @@ from .gigachat_schema import NormalizeTicket
 
 
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_mtls_files(ca_bundle_file: str | None, cert_file: str | None, key_file: str | None) -> None:
@@ -140,6 +144,22 @@ class _HTTPXChatClient:
     def __init__(self, *, base_url: str, verify: bool | str | ssl.SSLContext, timeout: float = 60.0):
         self._client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
 
+    def count_tokens(self, *, model: str, input_text: str) -> int | None:
+        try:
+            response = self._client.post("/tokens/count", json={"model": model, "input": [input_text]})
+            if response.status_code >= 400:
+                return None
+            data = response.json()
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict):
+                    return int(first.get("tokens") or first.get("count") or first.get("token_count"))
+            if isinstance(data, dict):
+                return int(data.get("tokens") or data.get("count") or data.get("token_count"))
+            return None
+        except Exception:
+            return None
+
     def chat(self, payload: dict) -> _ChatResp:
         response = self._client.post("/chat/completions", json=payload)
         response.raise_for_status()
@@ -248,6 +268,13 @@ class GigaChatNormalizer:
             },
             ensure_ascii=False,
         )
+        req_token_count = None
+        if self.client and hasattr(self.client, "count_tokens"):
+            token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
+            req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
+            logger.info("[stage=prepare/llm] tokens per request: %s", req_token_count if req_token_count is not None else "n/a")
+
+        chat_started = time.perf_counter()
         try:
             response = self.client.chat(
                 {
@@ -275,6 +302,8 @@ class GigaChatNormalizer:
                     f"Target={host}:{port}. {cert_summary}. Debug: {_tls_debug_context(self.cfg)}"
                 ) from e
             raise
+        elapsed_ms = int((time.perf_counter() - chat_started) * 1000)
+        logger.info("[stage=prepare/llm] request latency_ms=%s tokens=%s", elapsed_ms, req_token_count if req_token_count is not None else "n/a")
         content = response.choices[0].message.content
         try:
             parsed = json.loads(content)
