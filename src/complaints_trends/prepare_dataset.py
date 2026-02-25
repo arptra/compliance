@@ -307,6 +307,12 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, "event_time", "month", "source_file", "row_id"]))
     df = df[[c for c in keep if c in df.columns]].copy()
 
+    # Normalize heterogeneous Excel object columns to string early to avoid ArrowTypeError
+    # on parquet export (e.g. mixed int/str in one source column).
+    text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields]) if c in df.columns]
+    for c in text_like_cols:
+        df[c] = df[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
+
     selected = df.apply(lambda r: _select_primary_dialog(r, dialog_fields), axis=1)
     df["dialog_source_field"] = selected.apply(lambda x: x[0])
     df["raw_dialog"] = selected.apply(lambda x: x[1])
