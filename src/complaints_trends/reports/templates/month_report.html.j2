@@ -1,5 +1,26 @@
 <html><body><h1>Month report {{month}}</h1>
 <p>Complaint share: {{ '%.2f'|format(complaint_share*100) }}%</p>
+<p>Rows total: {{ rows_total }}, predicted complaints: {{ rows_complaints }}</p>
+<p>Dialog column used: <code>{{ dialog_column_used }}</code></p>
+<p>Empty raw dialog share: {{ '%.2f'|format(empty_dialog_share*100) }}%</p>
+<p>Empty client message share: {{ '%.2f'|format(empty_client_message_share*100) }}%</p>
+
+<h2>Top categories</h2>
 <ul>{% for k,v in top_categories.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
-{% for r in examples %}<div><b>{{r.category_pred}}</b><p>{{r.client_first_message}}</p></div>{% endfor %}
+
+<h2>Top subcategories</h2>
+<ul>{% for k,v in top_subcategories.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+
+<h2>Histograms</h2>
+<div>
+  <h3>Categories histogram</h3>
+  <img src="{{ category_histogram }}" alt="categories histogram" style="max-width: 950px;" />
+</div>
+<div>
+  <h3>Subcategories histogram</h3>
+  <img src="{{ subcategory_histogram }}" alt="subcategories histogram" style="max-width: 950px;" />
+</div>
+
+<h2>Complaint examples</h2>
+{% for r in examples %}<div><b>{{r.category_pred}} / {{r.subcategory_pred}}</b><p>{{r.client_first_message}}</p></div>{% endfor %}
 </body></html>

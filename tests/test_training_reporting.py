@@ -17,14 +17,14 @@ def test_train_generates_human_report_and_charts(tmp_path):
 
     df = pd.DataFrame(
         [
-            {"row_id": "r1", "event_time": "2025-01-01", "client_first_message": "не работает приложение", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL"},
-            {"row_id": "r2", "event_time": "2025-01-02", "client_first_message": "вопрос по тарифу", "is_complaint_llm": False, "complaint_category_llm": "OTHER"},
-            {"row_id": "r3", "event_time": "2025-01-03", "client_first_message": "ошибка оплаты", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS"},
-            {"row_id": "r4", "event_time": "2025-01-04", "client_first_message": "спасибо", "is_complaint_llm": False, "complaint_category_llm": "OTHER"},
-            {"row_id": "r5", "event_time": "2025-01-05", "client_first_message": "не зачислили платеж", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS"},
-            {"row_id": "r6", "event_time": "2025-01-06", "client_first_message": "не могу войти", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL"},
-            {"row_id": "r7", "event_time": "2025-01-07", "client_first_message": "какой статус заявки", "is_complaint_llm": False, "complaint_category_llm": "OTHER"},
-            {"row_id": "r8", "event_time": "2025-01-08", "client_first_message": "пропал перевод", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS"},
+            {"row_id": "r1", "event_time": "2025-01-01", "client_first_message": "не работает приложение", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "APP_ERROR"},
+            {"row_id": "r2", "event_time": "2025-01-02", "client_first_message": "вопрос по тарифу", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
+            {"row_id": "r3", "event_time": "2025-01-03", "client_first_message": "ошибка оплаты", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "PAYMENT_DECLINED"},
+            {"row_id": "r4", "event_time": "2025-01-04", "client_first_message": "спасибо", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
+            {"row_id": "r5", "event_time": "2025-01-05", "client_first_message": "не зачислили платеж", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "PAYMENT_MISSING"},
+            {"row_id": "r6", "event_time": "2025-01-06", "client_first_message": "не могу войти", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "LOGIN_ISSUE"},
+            {"row_id": "r7", "event_time": "2025-01-07", "client_first_message": "какой статус заявки", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
+            {"row_id": "r8", "event_time": "2025-01-08", "client_first_message": "пропал перевод", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "TRANSFER_MISSING"},
         ]
     )
     df["event_time"] = pd.to_datetime(df["event_time"])
@@ -32,6 +32,7 @@ def test_train_generates_human_report_and_charts(tmp_path):
 
     metrics = train(cfg)
     assert "complaint_f1" in metrics
+    assert "subcategory_macro_f1" in metrics
 
     assert Path("reports/training_report.html").exists()
     assert Path("reports/training_report.md").exists()
@@ -43,3 +44,5 @@ def test_train_generates_human_report_and_charts(tmp_path):
     md = Path("reports/training_report.md").read_text(encoding="utf-8")
     assert "Кратко" in md
     assert "Основные метрики" in md
+    assert Path(cfg.training.model_dir, "subcategory_model.joblib").exists()
+    assert Path(cfg.training.model_dir, "subcategory_label_encoder.joblib").exists()

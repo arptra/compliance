@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.decomposition import TruncatedSVD
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, f1_score
 from sklearn.model_selection import train_test_split
@@ -22,7 +21,7 @@ from .text_cleaning import clean_for_model, load_tokens
 
 
 
-def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path) -> dict[str, str]:
+def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path, val_df: pd.DataFrame) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Гистограмма жалоба/не жалоба (предсказание).
@@ -62,42 +61,30 @@ def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, o
     fig.savefig(subcat_path, dpi=140)
     plt.close(fig)
 
-    # 4) Скопление точек (2D SVD) по категориям и подкатегориям.
+    # 4) Скопление точек по времени: X=время, Y=число категорий/подкатегорий в день.
     scatter_path = out_dir / "training_category_subcategory_scatter_ru.png"
     fig, ax = plt.subplots(figsize=(10, 7))
-    if x_cat_val.shape[0] >= 2:
-        svd = TruncatedSVD(n_components=2, random_state=42)
-        z = svd.fit_transform(x_cat_val)
-        cats = pd.Series(ycat_val).astype(str)
-        subcats = pd.Series(subcat_val).replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str)
-        unique_cats = sorted(cats.unique().tolist())
-        cmap = plt.get_cmap("tab20")
-        markers = ["o", "s", "^", "D", "P", "X", "*", "v", "<", ">"]
-        top_sub = subcats.value_counts().head(len(markers)).index.tolist()
-        marker_map = {s: markers[i % len(markers)] for i, s in enumerate(top_sub)}
-        for i, cat in enumerate(unique_cats):
-            m = cats == cat
-            for sub in subcats[m].unique().tolist():
-                ms = m & (subcats == sub)
-                ax.scatter(
-                    z[ms.values, 0],
-                    z[ms.values, 1],
-                    color=cmap(i % 20),
-                    marker=marker_map.get(sub, "o"),
-                    alpha=0.75,
-                    s=40,
-                    label=f"{cat} / {sub}",
-                )
-        handles, labels = ax.get_legend_handles_labels()
-        if len(handles) > 20:
-            handles, labels = handles[:20], labels[:20]
-        ax.legend(handles, labels, fontsize=7, loc="best")
-        ax.set_title("Скопление точек по категориям/подкатегориям (SVD 2D)")
-        ax.set_xlabel("Компонента 1")
-        ax.set_ylabel("Компонента 2")
+    if "event_time" in val_df.columns and len(val_df):
+        tdf = val_df.copy()
+        tdf["event_time"] = pd.to_datetime(tdf["event_time"], errors="coerce")
+        tdf = tdf[tdf["event_time"].notna()]
+        if len(tdf):
+            tdf["day"] = tdf["event_time"].dt.floor("D")
+            cat_daily = tdf.groupby("day")["complaint_category_llm"].nunique()
+            sub_daily = tdf.groupby("day")["complaint_subcategory_llm"].nunique() if "complaint_subcategory_llm" in tdf.columns else pd.Series([], dtype=int)
+            ax.scatter(cat_daily.index, cat_daily.values, label="Уникальные категории/день", color="#1f77b4", s=48, alpha=0.85)
+            if len(sub_daily):
+                ax.scatter(sub_daily.index, sub_daily.values, label="Уникальные подкатегории/день", color="#9467bd", s=48, alpha=0.85)
+            ax.set_title("Скопления по времени: категории и подкатегории жалоб")
+            ax.set_xlabel("Время")
+            ax.set_ylabel("Количество уникальных категорий/подкатегорий")
+            ax.legend(loc="best")
+        else:
+            ax.text(0.5, 0.5, "Нет корректного event_time", ha="center", va="center")
+            ax.set_title("Скопление по времени")
     else:
-        ax.text(0.5, 0.5, "Недостаточно данных для scatter", ha="center", va="center")
-        ax.set_title("Скопление точек по категориям/подкатегориям")
+        ax.text(0.5, 0.5, "Нет данных event_time для построения", ha="center", va="center")
+        ax.set_title("Скопление по времени")
     fig.tight_layout()
     fig.savefig(scatter_path, dpi=140)
     plt.close(fig)
@@ -161,7 +148,7 @@ def train(cfg: ProjectConfig) -> dict:
         cat_pred = np.array([enc.classes_[0]] * len(cval)) if len(cval) else np.array([])
     else:
         if cfg.training.classifier.category == "logreg":
-            cat_model = LogisticRegression(max_iter=2500, class_weight="balanced", multi_class="multinomial")
+            cat_model = LogisticRegression(max_iter=2500, class_weight="balanced")
         else:
             cat_model = LinearSVC(class_weight="balanced")
         cat_model.fit(x_cat_train, enc.transform(ycat_train))
@@ -174,7 +161,31 @@ def train(cfg: ProjectConfig) -> dict:
     }
 
     subcat_val = cval["complaint_subcategory_llm"].astype(str).values if "complaint_subcategory_llm" in cval.columns else np.array(["UNKNOWN"] * len(cval), dtype=object)
-    charts = _save_training_charts(x_cat_val=x_cat_val, ycat_val=ycat_val, subcat_val=subcat_val, pred_bin=pred_bin, cat_pred=cat_pred, out_dir=Path("reports"))
+    charts = _save_training_charts(
+        x_cat_val=x_cat_val,
+        ycat_val=ycat_val,
+        subcat_val=subcat_val,
+        pred_bin=pred_bin,
+        cat_pred=cat_pred,
+        out_dir=Path("reports"),
+        val_df=cval,
+    )
+
+    subcat_model = None
+    subcat_enc = None
+    if "complaint_subcategory_llm" in ctrain.columns:
+        ysub_train = ctrain["complaint_subcategory_llm"].replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).values
+        ysub_val = cval["complaint_subcategory_llm"].replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).values if len(cval) else np.array([])
+        subcat_enc = LabelEncoder().fit(ysub_train)
+        if len(subcat_enc.classes_) >= 2:
+            subcat_model = LogisticRegression(max_iter=2500, class_weight="balanced")
+            subcat_model.fit(x_cat_train, subcat_enc.transform(ysub_train))
+            if len(ysub_val):
+                metrics["subcategory_macro_f1"] = float(
+                    f1_score(ysub_val, subcat_enc.inverse_transform(subcat_model.predict(x_cat_val)), average="macro")
+                )
+        else:
+            metrics["subcategory_macro_f1"] = 0.0
 
     mdir = Path(cfg.training.model_dir)
     mdir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +193,9 @@ def train(cfg: ProjectConfig) -> dict:
     joblib.dump(complaint_model, mdir / "complaint_model.joblib")
     joblib.dump(cat_model, mdir / "category_model.joblib")
     joblib.dump(enc, mdir / "label_encoder.joblib")
+    if subcat_model is not None and subcat_enc is not None:
+        joblib.dump(subcat_model, mdir / "subcategory_model.joblib")
+        joblib.dump(subcat_enc, mdir / "subcategory_label_encoder.joblib")
     (mdir / "training_metadata.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
     render_template("training_report.html.j2", "reports/training_report.html", {"metrics": metrics, "charts": charts})

@@ -33,6 +33,7 @@ def test_infer_month_works_when_dialog_column_is_none(tmp_path, monkeypatch):
     cfg = cfg.model_copy(deep=True)
     cfg.input.dialog_column = None
     cfg.input.dialog_columns = None
+    cfg.training.model_dir = str(tmp_path / "models")
 
     excel = tmp_path / "month.xlsx"
     pd.DataFrame(
@@ -52,12 +53,19 @@ def test_infer_month_works_when_dialog_column_is_none(tmp_path, monkeypatch):
     out = infer_month(cfg, str(excel), "2025-02")
     assert len(out) == 2
     assert "raw_dialog" in out.columns
+    assert "subcategory_pred" in out.columns
     assert out["category_pred"].eq("OTHER").all()
+    assert out["subcategory_pred"].eq("NOT_COMPLAINT").all()
+    assert Path("reports/month_2025-02_category_hist.png").exists()
+    assert Path("reports/month_2025-02_subcategory_hist.png").exists()
+    html = Path("reports/month_report_2025-02.html").read_text(encoding="utf-8")
+    assert "Top subcategories" in html
 
 
 def test_infer_month_parquet_sanitizes_mixed_object_columns(tmp_path, monkeypatch):
     cfg = load_config("configs/project.yaml")
     cfg = cfg.model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
 
     excel = tmp_path / "month_mixed.xlsx"
     pd.DataFrame(
@@ -90,3 +98,28 @@ def test_infer_month_parquet_sanitizes_mixed_object_columns(tmp_path, monkeypatc
     loaded = pd.read_parquet(parq)
     assert loaded["колонка"].map(type).eq(str).all()
     parq.unlink(missing_ok=True)
+
+
+def test_infer_month_does_not_convert_empty_dialogs_to_nan_string(tmp_path, monkeypatch):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
+
+    excel = tmp_path / "month_nan.xlsx"
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-01 10:00:00", "dialog_text": None},
+            {"created_at": "2025-02-02 11:00:00", "dialog_text": np.nan},
+        ]
+    ).to_excel(excel, index=False)
+
+    objs = [_FakeVec(), _FakeComplaintModel(), _FakeCatModel(), _FakeEnc()]
+
+    def _fake_load(_):
+        return objs.pop(0)
+
+    monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
+
+    out = infer_month(cfg, str(excel), "2025-04")
+    assert out["raw_dialog"].eq("").all()
+    assert out["client_first_message"].eq("").all()

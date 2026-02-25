@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -41,7 +42,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     df["month"] = month
     df["row_id"] = [f"new_{i}" for i in range(len(df))]
     dialog_col = _infer_dialog_column(df, cfg)
-    df["raw_dialog"] = df[dialog_col].astype(str)
+    df["raw_dialog"] = df[dialog_col].fillna("").astype(str)
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
 
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)
@@ -52,6 +53,10 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     complaint_model = joblib.load(mdir / "complaint_model.joblib")
     cat_model = joblib.load(mdir / "category_model.joblib")
     enc = joblib.load(mdir / "label_encoder.joblib")
+    subcat_model_path = mdir / "subcategory_model.joblib"
+    subcat_enc_path = mdir / "subcategory_label_encoder.joblib"
+    subcat_model = joblib.load(subcat_model_path) if subcat_model_path.exists() else None
+    subcat_enc = joblib.load(subcat_enc_path) if subcat_enc_path.exists() else None
 
     x = vec.transform(df["text_clean"])
     if hasattr(complaint_model, "predict_proba"):
@@ -70,17 +75,64 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
         cat_pred[idx] = enc.classes_[0]
     df["category_pred"] = cat_pred
 
+    subcat_pred = np.array(["NOT_COMPLAINT"] * len(df), dtype=object)
+    if idx.any() and subcat_model is not None and subcat_enc is not None:
+        subcat_pred[idx] = subcat_enc.inverse_transform(subcat_model.predict(x[idx]))
+    df["subcategory_pred"] = subcat_pred
+
     out_xlsx = f"exports/month_labeled_{month}.xlsx"
     out_parq = f"data/interim/month_{month}.parquet"
     Path(out_xlsx).parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(out_xlsx, index=False)
     _sanitize_for_parquet(df).to_parquet(out_parq, index=False)
 
-    top = df[df["is_complaint_pred"]]["category_pred"].value_counts().to_dict()
+    complaints_df = df[df["is_complaint_pred"]].copy()
+    top = complaints_df["category_pred"].value_counts().to_dict()
+    top_sub = complaints_df["subcategory_pred"].value_counts().to_dict()
+
+    cat_hist_path = Path(f"reports/month_{month}_category_hist.png")
+    subcat_hist_path = Path(f"reports/month_{month}_subcategory_hist.png")
+    cat_hist_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cat_counts = complaints_df["category_pred"].astype(str).value_counts().head(20)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    if len(cat_counts):
+        ax.barh(cat_counts.index.tolist(), cat_counts.values.tolist(), color="#1f77b4")
+    else:
+        ax.text(0.5, 0.5, "Нет предсказанных жалоб", ha="center", va="center")
+    ax.set_title(f"Категории жалоб за {month}")
+    ax.set_xlabel("Количество")
+    fig.tight_layout()
+    fig.savefig(cat_hist_path, dpi=140)
+    plt.close(fig)
+
+    subcat_counts = complaints_df["subcategory_pred"].astype(str).value_counts().head(25)
+    fig, ax = plt.subplots(figsize=(11, 7))
+    if len(subcat_counts):
+        ax.barh(subcat_counts.index.tolist(), subcat_counts.values.tolist(), color="#9467bd")
+    else:
+        ax.text(0.5, 0.5, "Нет предсказанных жалоб", ha="center", va="center")
+    ax.set_title(f"Подкатегории жалоб за {month}")
+    ax.set_xlabel("Количество")
+    fig.tight_layout()
+    fig.savefig(subcat_hist_path, dpi=140)
+    plt.close(fig)
+
+    empty_dialog_share = float((df["raw_dialog"].str.strip() == "").mean()) if len(df) else 0.0
+    empty_client_share = float((df["client_first_message"].str.strip() == "").mean()) if len(df) else 0.0
+
     render_template("month_report.html.j2", f"reports/month_report_{month}.html", {
         "month": month,
+        "dialog_column_used": dialog_col,
+        "rows_total": int(len(df)),
+        "rows_complaints": int(complaints_df.shape[0]),
+        "empty_dialog_share": empty_dialog_share,
+        "empty_client_message_share": empty_client_share,
         "complaint_share": float(df["is_complaint_pred"].mean()),
         "top_categories": top,
-        "examples": df[df["is_complaint_pred"]].head(50).to_dict(orient="records"),
+        "top_subcategories": top_sub,
+        "category_histogram": str(cat_hist_path).replace("\\", "/"),
+        "subcategory_histogram": str(subcat_hist_path).replace("\\", "/"),
+        "examples": complaints_df.head(50).to_dict(orient="records"),
     })
     return df
