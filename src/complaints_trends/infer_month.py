@@ -13,11 +13,27 @@ from .reports.render import render_template
 from .text_cleaning import clean_for_model, load_tokens
 
 
+
+def _infer_dialog_column(df: pd.DataFrame, cfg: ProjectConfig) -> str:
+    candidates: list[str] = []
+    if cfg.input.dialog_columns:
+        candidates.extend(cfg.input.dialog_columns)
+    if cfg.input.dialog_column:
+        candidates.append(cfg.input.dialog_column)
+    for c in candidates:
+        if c in df.columns:
+            return c
+    for c in ("dialog_text", "call_text", "comment_text", "summary_text"):
+        if c in df.columns:
+            return c
+    raise KeyError("No dialog column found for infer-month: configure input.dialog_column/dialog_columns")
+
 def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame:
     df = load_excel_with_month(Path(excel_path), cfg.input)
     df["month"] = month
     df["row_id"] = [f"new_{i}" for i in range(len(df))]
-    df["raw_dialog"] = df[cfg.input.dialog_column].astype(str)
+    dialog_col = _infer_dialog_column(df, cfg)
+    df["raw_dialog"] = df[dialog_col].astype(str)
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
 
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)

@@ -1,3 +1,17 @@
-<html><body><h1>Training Report</h1>
-<pre>{{ metrics | tojson(indent=2) }}</pre>
-</body></html>
+<html>
+  <body>
+    <h1>Training Report</h1>
+    <h2>Metrics</h2>
+    <pre>{{ metrics | tojson(indent=2) }}</pre>
+
+    <h2>Charts</h2>
+    <div>
+      <h3>Predicted complaint distribution</h3>
+      <img src="{{ charts.binary_distribution }}" alt="complaint distribution" style="max-width: 900px;" />
+    </div>
+    <div>
+      <h3>Predicted category distribution</h3>
+      <img src="{{ charts.category_distribution }}" alt="category distribution" style="max-width: 900px;" />
+    </div>
+  </body>
+</html>

@@ -573,7 +573,9 @@ python -m complaints_trends.cli train --config configs/project.yaml
 - `models/category_model.joblib`
 - `models/label_encoder.joblib`
 - `models/training_metadata.json`
-- `reports/training_report.html`, `reports/training_report.md`
+- `reports/training_report.html`, `reports/training_report.md` (человеко-читаемый текст)
+- `reports/training_predicted_complaint_distribution.png`
+- `reports/training_predicted_category_distribution.png`
 
 ## 6.3 `trends`
 Команда:

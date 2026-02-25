@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
@@ -18,6 +19,39 @@ from .features import TextVectorizers
 from .reports.render import render_template, write_md
 from .text_cleaning import clean_for_model, load_tokens
 
+
+
+def _save_training_charts(y_val, pred_bin, ycat_val, cat_pred, out_dir: Path) -> dict[str, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) Binary prediction distribution (complaint / non-complaint).
+    bin_counts = pd.Series(pred_bin).map({True: "complaint", False: "non_complaint"}).value_counts()
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(bin_counts.index.tolist(), bin_counts.values.tolist())
+    ax.set_title("Predicted complaint distribution")
+    ax.set_ylabel("count")
+    fig.tight_layout()
+    bin_path = out_dir / "training_predicted_complaint_distribution.png"
+    fig.savefig(bin_path, dpi=140)
+    plt.close(fig)
+
+    # 2) Category distribution on validation complaints.
+    cat_series = pd.Series(cat_pred) if len(cat_pred) else pd.Series([], dtype=object)
+    cat_counts = cat_series.value_counts().head(15)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    if len(cat_counts):
+        ax.barh(cat_counts.index.astype(str).tolist(), cat_counts.values.tolist())
+    ax.set_title("Predicted category distribution (validation complaints)")
+    ax.set_xlabel("count")
+    fig.tight_layout()
+    cat_path = out_dir / "training_predicted_category_distribution.png"
+    fig.savefig(cat_path, dpi=140)
+    plt.close(fig)
+
+    return {
+        "binary_distribution": str(bin_path).replace('\\', '/'),
+        "category_distribution": str(cat_path).replace('\\', '/'),
+    }
 
 def train(cfg: ProjectConfig) -> dict:
     df = pd.read_parquet(cfg.prepare.output_parquet)
@@ -83,6 +117,8 @@ def train(cfg: ProjectConfig) -> dict:
         "category_macro_f1": f1_score(ycat_val, cat_pred, average="macro") if len(cval) else 0.0,
     }
 
+    charts = _save_training_charts(y_val=y_val, pred_bin=pred_bin, ycat_val=ycat_val, cat_pred=cat_pred, out_dir=Path("reports"))
+
     mdir = Path(cfg.training.model_dir)
     mdir.mkdir(parents=True, exist_ok=True)
     joblib.dump(vec, mdir / "vectorizers.joblib")
@@ -91,8 +127,31 @@ def train(cfg: ProjectConfig) -> dict:
     joblib.dump(enc, mdir / "label_encoder.joblib")
     (mdir / "training_metadata.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    render_template("training_report.html.j2", "reports/training_report.html", {"metrics": metrics})
-    write_md("reports/training_report.md", "# Training report\n\nСм. HTML.")
+    render_template("training_report.html.j2", "reports/training_report.html", {"metrics": metrics, "charts": charts})
+
+    human_md = """# Training report
+
+## Кратко
+- Бинарная модель жалоб обучена и провалидирована на отложенной выборке.
+- Категориальная модель обучена только на записях, пред/факт которых относится к жалобам.
+
+## Основные метрики
+- complaint_f1: {complaint_f1:.4f}
+- category_macro_f1: {category_macro_f1:.4f}
+
+## Что смотреть в графиках
+1. `training_predicted_complaint_distribution.png` — сколько модель отнесла к жалобам/не-жалобам.
+2. `training_predicted_category_distribution.png` — распределение предсказанных категорий (валидационные жалобы).
+
+## Файлы
+- HTML: `reports/training_report.html`
+- Графики: `reports/training_predicted_complaint_distribution.png`, `reports/training_predicted_category_distribution.png`
+- Метаданные: `models/training_metadata.json`
+""".format(
+        complaint_f1=metrics["complaint_f1"],
+        category_macro_f1=metrics["category_macro_f1"],
+    )
+    write_md("reports/training_report.md", human_md)
     return metrics
 
 
