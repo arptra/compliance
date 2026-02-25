@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from .config import ProjectConfig
@@ -411,6 +412,12 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     top_sub = complaints["complaint_subcategory_llm"].value_counts().head(10).to_dict() if "complaint_subcategory_llm" in complaints.columns else {}
     top_loan = complaints["loan_product_llm"].value_counts().head(10).to_dict() if "loan_product_llm" in complaints.columns else {}
     warn = df["short_summary_llm"].astype(str).str.contains(r"CLIENT|OPERATOR|CHATBOT", case=False).any()
+    histogram_path = _build_subcategory_histogram(complaints, Path(cfg.analysis.reports_dir) / "pilot_subcategories_hist.png")
+    subcategory_examples = _build_subcategory_examples(complaints)
+    examples_path = Path("exports") / "pilot_subcategory_examples.xlsx"
+    examples_path.parent.mkdir(parents=True, exist_ok=True)
+    subcategory_examples.to_excel(examples_path, index=False)
+
     context = {
         "n": len(df),
         "complaint_share": float(df["is_complaint_llm"].mean()) if len(df) else 0.0,
@@ -423,8 +430,78 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
         },
         "top_loan_products_ru": {f"{k} ({loan_labels.get(k, k)})": v for k, v in top_loan.items()},
         "complaint_examples": complaints.head(30).to_dict(orient="records"),
+        "subcategory_examples": subcategory_examples.to_dict(orient="records"),
+        "subcategory_examples_path": str(examples_path),
+        "subcategory_histogram": str(histogram_path),
         "non_examples": non_complaints.head(30).to_dict(orient="records"),
         "warning": warn,
     }
     render_template("pilot_report.html.j2", "reports/pilot_report.html", context)
     write_md("reports/pilot_report.md", "# Pilot report\n\nПроверить чеклист, категории и примеры.")
+
+
+def _build_subcategory_histogram(complaints: pd.DataFrame, out_path: Path) -> Path | None:
+    if "complaint_subcategory_llm" not in complaints.columns or complaints.empty:
+        return None
+    counts = (
+        complaints["complaint_subcategory_llm"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .loc[lambda s: s != ""]
+        .value_counts()
+        .head(20)
+    )
+    if counts.empty:
+        return None
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig_height = max(4, min(12, 0.45 * len(counts)))
+    plt.figure(figsize=(12, fig_height))
+    counts.sort_values().plot(kind="barh", color="#3b82f6")
+    plt.title("Топ подкатегорий (pilot)")
+    plt.xlabel("Количество обращений")
+    plt.ylabel("Подкатегория")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=140)
+    plt.close()
+    return out_path
+
+
+def _build_subcategory_examples(complaints: pd.DataFrame, max_examples_per_subcategory: int = 8, example_char_limit: int = 220) -> pd.DataFrame:
+    if "complaint_subcategory_llm" not in complaints.columns or complaints.empty:
+        return pd.DataFrame(columns=["subcategory", "gigachat_examples"])
+
+    data = complaints.copy()
+    data["complaint_subcategory_llm"] = data["complaint_subcategory_llm"].fillna("").astype(str).str.strip()
+    data = data[data["complaint_subcategory_llm"] != ""]
+    if data.empty:
+        return pd.DataFrame(columns=["subcategory", "gigachat_examples"])
+
+    source_col = "short_summary_llm" if "short_summary_llm" in data.columns else "client_first_message"
+
+    def _shorten(text: str) -> str:
+        value = str(text or "").strip().replace("\n", " ")
+        return value[:example_char_limit].rstrip() + ("…" if len(value) > example_char_limit else "")
+
+    rows = []
+    for subcategory, group in data.groupby("complaint_subcategory_llm"):
+        examples = []
+        for value in group[source_col].tolist():
+            trimmed = _shorten(value)
+            if trimmed and trimmed not in examples:
+                examples.append(trimmed)
+            if len(examples) >= max_examples_per_subcategory:
+                break
+        rows.append(
+            {
+                "subcategory": subcategory,
+                "gigachat_examples": "\n\n".join(f"- {item}" for item in examples),
+            }
+        )
+
+    report_df = pd.DataFrame(rows)
+    counts = data["complaint_subcategory_llm"].value_counts().rename("count")
+    report_df["count"] = report_df["subcategory"].map(counts).fillna(0).astype(int)
+    report_df = report_df.sort_values(["count", "subcategory"], ascending=[False, True]).drop(columns=["count"]).reset_index(drop=True)
+    return report_df
