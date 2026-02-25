@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.train_models import _build_time_scatter_frame, train
+from complaints_trends.train_models import _build_time_scatter_frame, _normalize_subcategory_by_taxonomy, train
 
 
 def test_train_generates_human_report_and_charts(tmp_path):
@@ -17,14 +17,14 @@ def test_train_generates_human_report_and_charts(tmp_path):
 
     df = pd.DataFrame(
         [
-            {"row_id": "r1", "event_time": "2025-01-01", "client_first_message": "не работает приложение", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "APP_ERROR"},
+            {"row_id": "r1", "event_time": "2025-01-01", "client_first_message": "не работает приложение", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "app_crash"},
             {"row_id": "r2", "event_time": "2025-01-02", "client_first_message": "вопрос по тарифу", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
-            {"row_id": "r3", "event_time": "2025-01-03", "client_first_message": "ошибка оплаты", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "PAYMENT_DECLINED"},
+            {"row_id": "r3", "event_time": "2025-01-03", "client_first_message": "ошибка оплаты", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS_TRANSFERS", "complaint_subcategory_llm": "payment_error"},
             {"row_id": "r4", "event_time": "2025-01-04", "client_first_message": "спасибо", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
-            {"row_id": "r5", "event_time": "2025-01-05", "client_first_message": "не зачислили платеж", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "PAYMENT_MISSING"},
-            {"row_id": "r6", "event_time": "2025-01-06", "client_first_message": "не могу войти", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "LOGIN_ISSUE"},
+            {"row_id": "r5", "event_time": "2025-01-05", "client_first_message": "не зачислили платеж", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS_TRANSFERS", "complaint_subcategory_llm": "transfer_delay"},
+            {"row_id": "r6", "event_time": "2025-01-06", "client_first_message": "не могу войти", "is_complaint_llm": True, "complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "login_issue"},
             {"row_id": "r7", "event_time": "2025-01-07", "client_first_message": "какой статус заявки", "is_complaint_llm": False, "complaint_category_llm": "OTHER", "complaint_subcategory_llm": "UNKNOWN"},
-            {"row_id": "r8", "event_time": "2025-01-08", "client_first_message": "пропал перевод", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS", "complaint_subcategory_llm": "TRANSFER_MISSING"},
+            {"row_id": "r8", "event_time": "2025-01-08", "client_first_message": "пропал перевод", "is_complaint_llm": True, "complaint_category_llm": "PAYMENTS_TRANSFERS", "complaint_subcategory_llm": "transfer_reversed"},
         ]
     )
     df["event_time"] = pd.to_datetime(df["event_time"])
@@ -61,3 +61,15 @@ def test_build_time_scatter_frame_respects_validation_window():
     assert out.iloc[0]["day"].strftime("%Y-%m-%d") == "2025-01-02"
     assert int(out.iloc[0]["category_count"]) == 1
     assert int(out.iloc[0]["subcategory_count"]) == 1
+
+
+
+def test_normalize_subcategory_by_taxonomy_replaces_unknown_values():
+    df = pd.DataFrame([
+        {"complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "login_issue"},
+        {"complaint_category_llm": "TECHNICAL", "complaint_subcategory_llm": "inheritance transfer"},
+    ])
+    taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue", "app_crash"]}}
+    out = _normalize_subcategory_by_taxonomy(df, taxonomy)
+    assert out.iloc[0] == "login_issue"
+    assert out.iloc[1] == "UNKNOWN"

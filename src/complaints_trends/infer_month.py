@@ -12,8 +12,21 @@ from .extract_client_first import extract_client_first_message
 from .io_excel import load_excel_with_month
 from .reports.render import render_template
 from .text_cleaning import clean_for_model, load_tokens
+from .taxonomy import load_taxonomy
 
 
+
+
+
+def _enforce_subcategory_taxonomy(categories: np.ndarray, subcategories: np.ndarray, taxonomy: dict) -> np.ndarray:
+    allowed = taxonomy.get("subcategories_by_category", {})
+    out = np.array(subcategories, dtype=object).copy()
+    for i, (cat, sub) in enumerate(zip(categories.tolist(), out.tolist())):
+        if sub in {"NOT_COMPLAINT", "UNKNOWN"}:
+            continue
+        if sub not in set(allowed.get(str(cat), [])):
+            out[i] = "UNKNOWN"
+    return out
 
 
 def _sanitize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
@@ -48,6 +61,8 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)
     df["text_clean"] = df["client_first_message"].astype(str).apply(lambda x: clean_for_model(x, deny))
 
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+
     mdir = Path(cfg.training.model_dir)
     vec = joblib.load(mdir / "vectorizers.joblib")
     complaint_model = joblib.load(mdir / "complaint_model.joblib")
@@ -78,6 +93,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     subcat_pred = np.array(["NOT_COMPLAINT"] * len(df), dtype=object)
     if idx.any() and subcat_model is not None and subcat_enc is not None:
         subcat_pred[idx] = subcat_enc.inverse_transform(subcat_model.predict(x[idx]))
+    subcat_pred = _enforce_subcategory_taxonomy(cat_pred, subcat_pred, taxonomy)
     df["subcategory_pred"] = subcat_pred
 
     out_xlsx = f"exports/month_labeled_{month}.xlsx"
@@ -131,6 +147,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
         "complaint_share": float(df["is_complaint_pred"].mean()),
         "top_categories": top,
         "top_subcategories": top_sub,
+        "subcategory_filtering": "taxonomy_enforced",
         "category_histogram": str(cat_hist_path).replace("\\", "/"),
         "subcategory_histogram": str(subcat_hist_path).replace("\\", "/"),
         "examples": complaints_df.head(50).to_dict(orient="records"),

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.infer_month import infer_month
+from complaints_trends.infer_month import _enforce_subcategory_taxonomy, infer_month
 
 
 class _FakeVec:
@@ -123,3 +123,12 @@ def test_infer_month_does_not_convert_empty_dialogs_to_nan_string(tmp_path, monk
     out = infer_month(cfg, str(excel), "2025-04")
     assert out["raw_dialog"].eq("").all()
     assert out["client_first_message"].eq("").all()
+
+
+
+def test_enforce_subcategory_taxonomy_rejects_unknown_subcategories():
+    cats = np.array(["TECHNICAL", "TECHNICAL", "OTHER"], dtype=object)
+    subs = np.array(["login_issue", "inheritance transfer", "NOT_COMPLAINT"], dtype=object)
+    taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue"]}}
+    out = _enforce_subcategory_taxonomy(cats, subs, taxonomy)
+    assert out.tolist() == ["login_issue", "UNKNOWN", "NOT_COMPLAINT"]

@@ -18,9 +18,27 @@ from .config import ProjectConfig
 from .features import TextVectorizers
 from .reports.render import render_template, write_md
 from .text_cleaning import clean_for_model, load_tokens
+from .taxonomy import load_taxonomy
 
 
 
+
+
+
+
+def _normalize_subcategory_by_taxonomy(df: pd.DataFrame, taxonomy: dict) -> pd.Series:
+    allowed = taxonomy.get("subcategories_by_category", {})
+    cats = df.get("complaint_category_llm", pd.Series(["OTHER"] * len(df), index=df.index)).astype(str)
+    subs_raw = df.get("complaint_subcategory_llm", pd.Series(["UNKNOWN"] * len(df), index=df.index))
+    subs = subs_raw.replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str)
+
+    out: list[str] = []
+    for cat, sub in zip(cats.tolist(), subs.tolist()):
+        if sub in set(allowed.get(cat, [])):
+            out.append(sub)
+        else:
+            out.append("UNKNOWN")
+    return pd.Series(out, index=df.index, dtype=object)
 
 
 def _build_time_scatter_frame(val_df: pd.DataFrame, val_from: str | None = None, val_to: str | None = None) -> pd.DataFrame:
@@ -145,6 +163,10 @@ def train(cfg: ProjectConfig) -> dict:
     y_bin = np.where(df["is_complaint_gold"].notna() & (df["is_complaint_gold"] != ""), df["is_complaint_gold"], df["is_complaint_llm"])
     y_cat = np.where(df["category_gold"].notna() & (df["category_gold"] != ""), df["category_gold"], df["complaint_category_llm"])
 
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    if "complaint_subcategory_llm" in df.columns:
+        df["complaint_subcategory_llm"] = _normalize_subcategory_by_taxonomy(df, taxonomy)
+
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)
     text_col = cfg.training.text_field
     df["text_clean"] = df[text_col].astype(str).apply(lambda x: clean_for_model(x, deny))
@@ -195,6 +217,8 @@ def train(cfg: ProjectConfig) -> dict:
         "complaint_f1": f1_score(y_val, pred_bin),
         "category_macro_f1": f1_score(ycat_val, cat_pred, average="macro") if len(cval) else 0.0,
     }
+    if "complaint_subcategory_llm" in df.columns:
+        metrics["subcategory_unknown_share"] = float((df["complaint_subcategory_llm"] == "UNKNOWN").mean())
 
     subcat_val = cval["complaint_subcategory_llm"].astype(str).values if "complaint_subcategory_llm" in cval.columns else np.array(["UNKNOWN"] * len(cval), dtype=object)
     charts = _save_training_charts(
