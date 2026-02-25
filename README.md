@@ -575,7 +575,9 @@ python -m complaints_trends.cli train --config configs/project.yaml
 - `models/training_metadata.json`
 - `reports/training_report.html`, `reports/training_report.md` (человеко-читаемый текст)
 - `reports/training_predicted_complaint_distribution.png`
-- `reports/training_predicted_category_distribution.png`
+- `reports/training_category_hist_ru.png`
+- `reports/training_subcategory_hist_ru.png`
+- `reports/training_category_subcategory_scatter_ru.png`
 
 ## 6.3 `trends`
 Команда:

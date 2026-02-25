@@ -36,7 +36,9 @@ def test_train_generates_human_report_and_charts(tmp_path):
     assert Path("reports/training_report.html").exists()
     assert Path("reports/training_report.md").exists()
     assert Path("reports/training_predicted_complaint_distribution.png").exists()
-    assert Path("reports/training_predicted_category_distribution.png").exists()
+    assert Path("reports/training_category_hist_ru.png").exists()
+    assert Path("reports/training_subcategory_hist_ru.png").exists()
+    assert Path("reports/training_category_subcategory_scatter_ru.png").exists()
 
     md = Path("reports/training_report.md").read_text(encoding="utf-8")
     assert "Кратко" in md

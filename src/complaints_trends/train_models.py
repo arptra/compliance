@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.decomposition import TruncatedSVD
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, f1_score
 from sklearn.model_selection import train_test_split
@@ -21,36 +22,91 @@ from .text_cleaning import clean_for_model, load_tokens
 
 
 
-def _save_training_charts(y_val, pred_bin, ycat_val, cat_pred, out_dir: Path) -> dict[str, str]:
+def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Binary prediction distribution (complaint / non-complaint).
-    bin_counts = pd.Series(pred_bin).map({True: "complaint", False: "non_complaint"}).value_counts()
+    # 1) Гистограмма жалоба/не жалоба (предсказание).
+    bin_counts = pd.Series(pred_bin).map({True: "Жалоба", False: "Не жалоба"}).value_counts()
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(bin_counts.index.tolist(), bin_counts.values.tolist())
-    ax.set_title("Predicted complaint distribution")
-    ax.set_ylabel("count")
+    ax.bar(bin_counts.index.tolist(), bin_counts.values.tolist(), color=["#d62728", "#2ca02c"][: len(bin_counts)])
+    ax.set_title("Гистограмма предсказаний: жалоба / не жалоба")
+    ax.set_ylabel("Количество")
     fig.tight_layout()
     bin_path = out_dir / "training_predicted_complaint_distribution.png"
     fig.savefig(bin_path, dpi=140)
     plt.close(fig)
 
-    # 2) Category distribution on validation complaints.
-    cat_series = pd.Series(cat_pred) if len(cat_pred) else pd.Series([], dtype=object)
-    cat_counts = cat_series.value_counts().head(15)
-    fig, ax = plt.subplots(figsize=(8, 5))
+    # 2) Гистограмма категорий (валидация, жалобы).
+    cat_series = pd.Series(ycat_val) if len(ycat_val) else pd.Series([], dtype=object)
+    cat_counts = cat_series.value_counts().head(20)
+    fig, ax = plt.subplots(figsize=(9, 6))
     if len(cat_counts):
-        ax.barh(cat_counts.index.astype(str).tolist(), cat_counts.values.tolist())
-    ax.set_title("Predicted category distribution (validation complaints)")
-    ax.set_xlabel("count")
+        ax.barh(cat_counts.index.astype(str).tolist(), cat_counts.values.tolist(), color="#1f77b4")
+    ax.set_title("Гистограмма категорий (валидационная выборка, жалобы)")
+    ax.set_xlabel("Количество")
     fig.tight_layout()
-    cat_path = out_dir / "training_predicted_category_distribution.png"
+    cat_path = out_dir / "training_category_hist_ru.png"
     fig.savefig(cat_path, dpi=140)
+    plt.close(fig)
+
+    # 3) Гистограмма подкатегорий (валидация, жалобы).
+    subcat_series = pd.Series(subcat_val) if len(subcat_val) else pd.Series([], dtype=object)
+    subcat_counts = subcat_series.replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).value_counts().head(25)
+    fig, ax = plt.subplots(figsize=(10, 7))
+    if len(subcat_counts):
+        ax.barh(subcat_counts.index.tolist(), subcat_counts.values.tolist(), color="#9467bd")
+    ax.set_title("Гистограмма подкатегорий (валидационная выборка, жалобы)")
+    ax.set_xlabel("Количество")
+    fig.tight_layout()
+    subcat_path = out_dir / "training_subcategory_hist_ru.png"
+    fig.savefig(subcat_path, dpi=140)
+    plt.close(fig)
+
+    # 4) Скопление точек (2D SVD) по категориям и подкатегориям.
+    scatter_path = out_dir / "training_category_subcategory_scatter_ru.png"
+    fig, ax = plt.subplots(figsize=(10, 7))
+    if x_cat_val.shape[0] >= 2:
+        svd = TruncatedSVD(n_components=2, random_state=42)
+        z = svd.fit_transform(x_cat_val)
+        cats = pd.Series(ycat_val).astype(str)
+        subcats = pd.Series(subcat_val).replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str)
+        unique_cats = sorted(cats.unique().tolist())
+        cmap = plt.get_cmap("tab20")
+        markers = ["o", "s", "^", "D", "P", "X", "*", "v", "<", ">"]
+        top_sub = subcats.value_counts().head(len(markers)).index.tolist()
+        marker_map = {s: markers[i % len(markers)] for i, s in enumerate(top_sub)}
+        for i, cat in enumerate(unique_cats):
+            m = cats == cat
+            for sub in subcats[m].unique().tolist():
+                ms = m & (subcats == sub)
+                ax.scatter(
+                    z[ms.values, 0],
+                    z[ms.values, 1],
+                    color=cmap(i % 20),
+                    marker=marker_map.get(sub, "o"),
+                    alpha=0.75,
+                    s=40,
+                    label=f"{cat} / {sub}",
+                )
+        handles, labels = ax.get_legend_handles_labels()
+        if len(handles) > 20:
+            handles, labels = handles[:20], labels[:20]
+        ax.legend(handles, labels, fontsize=7, loc="best")
+        ax.set_title("Скопление точек по категориям/подкатегориям (SVD 2D)")
+        ax.set_xlabel("Компонента 1")
+        ax.set_ylabel("Компонента 2")
+    else:
+        ax.text(0.5, 0.5, "Недостаточно данных для scatter", ha="center", va="center")
+        ax.set_title("Скопление точек по категориям/подкатегориям")
+    fig.tight_layout()
+    fig.savefig(scatter_path, dpi=140)
     plt.close(fig)
 
     return {
         "binary_distribution": str(bin_path).replace('\\', '/'),
         "category_distribution": str(cat_path).replace('\\', '/'),
+        "subcategory_distribution": str(subcat_path).replace('\\', '/'),
+        "category_subcategory_scatter": str(scatter_path).replace('\\', '/'),
     }
 
 def train(cfg: ProjectConfig) -> dict:
@@ -117,7 +173,8 @@ def train(cfg: ProjectConfig) -> dict:
         "category_macro_f1": f1_score(ycat_val, cat_pred, average="macro") if len(cval) else 0.0,
     }
 
-    charts = _save_training_charts(y_val=y_val, pred_bin=pred_bin, ycat_val=ycat_val, cat_pred=cat_pred, out_dir=Path("reports"))
+    subcat_val = cval["complaint_subcategory_llm"].astype(str).values if "complaint_subcategory_llm" in cval.columns else np.array(["UNKNOWN"] * len(cval), dtype=object)
+    charts = _save_training_charts(x_cat_val=x_cat_val, ycat_val=ycat_val, subcat_val=subcat_val, pred_bin=pred_bin, cat_pred=cat_pred, out_dir=Path("reports"))
 
     mdir = Path(cfg.training.model_dir)
     mdir.mkdir(parents=True, exist_ok=True)
@@ -141,11 +198,13 @@ def train(cfg: ProjectConfig) -> dict:
 
 ## Что смотреть в графиках
 1. `training_predicted_complaint_distribution.png` — сколько модель отнесла к жалобам/не-жалобам.
-2. `training_predicted_category_distribution.png` — распределение предсказанных категорий (валидационные жалобы).
+2. `training_category_hist_ru.png` — распределение категорий.
+3. `training_subcategory_hist_ru.png` — распределение подкатегорий.
+4. `training_category_subcategory_scatter_ru.png` — скопление точек по категориям/подкатегориям.
 
 ## Файлы
 - HTML: `reports/training_report.html`
-- Графики: `reports/training_predicted_complaint_distribution.png`, `reports/training_predicted_category_distribution.png`
+- Графики: `reports/training_predicted_complaint_distribution.png`, `reports/training_category_hist_ru.png`, `reports/training_subcategory_hist_ru.png`, `reports/training_category_subcategory_scatter_ru.png`
 - Метаданные: `models/training_metadata.json`
 """.format(
         complaint_f1=metrics["complaint_f1"],
