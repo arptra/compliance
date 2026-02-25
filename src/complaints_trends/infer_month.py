@@ -14,6 +14,14 @@ from .text_cleaning import clean_for_model, load_tokens
 
 
 
+
+def _sanitize_for_parquet(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    obj_cols = [c for c in out.columns if out[c].dtype == "object"]
+    for c in obj_cols:
+        out[c] = out[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
+    return out
+
 def _infer_dialog_column(df: pd.DataFrame, cfg: ProjectConfig) -> str:
     candidates: list[str] = []
     if cfg.input.dialog_columns:
@@ -66,7 +74,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     out_parq = f"data/interim/month_{month}.parquet"
     Path(out_xlsx).parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(out_xlsx, index=False)
-    df.to_parquet(out_parq, index=False)
+    _sanitize_for_parquet(df).to_parquet(out_parq, index=False)
 
     top = df[df["is_complaint_pred"]]["category_pred"].value_counts().to_dict()
     render_template("month_report.html.j2", f"reports/month_report_{month}.html", {

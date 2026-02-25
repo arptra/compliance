@@ -606,6 +606,7 @@ python -m complaints_trends.cli infer-month --config configs/project.yaml --exce
 2. Извлекает `client_first_message` (или другое поле, если вы сменили `training.text_field` и синхронизировали preprocessing) и подает его в тот же векторизатор.
 3. Применяет локальные модели.
 4. Сохраняет разметку и отчет.
+5. Перед сохранением parquet нормализует mixed object-колонки к строкам, чтобы избежать ошибок Arrow/pyarrow на реальных Excel.
 
 Выход:
 - `exports/month_labeled_2025-12.xlsx`
