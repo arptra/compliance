@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.infer_month import _enforce_subcategory_taxonomy, infer_month
+from complaints_trends.infer_month import _enforce_subcategory_taxonomy, _select_infer_text_field, infer_month
 
 
 class _FakeVec:
@@ -132,3 +132,33 @@ def test_enforce_subcategory_taxonomy_rejects_unknown_subcategories():
     taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue"]}}
     out = _enforce_subcategory_taxonomy(cats, subs, taxonomy)
     assert out.tolist() == ["login_issue", "UNKNOWN", "NOT_COMPLAINT"]
+
+
+def test_select_infer_text_field_prefers_training_text_field():
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.text_field = "raw_dialog"
+    df = pd.DataFrame(
+        [
+            {"raw_dialog": "D1", "client_first_message": "C1"},
+            {"raw_dialog": "D2", "client_first_message": "C2"},
+        ]
+    )
+
+    series, used = _select_infer_text_field(df, cfg)
+    assert used == "raw_dialog"
+    assert series.tolist() == ["D1", "D2"]
+
+
+def test_select_infer_text_field_falls_back_to_client_message_when_column_missing():
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.text_field = "dialog_text"
+    df = pd.DataFrame(
+        [
+            {"raw_dialog": "D1", "client_first_message": "C1"},
+            {"raw_dialog": "D2", "client_first_message": "C2"},
+        ]
+    )
+
+    series, used = _select_infer_text_field(df, cfg)
+    assert used == "client_first_message (fallback from dialog_text)"
+    assert series.tolist() == ["C1", "C2"]

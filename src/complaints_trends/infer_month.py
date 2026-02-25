@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import joblib
@@ -13,6 +14,9 @@ from .io_excel import load_excel_with_month
 from .reports.render import render_template
 from .text_cleaning import clean_for_model, load_tokens
 from .taxonomy import load_taxonomy
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -50,6 +54,22 @@ def _infer_dialog_column(df: pd.DataFrame, cfg: ProjectConfig) -> str:
             return c
     raise KeyError("No dialog column found for infer-month: configure input.dialog_column/dialog_columns")
 
+
+def _select_infer_text_field(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[pd.Series, str]:
+    preferred = str(cfg.training.text_field or "client_first_message")
+    if preferred in df.columns:
+        return df[preferred].fillna("").astype(str), preferred
+    if preferred == "raw_dialog":
+        return df["raw_dialog"].fillna("").astype(str), preferred
+    if preferred == "client_first_message":
+        return df["client_first_message"].fillna("").astype(str), preferred
+
+    logger.warning(
+        "[stage=infer-month] training.text_field='%s' not found in monthly excel; fallback to client_first_message",
+        preferred,
+    )
+    return df["client_first_message"].fillna("").astype(str), f"client_first_message (fallback from {preferred})"
+
 def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame:
     df = load_excel_with_month(Path(excel_path), cfg.input)
     df["month"] = month
@@ -58,8 +78,10 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     df["raw_dialog"] = df[dialog_col].fillna("").astype(str)
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
 
+    infer_text, infer_text_field_used = _select_infer_text_field(df, cfg)
+
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)
-    df["text_clean"] = df["client_first_message"].astype(str).apply(lambda x: clean_for_model(x, deny))
+    df["text_clean"] = infer_text.astype(str).apply(lambda x: clean_for_model(x, deny))
 
     taxonomy = load_taxonomy(cfg.files.categories_seed_path)
 
@@ -140,6 +162,8 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     render_template("month_report.html.j2", f"reports/month_report_{month}.html", {
         "month": month,
         "dialog_column_used": dialog_col,
+        "model_text_field": cfg.training.text_field,
+        "infer_text_field_used": infer_text_field_used,
         "rows_total": int(len(df)),
         "rows_complaints": int(complaints_df.shape[0]),
         "empty_dialog_share": empty_dialog_share,
