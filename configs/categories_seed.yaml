@@ -1,0 +1,128 @@
+categories:
+  BILLING:
+    label_ru: "Платежи и списания"
+    subcategories:
+      duplicate_charge: { label_ru: "Двойное списание" }
+      wrong_amount: { label_ru: "Неверная сумма списания" }
+      refund_delay: { label_ru: "Задержка возврата" }
+      fee_issue: { label_ru: "Комиссия/тариф/проценты" }
+      interest_calc: { label_ru: "Некорректный расчет процентов" }
+      penalty_calc: { label_ru: "Некорректные пени/штрафы" }
+      payment_posting_delay: { label_ru: "Платеж не зачислился/зачислился с задержкой" }
+
+  PAYMENTS_TRANSFERS:
+    label_ru: "Переводы и платежи"
+    subcategories:
+      payment_error: { label_ru: "Ошибка при оплате/переводе" }
+      transfer_delay: { label_ru: "Задержка перевода" }
+      transfer_reversed: { label_ru: "Отмена/возврат перевода" }
+      wrong_recipient: { label_ru: "Неверный получатель/реквизиты" }
+      limit_restriction: { label_ru: "Лимиты/ограничения" }
+
+  TECHNICAL:
+    label_ru: "Технические проблемы"
+    subcategories:
+      app_crash: { label_ru: "Приложение падает/зависает" }
+      login_issue: { label_ru: "Не могу войти" }
+      otp_issue: { label_ru: "Не приходит код/подтверждение" }
+      ui_bug: { label_ru: "Некорректная работа интерфейса" }
+      integration_issue: { label_ru: "Не работает сервис/интеграция" }
+
+  ACCOUNT:
+    label_ru: "Аккаунт и доступ"
+    subcategories:
+      blocked: { label_ru: "Блокировка/ограничение" }
+      kyc: { label_ru: "Проверка личности/документы" }
+      data_change: { label_ru: "Изменение персональных данных" }
+      security_incident: { label_ru: "Подозрение на взлом/мошенничество" }
+
+  SERVICE_QUALITY:
+    label_ru: "Качество поддержки"
+    subcategories:
+      slow_response: { label_ru: "Долго отвечают" }
+      rude_support: { label_ru: "Грубость/некорректное общение" }
+      wrong_info: { label_ru: "Неверная консультация" }
+      no_resolution: { label_ru: "Не решили проблему" }
+
+  DELIVERY:
+    label_ru: "Доставка/получение"
+    subcategories:
+      delay: { label_ru: "Задержка доставки" }
+      lost: { label_ru: "Потеря" }
+      damaged: { label_ru: "Повреждение" }
+      wrong_item: { label_ru: "Привезли не то" }
+
+  CREDITING:
+    label_ru: "Кредитование"
+    subcategories:
+      application_rejected: { label_ru: "Отказ по заявке" }
+      application_stuck: { label_ru: "Заявка зависла/нет статуса" }
+      approval_terms_changed: { label_ru: "Изменились условия/лимит после одобрения" }
+      disbursement_delay: { label_ru: "Задержка выдачи" }
+      early_repayment_issue: { label_ru: "Досрочное погашение не работает/не так посчитано" }
+      schedule_issue: { label_ru: "График платежей некорректен" }
+      payment_not_seen: { label_ru: "Платеж по кредиту не учтен" }
+      restructuring_issue: { label_ru: "Реструктуризация/кредитные каникулы" }
+      insurance_issue: { label_ru: "Страховка подключена/списана/отключение" }
+      collateral_issue: { label_ru: "Залог/ПТС/обременение" }
+      bureau_issue: { label_ru: "Кредитная история/БКИ" }
+      collection_issue: { label_ru: "Просрочка/взыскание/звонки" }
+
+  COMMUNICATIONS:
+    label_ru: "Уведомления и коммуникации"
+    subcategories:
+      no_notifications: { label_ru: "Не приходят уведомления" }
+      too_many_notifications: { label_ru: "Слишком много уведомлений" }
+      wrong_notifications: { label_ru: "Неверные уведомления" }
+
+  LEGAL_COMPLIANCE:
+    label_ru: "Юридические и комплаенс"
+    subcategories:
+      complaint_escalation: { label_ru: "Жалоба в регулятор/суд" }
+      consent_issue: { label_ru: "Согласия/обработка данных" }
+      contract_issue: { label_ru: "Договор/условия/оферта" }
+
+  OTHER:
+    label_ru: "Другое"
+    subcategories: {}
+
+# Отдельный признак продукта кредитования (НЕ category!)
+loan_products:
+  NONE:
+    label_ru: "Не относится к кредитованию"
+
+  CREDIT_CARD:
+    label_ru: "Кредитная карта"
+    hints_ru: ["кредитка", "кредитная карта", "лимит по карте", "минимальный платеж", "грейс", "льготный период"]
+
+  INSTALLMENT:
+    label_ru: "Рассрочка"
+    hints_ru: ["рассрочка", "платеж по рассрочке", "0%", "магазин", "покупка в рассрочку"]
+
+  CONSUMER_LOAN:
+    label_ru: "Потребительский кредит"
+    hints_ru: ["потребительский", "кредит наличными", "кредит", "ставка", "график", "платеж"]
+
+  MORTGAGE:
+    label_ru: "Ипотека"
+    hints_ru: ["ипотека", "первоначальный взнос", "закладная", "эскроу", "домклик", "рефинансирование ипотеки"]
+
+  AUTO_LOAN:
+    label_ru: "Автокредит"
+    hints_ru: ["автокредит", "птс", "каско", "авто", "залог авто"]
+
+  REFINANCE:
+    label_ru: "Рефинансирование"
+    hints_ru: ["рефинанс", "перекредитование", "объединение кредитов", "снижение ставки"]
+
+  OVERDRAFT:
+    label_ru: "Овердрафт"
+    hints_ru: ["овердрафт", "ушел в минус", "лимит овердрафта"]
+
+  BNPL:
+    label_ru: "BNPL / Купи сейчас — плати потом"
+    hints_ru: ["купи сейчас", "плати потом", "bnpl", "paylater", "позже", "частями"]
+
+# Правило для LLM/пайплайна:
+# - Если обращение про кредитование: loan_product != NONE
+# - Иначе loan_product = NONE

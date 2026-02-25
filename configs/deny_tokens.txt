@@ -1,0 +1,15 @@
+client
+operator
+chatbot
+agent
+support
+клиент
+оператор
+чатбот
+бот
+num
+<phone>
+<email>
+<url>
+<card>
+<account>

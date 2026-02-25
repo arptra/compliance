@@ -1,0 +1,25 @@
+<html>
+  <body>
+    <h1>Отчет по обучению модели</h1>
+    <h2>Метрики</h2>
+    <pre>{{ metrics | tojson(indent=2) }}</pre>
+
+    <h2>Визуализация распределений</h2>
+    <div>
+      <h3>Гистограмма: жалоба / не жалоба</h3>
+      <img src="{{ charts.binary_distribution }}" alt="гистограмма жалоб" style="max-width: 950px;" />
+    </div>
+    <div>
+      <h3>Гистограмма категорий</h3>
+      <img src="{{ charts.category_distribution }}" alt="гистограмма категорий" style="max-width: 950px;" />
+    </div>
+    <div>
+      <h3>Гистограмма подкатегорий</h3>
+      <img src="{{ charts.subcategory_distribution }}" alt="гистограмма подкатегорий" style="max-width: 950px;" />
+    </div>
+    <div>
+      <h3>Скопление точек (категории и подкатегории)</h3>
+      <img src="{{ charts.category_subcategory_scatter }}" alt="scatter категорий и подкатегорий" style="max-width: 950px;" />
+    </div>
+  </body>
+</html>
