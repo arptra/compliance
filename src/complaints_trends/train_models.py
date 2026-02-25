@@ -69,11 +69,11 @@ def _build_time_scatter_frame(val_df: pd.DataFrame, val_from: str | None = None,
     out["subcategory_count"] = out["subcategory_count"].astype(int)
     return out.sort_values("day")
 
-def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path, val_df: pd.DataFrame, val_from: str | None = None, val_to: str | None = None) -> dict[str, str]:
+def _save_training_charts(ycat_all, subcat_all, pred_bin_all, out_dir: Path, complaints_df: pd.DataFrame) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Гистограмма жалоба/не жалоба (предсказание).
-    bin_counts = pd.Series(pred_bin).map({True: "Жалоба", False: "Не жалоба"}).value_counts()
+    bin_counts = pd.Series(pred_bin_all).map({True: "Жалоба", False: "Не жалоба"}).value_counts()
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.bar(bin_counts.index.tolist(), bin_counts.values.tolist(), color=["#d62728", "#2ca02c"][: len(bin_counts)])
     ax.set_title("Гистограмма предсказаний: жалоба / не жалоба")
@@ -83,26 +83,26 @@ def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, o
     fig.savefig(bin_path, dpi=140)
     plt.close(fig)
 
-    # 2) Гистограмма категорий (валидация, жалобы).
-    cat_series = pd.Series(ycat_val) if len(ycat_val) else pd.Series([], dtype=object)
+    # 2) Гистограмма категорий (весь период, все записи с жалобами).
+    cat_series = pd.Series(ycat_all) if len(ycat_all) else pd.Series([], dtype=object)
     cat_counts = cat_series.value_counts().head(20)
     fig, ax = plt.subplots(figsize=(9, 6))
     if len(cat_counts):
         ax.barh(cat_counts.index.astype(str).tolist(), cat_counts.values.tolist(), color="#1f77b4")
-    ax.set_title("Гистограмма категорий (валидационная выборка, жалобы)")
+    ax.set_title("Гистограмма категорий (весь период, жалобы)")
     ax.set_xlabel("Количество")
     fig.tight_layout()
     cat_path = out_dir / "training_category_hist_ru.png"
     fig.savefig(cat_path, dpi=140)
     plt.close(fig)
 
-    # 3) Гистограмма подкатегорий (валидация, жалобы).
-    subcat_series = pd.Series(subcat_val) if len(subcat_val) else pd.Series([], dtype=object)
+    # 3) Гистограмма подкатегорий (весь период, все записи с жалобами).
+    subcat_series = pd.Series(subcat_all) if len(subcat_all) else pd.Series([], dtype=object)
     subcat_counts = subcat_series.replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).value_counts().head(25)
     fig, ax = plt.subplots(figsize=(10, 7))
     if len(subcat_counts):
         ax.barh(subcat_counts.index.tolist(), subcat_counts.values.tolist(), color="#9467bd")
-    ax.set_title("Гистограмма подкатегорий (валидационная выборка, жалобы)")
+    ax.set_title("Гистограмма подкатегорий (весь период, жалобы)")
     ax.set_xlabel("Количество")
     fig.tight_layout()
     subcat_path = out_dir / "training_subcategory_hist_ru.png"
@@ -112,7 +112,7 @@ def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, o
     # 4) Скопление точек по времени: X=время, Y=число категорий/подкатегорий в день.
     scatter_path = out_dir / "training_category_subcategory_scatter_ru.png"
     fig, ax = plt.subplots(figsize=(10, 7))
-    scatter_df = _build_time_scatter_frame(val_df, val_from=val_from, val_to=val_to)
+    scatter_df = _build_time_scatter_frame(complaints_df)
     if len(scatter_df):
         ax.scatter(
             scatter_df["day"],
@@ -220,17 +220,28 @@ def train(cfg: ProjectConfig) -> dict:
     if "complaint_subcategory_llm" in df.columns:
         metrics["subcategory_unknown_share"] = float((df["complaint_subcategory_llm"] == "UNKNOWN").mean())
 
-    subcat_val = cval["complaint_subcategory_llm"].astype(str).values if "complaint_subcategory_llm" in cval.columns else np.array(["UNKNOWN"] * len(cval), dtype=object)
+    if hasattr(complaint_model, "predict_proba"):
+        complaint_score_all = complaint_model.predict_proba(vec.transform(df["text_clean"]))[:, 1]
+    else:
+        raw_all = complaint_model.decision_function(vec.transform(df["text_clean"]))
+        complaint_score_all = (raw_all - raw_all.min()) / (raw_all.max() - raw_all.min() + 1e-9)
+    pred_bin_all = complaint_score_all >= cfg.training.complaint_threshold
+
+    complaint_mask_all = np.array(y_bin).astype(bool)
+    complaints_all_df = df[complaint_mask_all].copy()
+    ycat_all = np.array(y_cat)[complaints_all_df.index]
+    subcat_all = (
+        complaints_all_df["complaint_subcategory_llm"].astype(str).values
+        if "complaint_subcategory_llm" in complaints_all_df.columns
+        else np.array(["UNKNOWN"] * len(complaints_all_df), dtype=object)
+    )
+
     charts = _save_training_charts(
-        x_cat_val=x_cat_val,
-        ycat_val=ycat_val,
-        subcat_val=subcat_val,
-        pred_bin=pred_bin,
-        cat_pred=cat_pred,
+        ycat_all=ycat_all,
+        subcat_all=subcat_all,
+        pred_bin_all=pred_bin_all,
         out_dir=Path("reports"),
-        val_df=cval,
-        val_from=cfg.training.validation.val_from,
-        val_to=cfg.training.validation.val_to,
+        complaints_df=complaints_all_df,
     )
 
     subcat_model = None
@@ -273,10 +284,10 @@ def train(cfg: ProjectConfig) -> dict:
 - category_macro_f1: {category_macro_f1:.4f}
 
 ## Что смотреть в графиках
-1. `training_predicted_complaint_distribution.png` — сколько модель отнесла к жалобам/не-жалобам.
-2. `training_category_hist_ru.png` — распределение категорий.
-3. `training_subcategory_hist_ru.png` — распределение подкатегорий.
-4. `training_category_subcategory_scatter_ru.png` — скопление точек по категориям/подкатегориям.
+1. `training_predicted_complaint_distribution.png` — сколько модель отнесла к жалобам/не-жалобам на **всех записях периода**.
+2. `training_category_hist_ru.png` — распределение категорий на **всех жалобах периода**.
+3. `training_subcategory_hist_ru.png` — распределение подкатегорий на **всех жалобах периода**.
+4. `training_category_subcategory_scatter_ru.png` — скопление точек по категориям/подкатегориям на **всем периоде**.
 
 ## Файлы
 - HTML: `reports/training_report.html`
