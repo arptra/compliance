@@ -21,6 +21,22 @@ from .text_cleaning import clean_for_model, load_tokens
 from .taxonomy import load_taxonomy
 
 
+def _coerce_binary_labels(values) -> np.ndarray:
+    def _one(v) -> bool:
+        if isinstance(v, (bool, np.bool_)):
+            return bool(v)
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return False
+        s = str(v).strip().lower()
+        if s in {"1", "true", "t", "yes", "y", "on", "жалоба", "complaint"}:
+            return True
+        if s in {"0", "false", "f", "no", "n", "off", "не жалоба", "not_complaint", "not complaint", ""}:
+            return False
+        return bool(v)
+
+    return np.array([_one(v) for v in values], dtype=bool)
+
+
 
 
 
@@ -160,7 +176,8 @@ def train(cfg: ProjectConfig) -> dict:
         df["is_complaint_gold"] = np.nan
         df["category_gold"] = np.nan
 
-    y_bin = np.where(df["is_complaint_gold"].notna() & (df["is_complaint_gold"] != ""), df["is_complaint_gold"], df["is_complaint_llm"])
+    y_bin_raw = np.where(df["is_complaint_gold"].notna() & (df["is_complaint_gold"] != ""), df["is_complaint_gold"], df["is_complaint_llm"])
+    y_bin = _coerce_binary_labels(y_bin_raw)
     y_cat = np.where(df["category_gold"].notna() & (df["category_gold"] != ""), df["category_gold"], df["complaint_category_llm"])
 
     taxonomy = load_taxonomy(cfg.files.categories_seed_path)
@@ -193,8 +210,8 @@ def train(cfg: ProjectConfig) -> dict:
         complaint_score = (raw - raw.min()) / (raw.max() - raw.min() + 1e-9)
     pred_bin = complaint_score >= cfg.training.complaint_threshold
 
-    ctrain = train_df[np.array(y_train).astype(bool)]
-    cval = val_df[np.array(y_val).astype(bool)]
+    ctrain = train_df[np.array(y_train, dtype=bool)]
+    cval = val_df[np.array(y_val, dtype=bool)]
     ycat_train = np.array(y_cat)[ctrain.index]
     ycat_val = np.array(y_cat)[cval.index]
     enc = LabelEncoder().fit(ycat_train)
@@ -227,7 +244,7 @@ def train(cfg: ProjectConfig) -> dict:
         complaint_score_all = (raw_all - raw_all.min()) / (raw_all.max() - raw_all.min() + 1e-9)
     pred_bin_all = complaint_score_all >= cfg.training.complaint_threshold
 
-    complaint_mask_all = np.array(y_bin).astype(bool)
+    complaint_mask_all = np.array(y_bin, dtype=bool)
     complaints_all_df = df[complaint_mask_all].copy()
     ycat_all = np.array(y_cat)[complaints_all_df.index]
     subcat_all = (
