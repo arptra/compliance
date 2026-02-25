@@ -21,7 +21,37 @@ from .text_cleaning import clean_for_model, load_tokens
 
 
 
-def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path, val_df: pd.DataFrame) -> dict[str, str]:
+
+
+def _build_time_scatter_frame(val_df: pd.DataFrame, val_from: str | None = None, val_to: str | None = None) -> pd.DataFrame:
+    if "event_time" not in val_df.columns or not len(val_df):
+        return pd.DataFrame(columns=["day", "category_count", "subcategory_count"])
+
+    tdf = val_df.copy()
+    tdf["event_time"] = pd.to_datetime(tdf["event_time"], errors="coerce")
+    tdf = tdf[tdf["event_time"].notna()]
+    if not len(tdf):
+        return pd.DataFrame(columns=["day", "category_count", "subcategory_count"])
+
+    if val_from:
+        tdf = tdf[tdf["event_time"] >= pd.to_datetime(val_from)]
+    if val_to:
+        tdf = tdf[tdf["event_time"] <= pd.to_datetime(val_to)]
+    if not len(tdf):
+        return pd.DataFrame(columns=["day", "category_count", "subcategory_count"])
+
+    tdf["day"] = tdf["event_time"].dt.floor("D")
+    cat_daily = tdf.groupby("day")["complaint_category_llm"].nunique().rename("category_count")
+    if "complaint_subcategory_llm" in tdf.columns:
+        sub_daily = tdf.groupby("day")["complaint_subcategory_llm"].nunique().rename("subcategory_count")
+    else:
+        sub_daily = pd.Series(0, index=cat_daily.index, name="subcategory_count")
+    out = pd.concat([cat_daily, sub_daily], axis=1).fillna(0).reset_index()
+    out["category_count"] = out["category_count"].astype(int)
+    out["subcategory_count"] = out["subcategory_count"].astype(int)
+    return out.sort_values("day")
+
+def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, out_dir: Path, val_df: pd.DataFrame, val_from: str | None = None, val_to: str | None = None) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Гистограмма жалоба/не жалоба (предсказание).
@@ -64,26 +94,32 @@ def _save_training_charts(x_cat_val, ycat_val, subcat_val, pred_bin, cat_pred, o
     # 4) Скопление точек по времени: X=время, Y=число категорий/подкатегорий в день.
     scatter_path = out_dir / "training_category_subcategory_scatter_ru.png"
     fig, ax = plt.subplots(figsize=(10, 7))
-    if "event_time" in val_df.columns and len(val_df):
-        tdf = val_df.copy()
-        tdf["event_time"] = pd.to_datetime(tdf["event_time"], errors="coerce")
-        tdf = tdf[tdf["event_time"].notna()]
-        if len(tdf):
-            tdf["day"] = tdf["event_time"].dt.floor("D")
-            cat_daily = tdf.groupby("day")["complaint_category_llm"].nunique()
-            sub_daily = tdf.groupby("day")["complaint_subcategory_llm"].nunique() if "complaint_subcategory_llm" in tdf.columns else pd.Series([], dtype=int)
-            ax.scatter(cat_daily.index, cat_daily.values, label="Уникальные категории/день", color="#1f77b4", s=48, alpha=0.85)
-            if len(sub_daily):
-                ax.scatter(sub_daily.index, sub_daily.values, label="Уникальные подкатегории/день", color="#9467bd", s=48, alpha=0.85)
-            ax.set_title("Скопления по времени: категории и подкатегории жалоб")
-            ax.set_xlabel("Время")
-            ax.set_ylabel("Количество уникальных категорий/подкатегорий")
-            ax.legend(loc="best")
-        else:
-            ax.text(0.5, 0.5, "Нет корректного event_time", ha="center", va="center")
-            ax.set_title("Скопление по времени")
+    scatter_df = _build_time_scatter_frame(val_df, val_from=val_from, val_to=val_to)
+    if len(scatter_df):
+        ax.scatter(
+            scatter_df["day"],
+            scatter_df["category_count"],
+            label="Уникальные категории/день",
+            color="#1f77b4",
+            s=48,
+            alpha=0.85,
+        )
+        ax.scatter(
+            scatter_df["day"],
+            scatter_df["subcategory_count"],
+            label="Уникальные подкатегории/день",
+            color="#9467bd",
+            s=48,
+            alpha=0.85,
+        )
+        if scatter_df["day"].min() != scatter_df["day"].max():
+            ax.set_xlim(scatter_df["day"].min(), scatter_df["day"].max())
+        ax.set_title("Скопления по времени: категории и подкатегории жалоб")
+        ax.set_xlabel("Время")
+        ax.set_ylabel("Количество уникальных категорий/подкатегорий")
+        ax.legend(loc="best")
     else:
-        ax.text(0.5, 0.5, "Нет данных event_time для построения", ha="center", va="center")
+        ax.text(0.5, 0.5, "Нет данных для выбранного окна времени", ha="center", va="center")
         ax.set_title("Скопление по времени")
     fig.tight_layout()
     fig.savefig(scatter_path, dpi=140)
@@ -169,6 +205,8 @@ def train(cfg: ProjectConfig) -> dict:
         cat_pred=cat_pred,
         out_dir=Path("reports"),
         val_df=cval,
+        val_from=cfg.training.validation.val_from,
+        val_to=cfg.training.validation.val_to,
     )
 
     subcat_model = None

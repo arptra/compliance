@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.train_models import train
+from complaints_trends.train_models import _build_time_scatter_frame, train
 
 
 def test_train_generates_human_report_and_charts(tmp_path):
@@ -46,3 +46,18 @@ def test_train_generates_human_report_and_charts(tmp_path):
     assert "Основные метрики" in md
     assert Path(cfg.training.model_dir, "subcategory_model.joblib").exists()
     assert Path(cfg.training.model_dir, "subcategory_label_encoder.joblib").exists()
+
+
+def test_build_time_scatter_frame_respects_validation_window():
+    df = pd.DataFrame(
+        [
+            {"event_time": "2025-01-01 10:00:00", "complaint_category_llm": "TECH", "complaint_subcategory_llm": "LOGIN"},
+            {"event_time": "2025-01-02 10:00:00", "complaint_category_llm": "TECH", "complaint_subcategory_llm": "APP"},
+            {"event_time": "2025-01-03 10:00:00", "complaint_category_llm": "PAY", "complaint_subcategory_llm": "CARD"},
+        ]
+    )
+    out = _build_time_scatter_frame(df, val_from="2025-01-02 00:00:00", val_to="2025-01-02 23:59:59")
+    assert len(out) == 1
+    assert out.iloc[0]["day"].strftime("%Y-%m-%d") == "2025-01-02"
+    assert int(out.iloc[0]["category_count"]) == 1
+    assert int(out.iloc[0]["subcategory_count"]) == 1
