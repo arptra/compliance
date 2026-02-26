@@ -29,6 +29,21 @@ def _non_empty(v) -> bool:
     return bool(s and s.lower() not in {"nan", "none", "null"})
 
 
+def _is_meaningful_text(text: str, min_words: int = 3, min_chars: int = 12) -> bool:
+    s = str(text or "").strip()
+    if len(s) < min_chars:
+        return False
+    words = [w for w in s.replace("\n", " ").split() if w.strip()]
+    return len(words) >= min_words
+
+
+def _best_non_empty_text(*values: str) -> str:
+    for v in values:
+        if _non_empty(v):
+            return str(v).strip()
+    return ""
+
+
 def _get_dialog_fields(cfg: ProjectConfig, df: pd.DataFrame) -> list[str]:
     fields = []
     if cfg.input.dialog_columns:
@@ -320,6 +335,29 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     df["dialog_context_map"] = selected.apply(lambda x: json.dumps(x[2], ensure_ascii=False))
 
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
+    fallback_values = [
+        _best_non_empty_text(row.get("raw_dialog"), " ".join(json.loads(row.get("dialog_context_map", "{}")).values()))
+        for _, row in df.iterrows()
+    ]
+    df["raw_dialog_fallback"] = fallback_values
+    df["raw_dialog"] = df["raw_dialog_fallback"]
+    df["client_first_message"] = df.apply(
+        lambda r: _best_non_empty_text(r.get("client_first_message"), r.get("raw_dialog")),
+        axis=1,
+    )
+    df["raw_dialog_meaningful"] = df["raw_dialog"].apply(_is_meaningful_text)
+    df["client_first_message_meaningful"] = df["client_first_message"].apply(_is_meaningful_text)
+    df["text_quality_issue"] = df.apply(
+        lambda r: "; ".join(
+            x
+            for x in [
+                "raw_dialog_empty_or_short" if not r.get("raw_dialog_meaningful", False) else "",
+                "client_first_empty_or_short" if not r.get("client_first_message_meaningful", False) else "",
+            ]
+            if x
+        ),
+        axis=1,
+    )
     if cfg.pii.enabled:
         df["client_first_message_redacted"] = df["client_first_message"].apply(lambda x: redact_pii(x, cfg.pii))
         df["dialog_context_map_redacted"] = df["dialog_context_map"].apply(
@@ -379,7 +417,8 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     if pilot:
         review_cols = [
             "row_id", "month", "dialog_source_field", "raw_dialog", "client_first_message", "short_summary_llm", "is_complaint_llm", "complaint_category_llm",
-            "complaint_subcategory_llm", "loan_product_llm", "severity_llm", "keywords_llm", "confidence_llm", "llm_error",
+            "complaint_subcategory_llm", "loan_product_llm", "severity_llm", "keywords_llm", "confidence_llm", "llm_error", "raw_dialog_meaningful",
+            "client_first_message_meaningful", "text_quality_issue",
         ]
         review = out_df[[c for c in review_cols if c in out_df.columns]].copy()
         review["is_complaint_gold"] = ""
