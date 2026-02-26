@@ -145,3 +145,47 @@ def test_prepare_marks_non_meaningful_text_columns(tmp_path):
     assert "client_first_message_meaningful" in out.columns
     assert "text_quality_issue" in out.columns
     assert out["text_quality_issue"].astype(str).str.contains("empty_or_short").any()
+
+
+def test_prepare_skips_rows_where_all_dialog_columns_are_empty(tmp_path):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.llm.enabled = False
+    cfg.input.signal_columns = ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text", "call_text", "comment_text", "summary_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        [
+            {
+                "created_at": "2025-02-01 10:00:00",
+                "dialog_text": "",
+                "call_text": None,
+                "comment_text": "   ",
+                "summary_text": None,
+                "subject": "s",
+                "channel": "chat",
+                "product": "app",
+                "status": "x",
+            },
+            {
+                "created_at": "2025-02-02 10:00:00",
+                "dialog_text": "",
+                "call_text": "CLIENT: не могу войти",
+                "comment_text": "",
+                "summary_text": "",
+                "subject": "s",
+                "channel": "chat",
+                "product": "app",
+                "status": "x",
+            },
+        ]
+    ).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    out = prepare_dataset(cfg, pilot=False, llm_mock=True)
+    assert len(out) == 1
+    assert out.iloc[0]["raw_dialog"]

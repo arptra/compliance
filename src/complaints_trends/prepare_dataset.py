@@ -75,6 +75,13 @@ def _select_primary_dialog(row: pd.Series, dialog_fields: list[str]) -> tuple[st
     return best_field, best_text, snippets
 
 
+def _has_any_non_empty_dialog(row: pd.Series, dialog_fields: list[str]) -> bool:
+    for c in dialog_fields:
+        if _non_empty(row.get(c, "")):
+            return True
+    return False
+
+
 
 
 def _build_signal_payload(row: pd.Series, signal_columns: list[str], dialog_fields: list[str]) -> dict[str, str]:
@@ -328,6 +335,16 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields]) if c in df.columns]
     for c in text_like_cols:
         df[c] = df[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
+
+    has_dialog_mask = df.apply(lambda r: _has_any_non_empty_dialog(r, dialog_fields), axis=1)
+    dropped = int((~has_dialog_mask).sum())
+    if dropped:
+        logger.warning(
+            "[stage=prepare] dropped rows with empty dialog columns (%s): %s",
+            ", ".join(dialog_fields),
+            dropped,
+        )
+    df = df[has_dialog_mask].copy()
 
     selected = df.apply(lambda r: _select_primary_dialog(r, dialog_fields), axis=1)
     df["dialog_source_field"] = selected.apply(lambda x: x[0])
