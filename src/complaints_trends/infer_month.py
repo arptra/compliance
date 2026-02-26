@@ -70,6 +70,39 @@ def _select_infer_text_field(df: pd.DataFrame, cfg: ProjectConfig) -> tuple[pd.S
     )
     return df["client_first_message"].fillna("").astype(str), f"client_first_message (fallback from {preferred})"
 
+
+def _predict_subcategories_by_category(
+    x,
+    idx_mask: np.ndarray,
+    categories: np.ndarray,
+    fallback_subcat_model,
+    fallback_subcat_enc,
+    models_by_category: dict | None,
+) -> np.ndarray:
+    out = np.array(["NOT_COMPLAINT"] * len(categories), dtype=object)
+    if not idx_mask.any():
+        return out
+
+    if models_by_category:
+        complaint_idx = np.where(idx_mask)[0]
+        for i in complaint_idx.tolist():
+            cat = str(categories[i])
+            spec = models_by_category.get(cat)
+            if not spec:
+                continue
+            if spec.get("mode") == "constant":
+                out[i] = str(spec.get("value", "UNKNOWN"))
+                continue
+            if spec.get("mode") == "model" and spec.get("model") is not None and spec.get("encoder") is not None:
+                pred = spec["encoder"].inverse_transform(spec["model"].predict(x[i]))[0]
+                out[i] = str(pred)
+
+    unresolved = idx_mask & (out == "NOT_COMPLAINT")
+    if unresolved.any() and fallback_subcat_model is not None and fallback_subcat_enc is not None:
+        out[unresolved] = fallback_subcat_enc.inverse_transform(fallback_subcat_model.predict(x[unresolved]))
+    out[unresolved & (out == "NOT_COMPLAINT")] = "UNKNOWN"
+    return out
+
 def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame:
     df = load_excel_with_month(Path(excel_path), cfg.input)
     df["month"] = month
@@ -92,8 +125,10 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     enc = joblib.load(mdir / "label_encoder.joblib")
     subcat_model_path = mdir / "subcategory_model.joblib"
     subcat_enc_path = mdir / "subcategory_label_encoder.joblib"
+    subcat_by_cat_path = mdir / "subcategory_models_by_category.joblib"
     subcat_model = joblib.load(subcat_model_path) if subcat_model_path.exists() else None
     subcat_enc = joblib.load(subcat_enc_path) if subcat_enc_path.exists() else None
+    subcat_models_by_category = joblib.load(subcat_by_cat_path) if subcat_by_cat_path.exists() else None
 
     x = vec.transform(df["text_clean"])
     if hasattr(complaint_model, "predict_proba"):
@@ -112,9 +147,14 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
         cat_pred[idx] = enc.classes_[0]
     df["category_pred"] = cat_pred
 
-    subcat_pred = np.array(["NOT_COMPLAINT"] * len(df), dtype=object)
-    if idx.any() and subcat_model is not None and subcat_enc is not None:
-        subcat_pred[idx] = subcat_enc.inverse_transform(subcat_model.predict(x[idx]))
+    subcat_pred = _predict_subcategories_by_category(
+        x=x,
+        idx_mask=idx,
+        categories=cat_pred,
+        fallback_subcat_model=subcat_model,
+        fallback_subcat_enc=subcat_enc,
+        models_by_category=subcat_models_by_category,
+    )
     subcat_pred = _enforce_subcategory_taxonomy(cat_pred, subcat_pred, taxonomy)
     df["subcategory_pred"] = subcat_pred
 

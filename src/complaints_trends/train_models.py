@@ -263,6 +263,7 @@ def train(cfg: ProjectConfig) -> dict:
 
     subcat_model = None
     subcat_enc = None
+    subcat_models_by_category: dict[str, dict] = {}
     if "complaint_subcategory_llm" in ctrain.columns:
         ysub_train = ctrain["complaint_subcategory_llm"].replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).values
         ysub_val = cval["complaint_subcategory_llm"].replace({None: "UNKNOWN", "": "UNKNOWN"}).astype(str).values if len(cval) else np.array([])
@@ -277,6 +278,28 @@ def train(cfg: ProjectConfig) -> dict:
         else:
             metrics["subcategory_macro_f1"] = 0.0
 
+        # Category-conditioned subcategory models for stable inference by predicted category.
+        for cat in sorted(set(ycat_train.tolist())):
+            cat_mask = ycat_train == cat
+            x_cat_local = x_cat_train[cat_mask]
+            y_sub_local = ysub_train[cat_mask]
+            if len(y_sub_local) == 0:
+                continue
+            local_enc = LabelEncoder().fit(y_sub_local)
+            if len(local_enc.classes_) >= 2:
+                local_model = LogisticRegression(max_iter=2500, class_weight="balanced")
+                local_model.fit(x_cat_local, local_enc.transform(y_sub_local))
+                subcat_models_by_category[str(cat)] = {
+                    "mode": "model",
+                    "model": local_model,
+                    "encoder": local_enc,
+                }
+            else:
+                subcat_models_by_category[str(cat)] = {
+                    "mode": "constant",
+                    "value": str(local_enc.classes_[0]),
+                }
+
     mdir = Path(cfg.training.model_dir)
     mdir.mkdir(parents=True, exist_ok=True)
     joblib.dump(vec, mdir / "vectorizers.joblib")
@@ -286,6 +309,8 @@ def train(cfg: ProjectConfig) -> dict:
     if subcat_model is not None and subcat_enc is not None:
         joblib.dump(subcat_model, mdir / "subcategory_model.joblib")
         joblib.dump(subcat_enc, mdir / "subcategory_label_encoder.joblib")
+    if subcat_models_by_category:
+        joblib.dump(subcat_models_by_category, mdir / "subcategory_models_by_category.joblib")
     (mdir / "training_metadata.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
     render_template("training_report.html.j2", "reports/training_report.html", {"metrics": metrics, "charts": charts})

@@ -56,6 +56,7 @@ def test_train_generates_human_report_and_charts(tmp_path):
     assert "Основные метрики" in md
     assert Path(cfg.training.model_dir, "subcategory_model.joblib").exists()
     assert Path(cfg.training.model_dir, "subcategory_label_encoder.joblib").exists()
+    assert Path(cfg.training.model_dir, "subcategory_models_by_category.joblib").exists()
 
 
 def test_build_time_scatter_frame_respects_validation_window():

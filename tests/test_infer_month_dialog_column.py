@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.infer_month import _enforce_subcategory_taxonomy, _select_infer_text_field, infer_month
+from complaints_trends.infer_month import _enforce_subcategory_taxonomy, _predict_subcategories_by_category, _select_infer_text_field, infer_month
 
 
 class _FakeVec:
@@ -55,7 +55,7 @@ def test_infer_month_works_when_dialog_column_is_none(tmp_path, monkeypatch):
     assert "raw_dialog" in out.columns
     assert "subcategory_pred" in out.columns
     assert out["category_pred"].eq("OTHER").all()
-    assert out["subcategory_pred"].eq("NOT_COMPLAINT").all()
+    assert out["subcategory_pred"].eq("UNKNOWN").all()
     assert Path("reports/month_2025-02_category_hist.png").exists()
     assert Path("reports/month_2025-02_subcategory_hist.png").exists()
     html = Path("reports/month_report_2025-02.html").read_text(encoding="utf-8")
@@ -162,3 +162,40 @@ def test_select_infer_text_field_falls_back_to_client_message_when_column_missin
     series, used = _select_infer_text_field(df, cfg)
     assert used == "client_first_message (fallback from dialog_text)"
     assert series.tolist() == ["C1", "C2"]
+
+
+class _OneRowModel:
+    def __init__(self, val):
+        self.val = val
+
+    def predict(self, x):
+        return np.array([self.val], dtype=int)
+
+
+class _OneRowEnc:
+    def __init__(self, val):
+        self.val = val
+
+    def inverse_transform(self, x):
+        return np.array([self.val], dtype=object)
+
+
+def test_predict_subcategories_by_category_prefers_category_specific_model():
+    x = np.zeros((2, 1))
+    idx = np.array([True, True])
+    categories = np.array(["TECHNICAL", "PAYMENTS_TRANSFERS"], dtype=object)
+
+    models_by_cat = {
+        "TECHNICAL": {"mode": "constant", "value": "login_issue"},
+        "PAYMENTS_TRANSFERS": {"mode": "constant", "value": "payment_error"},
+    }
+
+    out = _predict_subcategories_by_category(
+        x=x,
+        idx_mask=idx,
+        categories=categories,
+        fallback_subcat_model=None,
+        fallback_subcat_enc=None,
+        models_by_category=models_by_cat,
+    )
+    assert out.tolist() == ["login_issue", "payment_error"]
