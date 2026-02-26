@@ -121,8 +121,43 @@ def test_infer_month_does_not_convert_empty_dialogs_to_nan_string(tmp_path, monk
     monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
 
     out = infer_month(cfg, str(excel), "2025-04")
-    assert out["raw_dialog"].eq("").all()
-    assert out["client_first_message"].eq("").all()
+    assert len(out) == 0
+
+
+def test_infer_month_skips_rows_when_all_dialog_columns_empty(tmp_path, monkeypatch):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
+    cfg.input.dialog_columns = ["dialog_text", "call_text", "comment_text", "summary_text"]
+
+    excel = tmp_path / "month_skip_empty.xlsx"
+    pd.DataFrame(
+        [
+            {
+                "created_at": "2025-02-01 10:00:00",
+                "dialog_text": "",
+                "call_text": None,
+                "comment_text": " ",
+                "summary_text": None,
+            },
+            {
+                "created_at": "2025-02-02 11:00:00",
+                "dialog_text": "",
+                "call_text": "CLIENT: не проходит платеж",
+                "comment_text": "",
+                "summary_text": "",
+            },
+        ]
+    ).to_excel(excel, index=False)
+
+    objs = [_FakeVec(), _FakeComplaintModel(), _FakeCatModel(), _FakeEnc()]
+
+    def _fake_load(_):
+        return objs.pop(0)
+
+    monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
+
+    out = infer_month(cfg, str(excel), "2025-05")
+    assert len(out) == 1
 
 
 

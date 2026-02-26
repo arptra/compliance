@@ -108,6 +108,43 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     df["month"] = month
     df["row_id"] = [f"new_{i}" for i in range(len(df))]
     dialog_col = _infer_dialog_column(df, cfg)
+    dialog_fields = _dialog_fields_for_infer(df, cfg, dialog_col)
+    has_dialog_mask = df.apply(lambda r: _row_has_any_dialog(r, dialog_fields), axis=1)
+    dropped = int((~has_dialog_mask).sum())
+    if dropped:
+        logger.warning(
+            "[stage=infer-month] dropped rows with empty dialog columns (%s): %s",
+            ", ".join(dialog_fields),
+            dropped,
+        )
+    df = df[has_dialog_mask].copy()
+
+    if df.empty:
+        out_xlsx = f"exports/month_labeled_{month}.xlsx"
+        out_parq = f"data/interim/month_{month}.parquet"
+        Path(out_xlsx).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_parq).parent.mkdir(parents=True, exist_ok=True)
+        df.to_excel(out_xlsx, index=False)
+        _sanitize_for_parquet(df).to_parquet(out_parq, index=False)
+        render_template("month_report.html.j2", f"reports/month_report_{month}.html", {
+            "month": month,
+            "dialog_column_used": dialog_col,
+            "model_text_field": cfg.training.text_field,
+            "infer_text_field_used": cfg.training.text_field,
+            "rows_total": 0,
+            "rows_complaints": 0,
+            "empty_dialog_share": 0.0,
+            "empty_client_message_share": 0.0,
+            "complaint_share": 0.0,
+            "top_categories": {},
+            "top_subcategories": {},
+            "subcategory_filtering": "taxonomy_enforced",
+            "category_histogram": "",
+            "subcategory_histogram": "",
+            "examples": [],
+        })
+        return df
+
     df["raw_dialog"] = df[dialog_col].fillna("").astype(str)
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
 
@@ -217,3 +254,28 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
         "examples": complaints_df.head(50).to_dict(orient="records"),
     })
     return df
+def _non_empty(v) -> bool:
+    if v is None:
+        return False
+    s = str(v).strip()
+    return bool(s and s.lower() not in {"nan", "none", "null"})
+
+
+def _dialog_fields_for_infer(df: pd.DataFrame, cfg: ProjectConfig, dialog_col: str) -> list[str]:
+    fields: list[str] = []
+    if cfg.input.dialog_columns:
+        fields.extend([c for c in cfg.input.dialog_columns if c in df.columns])
+    if cfg.input.dialog_column and cfg.input.dialog_column in df.columns:
+        fields.append(cfg.input.dialog_column)
+    if dialog_col not in fields:
+        fields.append(dialog_col)
+    dedup: list[str] = []
+    for c in fields:
+        if c not in dedup:
+            dedup.append(c)
+    return dedup
+
+
+def _row_has_any_dialog(row: pd.Series, dialog_fields: list[str]) -> bool:
+    return any(_non_empty(row.get(c, "")) for c in dialog_fields)
+
