@@ -245,9 +245,13 @@ def test_discover_mode_prompt_contains_existing_categories(tmp_path):
     )
     n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
     n.discovered_categories = ["payments_issue"]
+    n.discovered_subcategories_by_category = {"payments_issue": ["card_declined"]}
     p = n._single_user_prompt({"full_dialog_text": "text"})
-    assert "normalize_ticket_discover_categories" in p
+    assert "discover_and_normalize_ticket" in p
+    assert "you_must_discover_categories_yourself" in p
     assert "payments_issue" in p
+    assert "card_declined" in p
+    assert "allowed_categories" not in p
 
 
 def test_discover_mode_remembers_new_categories(tmp_path):
@@ -281,3 +285,33 @@ def test_discover_mode_remembers_new_categories(tmp_path):
     out = n.normalize({"full_dialog_text": "проблема с биллингом"})
     assert out.complaint_category == "new billing issue"
     assert "new_billing_issue" in n.discovered_categories
+    discovered_file = tmp_path / "disc.json"
+    cfg2 = cfg.model_copy(deep=True)
+    cfg2.discovered_taxonomy_file = str(discovered_file)
+    n2 = GigaChatNormalizer(cfg2, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n2.mock = False
+    n2.client = DiscoverClient()
+    n2.normalize({"full_dialog_text": "другая проблема"})
+    assert discovered_file.exists()
+    data = json.loads(discovered_file.read_text(encoding="utf-8"))
+    assert "new_billing_issue" in data.get("categories", [])
+
+
+def test_discover_mode_creates_empty_discovery_file_when_missing(tmp_path):
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="discover",
+        discovered_taxonomy_file=str(tmp_path / "disc.json"),
+    )
+    GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    assert (tmp_path / "disc.json").exists()
+    data = json.loads((tmp_path / "disc.json").read_text(encoding="utf-8"))
+    assert data.get("categories") == []

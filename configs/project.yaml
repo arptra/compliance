@@ -49,6 +49,7 @@ llm:
   async_mode: false
   parallel_mode: false
   category_mode: "taxonomy"  # taxonomy|discover
+  discovered_taxonomy_file: "data/interim/discovered_categories.json"
 
 prepare:
   pilot_limit: 5000

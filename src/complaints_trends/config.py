@@ -68,6 +68,7 @@ class LLMConfig(AppBaseModel):
     async_mode: bool = False
     parallel_mode: bool = False
     category_mode: Literal["taxonomy", "discover"] = "taxonomy"
+    discovered_taxonomy_file: str = "data/interim/discovered_categories.json"
 
 
 class PrepareConfig(AppBaseModel):

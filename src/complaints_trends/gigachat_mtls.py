@@ -124,6 +124,10 @@ def _normalize_code(s: str) -> str:
     return code or "other"
 
 
+def _normalize_subcategory_code(s: str) -> str:
+    return _normalize_code(s)
+
+
 def _normalize_error_with_tls_hint(cfg: LLMConfig, e: Exception, *, phase: str) -> RuntimeError | None:
     msg = str(e)
     if "TLSV13_ALERT_CERTIFICATE_REQUIRED" not in msg and "certificate required" not in msg.lower():
@@ -251,7 +255,10 @@ class GigaChatNormalizer:
             self.taxonomy_raw = {}
 
         self.category_mode = getattr(cfg, "category_mode", "taxonomy")
+        self.discovered_taxonomy_file = Path(getattr(cfg, "discovered_taxonomy_file", "data/interim/discovered_categories.json"))
         self.discovered_categories: list[str] = []
+        self.discovered_subcategories_by_category: dict[str, list[str]] = {}
+        self._load_discovered_taxonomy()
 
         if not mock:
             if cfg.mode == "mtls":
@@ -282,16 +289,22 @@ class GigaChatNormalizer:
         if self.category_mode == "discover":
             return json.dumps(
                 {
-                    "task": "normalize_ticket_discover_categories",
+                    "task": "discover_and_normalize_ticket",
                     "rules": {
-                        "choose_or_create_category": True,
-                        "if_possible_reuse_previous_category": True,
-                        "if_no_match_create_new_short_category_code": True,
-                        "category_code_format": "snake_case_ascii",
+                        "you_must_discover_categories_yourself": True,
+                        "do_not_use_external_taxonomy": True,
+                        "reuse_existing_discovered_categories_when_semantically_close": True,
+                        "if_no_semantic_match_create_new_category": True,
+                        "category_code_format": "snake_case_ascii_short",
+                        "subcategory_code_format": "snake_case_ascii_short",
+                        "return_category_and_subcategory_codes": True,
                         "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
                         "ignore_empty_context_fields": True,
                     },
-                    "existing_categories": sorted(set([*self.categories, *self.discovered_categories])),
+                    "existing_discovered_taxonomy": {
+                        "categories": sorted(set(self.discovered_categories)),
+                        "subcategories_by_category": self.discovered_subcategories_by_category,
+                    },
                     "input": self._llm_input(payload),
                 },
                 ensure_ascii=False,
@@ -320,15 +333,66 @@ class GigaChatNormalizer:
         if self.category_mode != "discover":
             return
         cat = None
+        sub = None
         if isinstance(parsed_or_obj, dict):
             cat = parsed_or_obj.get("complaint_category") or parsed_or_obj.get("category")
+            sub = parsed_or_obj.get("complaint_subcategory") or parsed_or_obj.get("subcategory")
         else:
             cat = getattr(parsed_or_obj, "complaint_category", None)
+            sub = getattr(parsed_or_obj, "complaint_subcategory", None)
         if not cat:
             return
         code = _normalize_code(cat)
         if code not in self.discovered_categories:
             self.discovered_categories.append(code)
+        if sub:
+            sub_code = _normalize_subcategory_code(sub)
+            self.discovered_subcategories_by_category.setdefault(code, [])
+            if sub_code not in self.discovered_subcategories_by_category[code]:
+                self.discovered_subcategories_by_category[code].append(sub_code)
+        self._save_discovered_taxonomy()
+
+    def _load_discovered_taxonomy(self) -> None:
+        if self.category_mode != "discover":
+            return
+        p = self.discovered_taxonomy_file
+        if not p.exists() or p.stat().st_size == 0:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"categories": [], "subcategories_by_category": {}}, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.discovered_categories = []
+            self.discovered_subcategories_by_category = {}
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"categories": [], "subcategories_by_category": {}}
+        cats = data.get("categories", []) if isinstance(data, dict) else []
+        subs = data.get("subcategories_by_category", {}) if isinstance(data, dict) else {}
+        self.discovered_categories = [_normalize_code(x) for x in cats if str(x).strip()]
+        fixed_subs: dict[str, list[str]] = {}
+        if isinstance(subs, dict):
+            for k, v in subs.items():
+                kc = _normalize_code(k)
+                vals = v if isinstance(v, list) else []
+                fixed_subs[kc] = [_normalize_subcategory_code(x) for x in vals if str(x).strip()]
+        self.discovered_subcategories_by_category = fixed_subs
+
+    def _save_discovered_taxonomy(self) -> None:
+        if self.category_mode != "discover":
+            return
+        p = self.discovered_taxonomy_file
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(
+                {
+                    "categories": sorted(set(self.discovered_categories)),
+                    "subcategories_by_category": {k: sorted(set(v)) for k, v in self.discovered_subcategories_by_category.items()},
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def estimate_tokens(self, payload: dict) -> int:
         prompt = self._single_user_prompt(payload)
