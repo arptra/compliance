@@ -70,8 +70,11 @@ vectorizer:
   max_features: 200000
 
 clustering:
+  model: "minibatch_kmeans"   # minibatch_kmeans | kmeans | birch
   n_clusters: 30
   batch_size: 4096
+  birch_threshold: 0.5
+  birch_branching_factor: 50
   top_terms: 12
   examples_per_cluster: 8
 

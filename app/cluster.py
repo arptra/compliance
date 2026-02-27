@@ -7,26 +7,60 @@ import joblib
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
-from sklearn.cluster import MiniBatchKMeans
+from sklearn.cluster import Birch, KMeans, MiniBatchKMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from app.preprocess import TextPreprocessor
 
 
-def train_cluster_model(x_baseline: csr_matrix, cfg: Dict) -> MiniBatchKMeans:
+def _compute_centers_from_labels(x: csr_matrix, labels: np.ndarray) -> np.ndarray:
+    uniq = np.unique(labels)
+    centers = []
+    for cid in uniq:
+        mask = labels == cid
+        if mask.sum() == 0:
+            continue
+        centers.append(np.asarray(x[mask].mean(axis=0)).ravel())
+    return np.vstack(centers) if centers else np.zeros((1, x.shape[1]))
+
+
+def train_cluster_model(x_baseline: csr_matrix, cfg: Dict):
     ccfg = cfg["clustering"]
-    model = MiniBatchKMeans(
-        n_clusters=ccfg.get("n_clusters", 30),
-        batch_size=ccfg.get("batch_size", 4096),
-        random_state=cfg.get("random_state", 42),
-        n_init="auto",
-    )
+    model_name = ccfg.get("model", "minibatch_kmeans")
+    rs = cfg.get("random_state", 42)
+
+    if model_name == "kmeans":
+        model = KMeans(
+            n_clusters=ccfg.get("n_clusters", 30),
+            random_state=rs,
+            n_init="auto",
+        )
+    elif model_name == "birch":
+        model = Birch(
+            threshold=ccfg.get("birch_threshold", 0.5),
+            branching_factor=ccfg.get("birch_branching_factor", 50),
+            n_clusters=ccfg.get("n_clusters", 30),
+        )
+    else:
+        model = MiniBatchKMeans(
+            n_clusters=ccfg.get("n_clusters", 30),
+            batch_size=ccfg.get("batch_size", 4096),
+            random_state=rs,
+            n_init="auto",
+        )
+
     model.fit(x_baseline)
+
+    # Ensure we always have cluster_centers_ for downstream cosine-sim calculations
+    if not hasattr(model, "cluster_centers_"):
+        labels = model.predict(x_baseline)
+        model.cluster_centers_ = _compute_centers_from_labels(x_baseline, labels)
+
     return model
 
 
-def assign_clusters(x: csr_matrix, model: MiniBatchKMeans) -> Tuple[np.ndarray, np.ndarray]:
+def assign_clusters(x: csr_matrix, model) -> Tuple[np.ndarray, np.ndarray]:
     cluster_ids = model.predict(x)
     sims = cosine_similarity(x, model.cluster_centers_)
     max_sims = sims.max(axis=1)
@@ -81,7 +115,7 @@ def cluster_summaries(
     x_baseline: csr_matrix,
     texts: List[str],
     cluster_ids: np.ndarray,
-    model: MiniBatchKMeans,
+    model,
     feature_names: np.ndarray,
     cfg: Dict,
     preprocessor: TextPreprocessor,
@@ -92,22 +126,23 @@ def cluster_summaries(
     ex_n = scfg.get("examples_per_cluster", ccfg.get("examples_per_cluster", 8))
     use_ctfidf = scfg.get("use_ctfidf", True)
 
+    n_clusters = len(np.unique(cluster_ids))
     ctfidf_terms = (
-        _top_terms_ctfidf(texts, cluster_ids, model.n_clusters, preprocessor, top_n)
+        _top_terms_ctfidf(texts, cluster_ids, n_clusters, preprocessor, top_n)
         if use_ctfidf
         else {}
     )
 
     rows = []
-    for cid in range(model.n_clusters):
+    for cid in sorted(np.unique(cluster_ids)):
         idx = np.where(cluster_ids == cid)[0]
         if len(idx) == 0:
-            rows.append({"cluster_id": cid, "size": 0, "top_terms": "", "example_messages": ""})
+            rows.append({"cluster_id": int(cid), "size": 0, "top_terms": "", "example_messages": ""})
             continue
 
-        terms = ctfidf_terms.get(cid, [])
+        terms = ctfidf_terms.get(int(cid), [])
         if not terms:
-            centroid = model.cluster_centers_[cid]
+            centroid = model.cluster_centers_[int(cid)] if int(cid) < model.cluster_centers_.shape[0] else model.cluster_centers_[0]
             term_ids = np.argsort(centroid)[::-1]
             filtered = []
             for tid in term_ids:
@@ -121,7 +156,7 @@ def cluster_summaries(
         examples = " || ".join(texts[i][:200] for i in idx[:ex_n])
         rows.append(
             {
-                "cluster_id": cid,
+                "cluster_id": int(cid),
                 "size": int(len(idx)),
                 "top_terms": ", ".join(terms),
                 "example_messages": examples,
@@ -131,7 +166,7 @@ def cluster_summaries(
 
 
 def save_cluster_artifacts(
-    model: MiniBatchKMeans,
+    model,
     summary_df: pd.DataFrame,
     model_dir: str | Path,
     reports_dir: str | Path,
