@@ -114,6 +114,16 @@ def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
     }
 
 
+def _normalize_code(s: str) -> str:
+    v = str(s or "").strip().lower().replace("-", "_").replace(" ", "_")
+    out = []
+    for ch in v:
+        if ch.isalnum() or ch == "_":
+            out.append(ch)
+    code = "".join(out).strip("_")
+    return code or "other"
+
+
 def _normalize_error_with_tls_hint(cfg: LLMConfig, e: Exception, *, phase: str) -> RuntimeError | None:
     msg = str(e)
     if "TLSV13_ALERT_CERTIFICATE_REQUIRED" not in msg and "certificate required" not in msg.lower():
@@ -240,6 +250,9 @@ class GigaChatNormalizer:
             self.loan_products = ["NONE"]
             self.taxonomy_raw = {}
 
+        self.category_mode = getattr(cfg, "category_mode", "taxonomy")
+        self.discovered_categories: list[str] = []
+
         if not mock:
             if cfg.mode == "mtls":
                 _validate_mtls_files(cfg.ca_bundle_file, cfg.cert_file, cfg.key_file)
@@ -266,6 +279,23 @@ class GigaChatNormalizer:
         return {k: v for k, v in payload.items() if k != "client_first_message"}
 
     def _single_user_prompt(self, payload: dict) -> str:
+        if self.category_mode == "discover":
+            return json.dumps(
+                {
+                    "task": "normalize_ticket_discover_categories",
+                    "rules": {
+                        "choose_or_create_category": True,
+                        "if_possible_reuse_previous_category": True,
+                        "if_no_match_create_new_short_category_code": True,
+                        "category_code_format": "snake_case_ascii",
+                        "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                        "ignore_empty_context_fields": True,
+                    },
+                    "existing_categories": sorted(set([*self.categories, *self.discovered_categories])),
+                    "input": self._llm_input(payload),
+                },
+                ensure_ascii=False,
+            )
         return json.dumps(
             {
                 "task": "normalize_ticket",
@@ -285,6 +315,20 @@ class GigaChatNormalizer:
             },
             ensure_ascii=False,
         )
+
+    def _remember_discovered_category(self, parsed_or_obj) -> None:
+        if self.category_mode != "discover":
+            return
+        cat = None
+        if isinstance(parsed_or_obj, dict):
+            cat = parsed_or_obj.get("complaint_category") or parsed_or_obj.get("category")
+        else:
+            cat = getattr(parsed_or_obj, "complaint_category", None)
+        if not cat:
+            return
+        code = _normalize_code(cat)
+        if code not in self.discovered_categories:
+            self.discovered_categories.append(code)
 
     def estimate_tokens(self, payload: dict) -> int:
         prompt = self._single_user_prompt(payload)
@@ -409,6 +453,7 @@ class GigaChatNormalizer:
                     leftovers.append(item)
                     continue
                 obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                self._remember_discovered_category(item)
                 self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
                 results[idx] = obj
                 assigned.add(idx)
@@ -416,6 +461,7 @@ class GigaChatNormalizer:
             unassigned_pending = [idx for idx in batch_indexes if idx not in assigned]
             for idx, item in zip(unassigned_pending, leftovers):
                 obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                self._remember_discovered_category(item)
                 self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
                 results[idx] = obj
                 assigned.add(idx)
@@ -492,6 +538,7 @@ class GigaChatNormalizer:
         try:
             parsed = json.loads(content)
             obj = NormalizeTicket.model_validate(_coerce_response_fields(parsed, payload))
+            self._remember_discovered_category(parsed)
         except Exception:
             repair_prompt = f"Исправь: верни JSON по схеме, убери запрещенные токены.\n{content}"
             try:
@@ -511,5 +558,6 @@ class GigaChatNormalizer:
                 raise
             repaired = json.loads(response2.choices[0].message.content)
             obj = NormalizeTicket.model_validate(_coerce_response_fields(repaired, payload))
+            self._remember_discovered_category(repaired)
         self.cache.set(k, obj.model_dump())
         return obj

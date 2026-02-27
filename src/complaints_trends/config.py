@@ -67,6 +67,7 @@ class LLMConfig(AppBaseModel):
     request_metrics_enabled: bool = True
     async_mode: bool = False
     parallel_mode: bool = False
+    category_mode: Literal["taxonomy", "discover"] = "taxonomy"
 
 
 class PrepareConfig(AppBaseModel):

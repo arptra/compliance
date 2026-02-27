@@ -228,3 +228,56 @@ def test_request_metrics_can_be_disabled(tmp_path):
 
     out = n.normalize({"full_dialog_text": "привет"})
     assert out.complaint_category == "OTHER"
+
+
+def test_discover_mode_prompt_contains_existing_categories(tmp_path):
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="discover",
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.discovered_categories = ["payments_issue"]
+    p = n._single_user_prompt({"full_dialog_text": "text"})
+    assert "normalize_ticket_discover_categories" in p
+    assert "payments_issue" in p
+
+
+def test_discover_mode_remembers_new_categories(tmp_path):
+    class DiscoverClient:
+        def chat(self, payload):
+            body = {
+                "category": "new billing issue",
+                "is_complaint": True,
+                "loan_product": "NONE",
+                "severity": "medium",
+                "keywords": ["ошибка", "оплата", "billing"],
+                "confidence": 0.8,
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="discover",
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = DiscoverClient()
+    out = n.normalize({"full_dialog_text": "проблема с биллингом"})
+    assert out.complaint_category == "new billing issue"
+    assert "new_billing_issue" in n.discovered_categories

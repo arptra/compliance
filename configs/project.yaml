@@ -48,6 +48,7 @@ llm:
   request_metrics_enabled: true
   async_mode: false
   parallel_mode: false
+  category_mode: "taxonomy"  # taxonomy|discover
 
 prepare:
   pilot_limit: 5000
