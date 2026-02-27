@@ -6,10 +6,14 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class InputConfig(BaseModel):
+class AppBaseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class InputConfig(AppBaseModel):
     input_dir: str
     file_glob: str = "*.xlsx"
     file_names: list[str] | None = None
@@ -22,7 +26,7 @@ class InputConfig(BaseModel):
     encoding: str = "utf-8"
 
 
-class ClientFirstConfig(BaseModel):
+class ClientFirstConfig(AppBaseModel):
     enabled: bool = True
     client_markers: list[str]
     operator_markers: list[str]
@@ -34,7 +38,7 @@ class ClientFirstConfig(BaseModel):
     take_second_client_if_too_short: bool = True
 
 
-class PIIConfig(BaseModel):
+class PIIConfig(AppBaseModel):
     enabled: bool = True
     replace_email: str = "<EMAIL>"
     replace_phone: str = "<PHONE>"
@@ -43,7 +47,7 @@ class PIIConfig(BaseModel):
     replace_account: str = "<ACCOUNT>"
 
 
-class LLMConfig(BaseModel):
+class LLMConfig(AppBaseModel):
     enabled: bool = True
     mode: Literal["mtls", "tls"] = "mtls"
     base_url: str
@@ -63,9 +67,10 @@ class LLMConfig(BaseModel):
     request_metrics_enabled: bool = True
     async_mode: bool = False
     parallel_mode: bool = False
+    category_mode: Literal["taxonomy", "discover"] = "taxonomy"
 
 
-class PrepareConfig(BaseModel):
+class PrepareConfig(AppBaseModel):
     pilot_limit: int = 5000
     date_from: str | None = None
     date_to: str | None = None
@@ -74,7 +79,7 @@ class PrepareConfig(BaseModel):
     pilot_review_xlsx: str
 
 
-class VectorizerConfig(BaseModel):
+class VectorizerConfig(AppBaseModel):
     word_ngram: tuple[int, int] = (1, 2)
     char_ngram: tuple[int, int] = (3, 5)
     max_features_word: int = 200000
@@ -83,18 +88,18 @@ class VectorizerConfig(BaseModel):
     max_df: float = 0.6
 
 
-class ClassifierConfig(BaseModel):
+class ClassifierConfig(AppBaseModel):
     complaint: Literal["logreg", "linearsvc"] = "logreg"
     category: Literal["linearsvc", "logreg"] = "linearsvc"
 
 
-class ValidationConfig(BaseModel):
+class ValidationConfig(AppBaseModel):
     split_mode: Literal["time", "random"] = "time"
     val_from: str | None = None
     val_to: str | None = None
 
 
-class TrainingConfig(BaseModel):
+class TrainingConfig(AppBaseModel):
     text_field: str = "client_first_message"
     complaint_threshold: float = 0.5
     vectorizer: VectorizerConfig = Field(default_factory=VectorizerConfig)
@@ -103,7 +108,7 @@ class TrainingConfig(BaseModel):
     model_dir: str = "models"
 
 
-class NoveltyConfig(BaseModel):
+class NoveltyConfig(AppBaseModel):
     enabled: bool = True
     method: Literal["kmeans_distance", "lof"] = "kmeans_distance"
     svd_components: int = 200
@@ -112,18 +117,18 @@ class NoveltyConfig(BaseModel):
     min_cluster_size: int = 20
 
 
-class AnalysisConfig(BaseModel):
+class AnalysisConfig(AppBaseModel):
     novelty: NoveltyConfig = Field(default_factory=NoveltyConfig)
     reports_dir: str = "reports"
 
 
-class FilesConfig(BaseModel):
+class FilesConfig(AppBaseModel):
     deny_tokens_path: str
     extra_stopwords_path: str
     categories_seed_path: str
 
 
-class ProjectConfig(BaseModel):
+class ProjectConfig(AppBaseModel):
     input: InputConfig
     client_first_extraction: ClientFirstConfig
     pii: PIIConfig
