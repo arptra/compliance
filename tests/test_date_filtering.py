@@ -189,3 +189,32 @@ def test_prepare_skips_rows_where_all_dialog_columns_are_empty(tmp_path):
     out = prepare_dataset(cfg, pilot=False, llm_mock=True)
     assert len(out) == 1
     assert out.iloc[0]["raw_dialog"]
+
+
+def test_prepare_exports_llm_payload_review_excel_with_assigned_category(tmp_path):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.prepare.llm_payload_review_xlsx = str(tmp_path / "llm_payload_review.xlsx")
+    cfg.llm.enabled = False
+    cfg.input.signal_columns = ["dialog_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-09 12:55:29", "dialog_text": "CLIENT: не работает перевод", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+            {"created_at": "2025-02-10 12:55:29", "dialog_text": "CLIENT: просто вопрос", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+        ]
+    ).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    prepare_dataset(cfg, pilot=False, llm_mock=True)
+
+    payload_review = pd.read_excel(cfg.prepare.llm_payload_review_xlsx)
+    assert "full_dialog_text" in payload_review.columns
+    assert "client_first_message" in payload_review.columns
+    assert "gigachat_assigned_category" in payload_review.columns
+    assert payload_review["gigachat_assigned_category"].notna().all()

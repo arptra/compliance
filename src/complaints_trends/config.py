@@ -78,6 +78,7 @@ class PrepareConfig(AppBaseModel):
     output_parquet: str
     pilot_parquet: str
     pilot_review_xlsx: str
+    llm_payload_review_xlsx: str = "exports/llm_payload_review.xlsx"
 
 
 class VectorizerConfig(AppBaseModel):

@@ -388,6 +388,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
     payloads: list[tuple[int, str, dict]] = []
+    payload_rows: list[dict] = []
     total_rows = len(df)
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
@@ -404,7 +405,9 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
             "channel": signal_fields.get("channel"),
             "status": signal_fields.get("status"),
         }
-        payloads.append((i - 1, str(row.get("row_id", i)), payload))
+        row_id = str(row.get("row_id", i))
+        payloads.append((i - 1, row_id, payload))
+        payload_rows.append({"_payload_index": i - 1, "row_id": row_id, **payload})
 
     if cfg.llm.async_mode:
         if cfg.llm.parallel_mode:
@@ -419,6 +422,19 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         llm_df = pd.DataFrame(columns=list(NormalizeTicket.model_fields.keys()))
     out_df = pd.concat([df.reset_index(drop=True), llm_df.add_suffix("_llm")], axis=1)
     out_df["llm_error"] = out_df.get("notes_llm", "").astype(str).where(out_df.get("notes_llm", "").astype(str).str.startswith("LLM_ERROR:"), "")
+
+    if payload_rows:
+        payload_df = pd.DataFrame(payload_rows)
+        payload_review = payload_df.merge(
+            out_df[[c for c in ["row_id", "complaint_category_llm"] if c in out_df.columns]],
+            on="row_id",
+            how="left",
+        )
+        payload_review = payload_review.rename(columns={"complaint_category_llm": "gigachat_assigned_category"})
+        payload_review = payload_review.drop(columns=["_payload_index"], errors="ignore")
+        payload_review_path = Path(cfg.prepare.llm_payload_review_xlsx)
+        payload_review_path.parent.mkdir(parents=True, exist_ok=True)
+        payload_review.to_excel(payload_review_path, index=False)
 
     out_path = cfg.prepare.pilot_parquet if pilot else cfg.prepare.output_parquet
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
