@@ -868,3 +868,43 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 - Добавить контроль дрейфа по токенам и каналам.
 - Добавить расширенные unit/integration тесты на реальные форматы диалогов.
 
+
+## 5.9 Визуальный анализ предсказаний (`viz-build`, `viz-view`)
+
+Добавлены две команды для офлайн визуальной аналитики (только `matplotlib`, без web/seaborn):
+
+### `viz-build`
+Строит витрину состояния + графики + markdown-отчёт.
+
+```bash
+python -m complaints_trends.cli viz-build \
+  --config configs/project.yaml \
+  --tag demo \
+  --label-source pred \
+  --freq D \
+  --top-n 8 \
+  --baseline-range 2025-10..2025-11 \
+  --new-month 2025-12
+```
+
+Артефакты:
+- `data/interim/all_predicted.parquet` (для `--label-source pred`, если отсутствует или `--force-materialize`)
+- `data/interim/viz_state_<tag>.parquet`
+- `data/interim/viz_meta_<tag>.json`
+- `reports/viz_<tag>/*.png`
+- `reports/viz_<tag>/report.md`
+
+Поддерживаются `--label-source pred|llm`, `--date-from/--date-to`, `--freq D|W|M`, `--top-n`.
+
+### `viz-view`
+Локальный интерактивный просмотр `viz_state`:
+- stacked area график,
+- фильтр категорий (CheckButtons),
+- диапазон дат (RangeSlider),
+- переключение метрики (`metric_count`/`metric_share`, RadioButtons).
+
+```bash
+python -m complaints_trends.cli viz-view --tag demo
+# или
+python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo.parquet
+```

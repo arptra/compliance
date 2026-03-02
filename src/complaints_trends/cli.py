@@ -13,6 +13,9 @@ from .infer_month import infer_month
 from .prepare_dataset import prepare_dataset
 from .train_models import train
 from .trends import build_trends
+from .viz.report import build_visual_report, materialize_predictions
+from .viz.state import VizPaths
+from .viz.viewer import run_viewer
 
 app = typer.Typer(help="complaints-trends CLI")
 console = Console()
@@ -111,6 +114,58 @@ def demo_cmd(config: str = typer.Option("configs/project.yaml", "--config", help
     compare_month(cfg, "2025-12", "2025-10..2025-11")
     logger.info("[stage=demo] done")
     console.log("Demo pipeline completed")
+
+
+@app.command("viz-build")
+def viz_build_cmd(
+    config: str = typer.Option(..., "--config", help="Path to project yaml config"),
+    tag: str = typer.Option("latest", "--tag"),
+    label_source: str = typer.Option("pred", "--label-source", help="pred|llm"),
+    freq: str = typer.Option("D", "--freq", help="D|W|M"),
+    top_n: int = typer.Option(12, "--top-n"),
+    date_from: str | None = typer.Option(None, "--date-from"),
+    date_to: str | None = typer.Option(None, "--date-to"),
+    baseline_range: str | None = typer.Option(None, "--baseline-range"),
+    new_month: str | None = typer.Option(None, "--new-month"),
+    force_materialize: bool = typer.Option(False, "--force-materialize"),
+):
+    logger.info("[stage=viz-build] start")
+    cfg = load_config(config)
+    if label_source not in {"pred", "llm"}:
+        raise typer.BadParameter("--label-source must be pred or llm")
+    if freq not in {"D", "W", "M"}:
+        raise typer.BadParameter("--freq must be D, W or M")
+
+    predicted_path = Path("data/interim/all_predicted.parquet")
+    if label_source == "pred" and (force_materialize or (not predicted_path.exists())):
+        materialize_predictions(cfg, cfg.prepare.output_parquet, predicted_path)
+
+    report_path, state_path = build_visual_report(
+        cfg=cfg,
+        tag=tag,
+        label_source=label_source,
+        date_from=date_from,
+        date_to=date_to,
+        baseline_range=baseline_range,
+        new_month=new_month,
+        top_n=top_n,
+        freq=freq,
+    )
+    logger.info("[stage=viz-build] done")
+    console.log(f"viz report: {report_path}")
+    console.log(f"viz state: {state_path}")
+
+
+@app.command("viz-view")
+def viz_view_cmd(
+    state: str | None = typer.Option(None, "--state"),
+    tag: str = typer.Option("latest", "--tag"),
+):
+    state_path = Path(state) if state else VizPaths(tag).state_parquet
+    if not state_path.exists():
+        raise typer.BadParameter(f"state parquet not found: {state_path}")
+    run_viewer(state_path, tag=tag)
+
 
 
 if __name__ == "__main__":
