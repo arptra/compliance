@@ -871,40 +871,85 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 
 ## 5.9 Визуальный анализ предсказаний (`viz-build`, `viz-view`)
 
-Добавлены две команды для офлайн визуальной аналитики (только `matplotlib`, без web/seaborn):
+Ниже — **полный рабочий флоу**, какие команды запускать и как интерпретировать графики.
 
-### `viz-build`
-Строит витрину состояния + графики + markdown-отчёт.
+### Что нужно, чтобы всё заработало
 
-```bash
-python -m complaints_trends.cli viz-build \
-  --config configs/project.yaml \
-  --tag demo \
-  --label-source pred \
-  --freq D \
-  --top-n 8 \
-  --baseline-range 2025-10..2025-11 \
-  --new-month 2025-12
-```
+Минимально:
+1. есть подготовленный датасет: `data/processed/all_prepared.parquet` (после `prepare`),
+2. для режима `--label-source pred` есть обученные модели (`models/*.joblib`) после `train`,
+3. для режима `--label-source llm` достаточно prepared parquet с LLM-колонками (`is_complaint_llm`, `complaint_category_llm`).
 
-Артефакты:
-- `data/interim/all_predicted.parquet` (для `--label-source pred`, если отсутствует или `--force-materialize`)
-- `data/interim/viz_state_<tag>.parquet`
-- `data/interim/viz_meta_<tag>.json`
-- `reports/viz_<tag>/*.png`
-- `reports/viz_<tag>/report.md`
-
-Поддерживаются `--label-source pred|llm`, `--date-from/--date-to`, `--freq D|W|M`, `--top-n`.
-
-### `viz-view`
-Локальный интерактивный просмотр `viz_state`:
-- stacked area график,
-- фильтр категорий (CheckButtons),
-- диапазон дат (RangeSlider),
-- переключение метрики (`metric_count`/`metric_share`, RadioButtons).
+### Команды (пошагово, с нуля)
 
 ```bash
-python -m complaints_trends.cli viz-view --tag demo
-# или
-python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo.parquet
+export PYTHONPATH=src
+
+# 1) Подготовка weak labels (LLM) и parquet
+python -m complaints_trends.cli prepare --config configs/project.yaml
+
+# 2) Обучение локальных моделей (нужно для label-source=pred)
+python -m complaints_trends.cli train --config configs/project.yaml
+
+# 3) Построение визуального отчёта по предсказаниям модели
+python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_pred   --label-source pred   --freq D   --top-n 8   --baseline-range 2025-10..2025-11   --new-month 2025-12
+
+# 4) (Опционально) Построение отчёта по weak labels LLM
+python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_llm   --label-source llm   --freq D   --top-n 8
+
+# 5) Интерактивный локальный просмотр (matplotlib GUI)
+python -m complaints_trends.cli viz-view --tag demo_pred
+# или явно путь
+python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo_pred.parquet
 ```
+
+### Что создаётся
+
+После `viz-build`:
+- `data/interim/all_predicted.parquet` (только для `--label-source pred`, если отсутствует или задан `--force-materialize`),
+- `data/interim/viz_state_<tag>.parquet` — агрегированная витрина,
+- `data/interim/viz_meta_<tag>.json` — параметры запуска,
+- `reports/viz_<tag>/stacked_area_counts.png`,
+- `reports/viz_<tag>/share_lines.png`,
+- `reports/viz_<tag>/pareto_categories.png`,
+- `reports/viz_<tag>/heatmap_dow_hour.png`,
+- `reports/viz_<tag>/delta_bars.png`,
+- `reports/viz_<tag>/report.md`.
+
+### Параметры `viz-build`
+
+- `--label-source pred|llm`
+  - `pred`: использовать локальные модели и materialize predictions,
+  - `llm`: использовать weak labels из prepared parquet.
+- `--freq D|W|M` — дневная/недельная/месячная агрегация.
+- `--top-n` — сколько категорий оставлять явно (остальные сворачиваются в `OTHER`).
+- `--date-from`, `--date-to` — фильтр периода.
+- `--baseline-range`, `--new-month` — для delta-графика изменений.
+- `--force-materialize` — пересоздать `all_predicted.parquet`.
+
+### Как анализировать графики
+
+1. **stacked_area_counts**
+   - показывает абсолютный объём жалоб по категориям во времени,
+   - ищите резкие всплески по отдельным категориям.
+2. **share_lines**
+   - показывает долю категорий среди жалоб,
+   - помогает отличать рост общего трафика от реального сдвига структуры.
+3. **pareto_categories**
+   - ранжирование категорий по объёму + кумулятивная линия,
+   - удобно выбирать приоритетные категории для улучшений.
+4. **heatmap_dow_hour**
+   - паттерн "день недели × час" для жалоб,
+   - помогает планировать операционные ресурсы/нагрузку.
+5. **delta_bars**
+   - вклад категорий в изменение между baseline и new month (в pp),
+   - быстрый ответ: какие категории дали основной рост/падение.
+
+### Быстрый troubleshooting
+
+- Ошибка про отсутствие `models/*.joblib` при `--label-source pred`:
+  сначала выполните `train`.
+- Пустые графики:
+  проверьте фильтр дат (`--date-from/--date-to`) и наличие `event_time` в исходных данных.
+- `viz-view` не открывает окно:
+  запускайте локально с доступным GUI backend matplotlib (не headless CI).
