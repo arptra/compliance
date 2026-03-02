@@ -894,10 +894,10 @@ python -m complaints_trends.cli train --config configs/project.yaml
 # 3) Построение визуального отчёта по предсказаниям модели
 python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_pred   --label-source pred   --freq D   --top-n 8   --baseline-range 2025-10..2025-11   --new-month 2025-12
 
-# 4) (Опционально) Построение отчёта по weak labels LLM
+# 5) (Опционально) Построение отчёта по weak labels LLM
 python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_llm   --label-source llm   --freq D   --top-n 8
 
-# 5) Интерактивный локальный просмотр (matplotlib GUI)
+# 6) Интерактивный локальный просмотр (matplotlib GUI)
 python -m complaints_trends.cli viz-view --tag demo_pred
 # или явно путь
 python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo_pred.parquet
@@ -953,3 +953,18 @@ python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo_pre
   проверьте фильтр дат (`--date-from/--date-to`) и наличие `event_time` в исходных данных.
 - `viz-view` не открывает окно:
   запускайте локально с доступным GUI backend matplotlib (не headless CI).
+
+
+### Как учитывается `infer-month` в визуальном отчёте
+
+Если при `viz-build --label-source pred` передан `--new-month YYYY-MM`, то отчёт пытается автоматически подхватить `data/interim/month_YYYY-MM.parquet` (результат `infer-month`) и добавить его в витрину для расчёта delta и отдельной секции интерпретации.
+
+В `reports/viz_<tag>/report.md` появится блок **"Интерпретация infer-month"**:
+- был ли реально подключён parquet из `infer-month`,
+- сколько строк оттуда использовано,
+- топ категорий нового месяца с `count` и `share_of_complaints`.
+
+Интерпретация:
+- `count` — абсолютное число жалоб категории в новом месяце;
+- `share_of_complaints` — доля категории среди всех жалоб нового месяца;
+- `delta_bars` — насколько доля категории изменилась относительно baseline периода (в процентных пунктах).

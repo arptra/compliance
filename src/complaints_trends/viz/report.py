@@ -107,6 +107,33 @@ def _prepare_viz_frame(df: pd.DataFrame, label_source: str) -> pd.DataFrame:
     return out
 
 
+def _merge_with_infer_month_predictions(frame: pd.DataFrame, new_month: str | None, label_source: str) -> tuple[pd.DataFrame, dict]:
+    info = {"infer_month_loaded": False, "infer_month_rows": 0, "infer_month_path": ""}
+    if label_source != "pred" or not new_month:
+        return frame, info
+
+    infer_path = Path("data/interim") / f"month_{new_month}.parquet"
+    if not infer_path.exists():
+        return frame, info
+
+    month_df = pd.read_parquet(infer_path)
+    month_viz = _prepare_viz_frame(month_df, "pred")
+    month_viz["month"] = month_viz.get("month", pd.to_datetime(month_viz.get("event_time"), errors="coerce").dt.strftime("%Y-%m"))
+
+    merged = pd.concat([frame, month_viz], ignore_index=True)
+    dedup_keys = [k for k in ["row_id", "month"] if k in merged.columns]
+    if dedup_keys:
+        order_cols = [k for k in ["event_time", "month"] if k in merged.columns]
+        merged = merged.sort_values(order_cols).drop_duplicates(subset=dedup_keys, keep="last")
+
+    info = {
+        "infer_month_loaded": True,
+        "infer_month_rows": int(len(month_viz)),
+        "infer_month_path": str(infer_path),
+    }
+    return merged, info
+
+
 def build_visual_report(
     cfg: ProjectConfig,
     tag: str,
@@ -119,13 +146,12 @@ def build_visual_report(
     freq: str,
 ) -> tuple[Path, Path]:
     paths = VizPaths(tag)
-    if label_source == "pred":
-        src_path = Path("data/interim/all_predicted.parquet")
-    else:
-        src_path = Path(cfg.prepare.output_parquet)
+    src_path = Path("data/interim/all_predicted.parquet") if label_source == "pred" else Path(cfg.prepare.output_parquet)
 
     frame = pd.read_parquet(src_path)
     frame = _prepare_viz_frame(frame, label_source)
+    frame, infer_info = _merge_with_infer_month_predictions(frame, new_month, label_source)
+
     if date_from:
         frame = frame[frame["event_time"] >= pd.to_datetime(date_from)]
     if date_to:
@@ -160,6 +186,19 @@ def build_visual_report(
     kpi_share = float(kpi_complaints / kpi_total) if kpi_total else 0.0
     top_table = complaints_state.groupby("category")["metric_count"].sum().sort_values(ascending=False).head(15)
 
+    infer_month_summary = pd.DataFrame(columns=["category", "count", "share"])
+    if new_month:
+        nm = frame[(frame.get("month", "") == new_month) & (frame["is_complaint_flag"] == True)]
+        if len(nm):
+            cnt = nm["category"].value_counts()
+            infer_month_summary = pd.DataFrame(
+                {
+                    "category": cnt.index.astype(str),
+                    "count": cnt.values.astype(int),
+                    "share": (cnt.values / max(1, int(cnt.sum()))),
+                }
+            )
+
     md = [
         f"# Visual report: {tag}",
         "",
@@ -182,6 +221,27 @@ def build_visual_report(
     for cat, cnt in top_table.items():
         md.append(f"| {cat} | {int(cnt)} |")
 
+    md.extend(["", "## Интерпретация infer-month", ""])
+    if new_month:
+        md.append(f"- new_month: **{new_month}**")
+        md.append(f"- infer-month parquet подключен: **{infer_info['infer_month_loaded']}**")
+        if infer_info["infer_month_loaded"]:
+            md.append(f"- путь: `{infer_info['infer_month_path']}`")
+            md.append(f"- строк из infer-month: **{infer_info['infer_month_rows']}**")
+        if len(infer_month_summary):
+            md.append("")
+            md.append("### Топ категорий в infer-month")
+            md.append("| category | count | share_of_complaints |")
+            md.append("|---|---:|---:|")
+            for _, r in infer_month_summary.head(15).iterrows():
+                md.append(f"| {r['category']} | {int(r['count'])} | {float(r['share']):.2%} |")
+            md.append("")
+            md.append("Интерпретация: count = абсолютное число жалоб категории в новом месяце; share_of_complaints = доля среди всех жалоб нового месяца.")
+        else:
+            md.append("- В данных отчёта не найдено жалоб для new_month (или отсутствует month-поле).")
+    else:
+        md.append("- Параметр --new-month не задан; отдельная интерпретация по infer-month не построена.")
+
     report_path = paths.report_dir / "report.md"
     write_md(str(report_path), "\n".join(md))
 
@@ -199,6 +259,9 @@ def build_visual_report(
             "source_path": str(src_path),
             "state_path": str(paths.state_parquet),
             "report_path": str(report_path),
+            "infer_month_loaded": infer_info["infer_month_loaded"],
+            "infer_month_rows": infer_info["infer_month_rows"],
+            "infer_month_path": infer_info["infer_month_path"],
         },
     )
     return report_path, paths.state_parquet
