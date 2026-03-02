@@ -426,11 +426,11 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     if payload_rows:
         payload_df = pd.DataFrame(payload_rows)
         payload_review = payload_df.merge(
-            out_df[[c for c in ["row_id", "complaint_category_llm"] if c in out_df.columns]],
+            out_df[[c for c in ["row_id", "complaint_category_llm", "complaint_subcategory_llm"] if c in out_df.columns]],
             on="row_id",
             how="left",
         )
-        payload_review = payload_review.rename(columns={"complaint_category_llm": "gigachat_assigned_category"})
+        payload_review = payload_review.rename(columns={"complaint_category_llm": "gigachat_assigned_category", "complaint_subcategory_llm": "gigachat_assigned_subcategory"})
         payload_review = payload_review.drop(columns=["_payload_index"], errors="ignore")
         payload_review_path = Path(cfg.prepare.llm_payload_review_xlsx)
         payload_review_path.parent.mkdir(parents=True, exist_ok=True)

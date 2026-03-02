@@ -191,7 +191,7 @@ def test_prepare_skips_rows_where_all_dialog_columns_are_empty(tmp_path):
     assert out.iloc[0]["raw_dialog"]
 
 
-def test_prepare_exports_llm_payload_review_excel_with_assigned_category(tmp_path):
+def test_prepare_exports_llm_payload_review_excel_with_assigned_category_and_subcategory(tmp_path):
     cfg = load_config("configs/project.yaml")
     cfg = cfg.model_copy(deep=True)
     cfg.input.input_dir = str(tmp_path / "raw")
@@ -217,4 +217,6 @@ def test_prepare_exports_llm_payload_review_excel_with_assigned_category(tmp_pat
     assert "full_dialog_text" in payload_review.columns
     assert "client_first_message" in payload_review.columns
     assert "gigachat_assigned_category" in payload_review.columns
+    assert "gigachat_assigned_subcategory" in payload_review.columns
     assert payload_review["gigachat_assigned_category"].notna().all()
+    assert payload_review["gigachat_assigned_subcategory"].notna().any()
