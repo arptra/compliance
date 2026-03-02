@@ -234,3 +234,60 @@ def test_predict_subcategories_by_category_prefers_category_specific_model():
         models_by_category=models_by_cat,
     )
     assert out.tolist() == ["login_issue", "payment_error"]
+
+
+def test_enforce_subcategory_taxonomy_keeps_value_for_unknown_category_allowlist():
+    cats = np.array(["DISCOVERED_DYNAMIC"], dtype=object)
+    subs = np.array(["fresh_sub"], dtype=object)
+    taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue"]}}
+    out = _enforce_subcategory_taxonomy(cats, subs, taxonomy)
+    assert out.tolist() == ["fresh_sub"]
+
+
+def test_infer_month_uses_discovered_taxonomy_for_subcategory_enforcement(tmp_path, monkeypatch):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
+    cfg.llm.discovered_taxonomy_file = str(tmp_path / "discovered.json")
+
+    Path(cfg.llm.discovered_taxonomy_file).write_text(
+        '{"categories": ["DISCOVERED_DYNAMIC"], "subcategories_by_category": {"DISCOVERED_DYNAMIC": ["fresh_sub"]}}',
+        encoding="utf-8",
+    )
+
+    excel = tmp_path / "month_discovered.xlsx"
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-01 10:00:00", "dialog_text": "CLIENT: new issue"},
+        ]
+    ).to_excel(excel, index=False)
+
+    class _DiscCatModel:
+        def predict(self, x):
+            return np.zeros(x.shape[0], dtype=int)
+
+    class _DiscEnc:
+        def inverse_transform(self, x):
+            return np.array(["DISCOVERED_DYNAMIC"] * len(x), dtype=object)
+
+    model_dir = Path(cfg.training.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "subcategory_models_by_category.joblib").write_text("x", encoding="utf-8")
+
+    objs = [
+        _FakeVec(),
+        _FakeComplaintModel(),
+        _DiscCatModel(),
+        _DiscEnc(),
+        {"DISCOVERED_DYNAMIC": {"mode": "constant", "value": "fresh_sub"}},
+    ]
+
+    def _fake_load(_):
+        return objs.pop(0)
+
+    monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
+
+    out = infer_month(cfg, str(excel), "2025-06")
+    assert out.loc[out.index[0], "category_pred"] == "DISCOVERED_DYNAMIC"
+    assert out.loc[out.index[0], "subcategory_pred"] == "fresh_sub"
+    html = Path("reports/month_report_2025-06.html").read_text(encoding="utf-8")
+    assert "DISCOVERED_DYNAMIC / fresh_sub" in html

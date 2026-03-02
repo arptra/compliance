@@ -20,6 +20,51 @@ logger = logging.getLogger(__name__)
 
 
 
+def _load_effective_taxonomy(cfg: ProjectConfig) -> dict:
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    discovered_path = Path(getattr(cfg.llm, "discovered_taxonomy_file", ""))
+    if not discovered_path or not discovered_path.exists() or discovered_path.stat().st_size == 0:
+        return taxonomy
+    try:
+        import json
+
+        data = json.loads(discovered_path.read_text(encoding="utf-8"))
+    except Exception:
+        return taxonomy
+
+    cats = data.get("categories", []) if isinstance(data, dict) else []
+    subs = data.get("subcategories_by_category", {}) if isinstance(data, dict) else {}
+
+    taxonomy.setdefault("category_codes", [])
+    taxonomy.setdefault("subcategories_by_category", {})
+    taxonomy.setdefault("category_labels", {})
+    taxonomy.setdefault("subcategory_labels", {})
+
+    for cat in cats:
+        c = str(cat).strip()
+        if not c:
+            continue
+        if c not in taxonomy["category_codes"]:
+            taxonomy["category_codes"].append(c)
+        taxonomy["category_labels"].setdefault(c, c)
+        taxonomy["subcategories_by_category"].setdefault(c, [])
+        taxonomy["subcategory_labels"].setdefault(c, {})
+
+    if isinstance(subs, dict):
+        for cat, vals in subs.items():
+            c = str(cat).strip()
+            if not c:
+                continue
+            taxonomy["subcategories_by_category"].setdefault(c, [])
+            taxonomy["subcategory_labels"].setdefault(c, {})
+            for sub in (vals if isinstance(vals, list) else []):
+                s = str(sub).strip()
+                if not s:
+                    continue
+                if s not in taxonomy["subcategories_by_category"][c]:
+                    taxonomy["subcategories_by_category"][c].append(s)
+                taxonomy["subcategory_labels"][c].setdefault(s, s)
+    return taxonomy
 
 
 def _enforce_subcategory_taxonomy(categories: np.ndarray, subcategories: np.ndarray, taxonomy: dict) -> np.ndarray:
@@ -28,7 +73,8 @@ def _enforce_subcategory_taxonomy(categories: np.ndarray, subcategories: np.ndar
     for i, (cat, sub) in enumerate(zip(categories.tolist(), out.tolist())):
         if sub in {"NOT_COMPLAINT", "UNKNOWN"}:
             continue
-        if sub not in set(allowed.get(str(cat), [])):
+        cat_allowed = set(allowed.get(str(cat), []))
+        if cat_allowed and sub not in cat_allowed:
             out[i] = "UNKNOWN"
     return out
 
@@ -138,7 +184,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
             "complaint_share": 0.0,
             "top_categories": {},
             "top_subcategories": {},
-            "subcategory_filtering": "taxonomy_enforced",
+            "subcategory_filtering": "effective_taxonomy_enforced",
             "category_histogram": "",
             "subcategory_histogram": "",
             "examples": [],
@@ -153,7 +199,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
     deny = load_tokens(cfg.files.deny_tokens_path) | load_tokens(cfg.files.extra_stopwords_path)
     df["text_clean"] = infer_text.astype(str).apply(lambda x: clean_for_model(x, deny))
 
-    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    taxonomy = _load_effective_taxonomy(cfg)
 
     mdir = Path(cfg.training.model_dir)
     vec = joblib.load(mdir / "vectorizers.joblib")
@@ -248,7 +294,7 @@ def infer_month(cfg: ProjectConfig, excel_path: str, month: str) -> pd.DataFrame
         "complaint_share": float(df["is_complaint_pred"].mean()),
         "top_categories": top,
         "top_subcategories": top_sub,
-        "subcategory_filtering": "taxonomy_enforced",
+        "subcategory_filtering": "effective_taxonomy_enforced",
         "category_histogram": str(cat_hist_path).replace("\\", "/"),
         "subcategory_histogram": str(subcat_hist_path).replace("\\", "/"),
         "examples": complaints_df.head(50).to_dict(orient="records"),
