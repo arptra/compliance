@@ -38,8 +38,50 @@ def _coerce_binary_labels(values) -> np.ndarray:
 
 
 
+def _load_effective_taxonomy(cfg: ProjectConfig) -> dict:
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    discovered_path = Path(getattr(cfg.llm, "discovered_taxonomy_file", ""))
+    if not discovered_path or not discovered_path.exists() or discovered_path.stat().st_size == 0:
+        return taxonomy
+    try:
+        discovered = json.loads(discovered_path.read_text(encoding="utf-8"))
+    except Exception:
+        return taxonomy
 
+    cats = discovered.get("categories", []) if isinstance(discovered, dict) else []
+    subs = discovered.get("subcategories_by_category", {}) if isinstance(discovered, dict) else {}
 
+    taxonomy.setdefault("category_codes", [])
+    taxonomy.setdefault("subcategories_by_category", {})
+    taxonomy.setdefault("category_labels", {})
+    taxonomy.setdefault("subcategory_labels", {})
+
+    for cat in cats:
+        c = str(cat).strip()
+        if not c:
+            continue
+        if c not in taxonomy["category_codes"]:
+            taxonomy["category_codes"].append(c)
+        taxonomy["category_labels"].setdefault(c, c)
+        taxonomy["subcategories_by_category"].setdefault(c, [])
+        taxonomy["subcategory_labels"].setdefault(c, {})
+
+    if isinstance(subs, dict):
+        for cat, vals in subs.items():
+            c = str(cat).strip()
+            if not c:
+                continue
+            taxonomy["subcategories_by_category"].setdefault(c, [])
+            taxonomy["subcategory_labels"].setdefault(c, {})
+            for sub in (vals if isinstance(vals, list) else []):
+                s = str(sub).strip()
+                if not s:
+                    continue
+                if s not in taxonomy["subcategories_by_category"][c]:
+                    taxonomy["subcategories_by_category"][c].append(s)
+                taxonomy["subcategory_labels"][c].setdefault(s, s)
+
+    return taxonomy
 
 
 def _normalize_subcategory_by_taxonomy(df: pd.DataFrame, taxonomy: dict) -> pd.Series:
@@ -50,10 +92,11 @@ def _normalize_subcategory_by_taxonomy(df: pd.DataFrame, taxonomy: dict) -> pd.S
 
     out: list[str] = []
     for cat, sub in zip(cats.tolist(), subs.tolist()):
-        if sub in set(allowed.get(cat, [])):
-            out.append(sub)
+        allowed_subs = set(allowed.get(cat, []))
+        if allowed_subs:
+            out.append(sub if sub in allowed_subs else "UNKNOWN")
         else:
-            out.append("UNKNOWN")
+            out.append(sub if str(sub).strip() and str(sub).strip().upper() != "NOT_COMPLAINT" else "UNKNOWN")
     return pd.Series(out, index=df.index, dtype=object)
 
 
@@ -180,7 +223,7 @@ def train(cfg: ProjectConfig) -> dict:
     y_bin = _coerce_binary_labels(y_bin_raw)
     y_cat = np.where(df["category_gold"].notna() & (df["category_gold"] != ""), df["category_gold"], df["complaint_category_llm"])
 
-    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    taxonomy = _load_effective_taxonomy(cfg)
     if "complaint_subcategory_llm" in df.columns:
         df["complaint_subcategory_llm"] = _normalize_subcategory_by_taxonomy(df, taxonomy)
 
