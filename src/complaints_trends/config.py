@@ -67,8 +67,9 @@ class LLMConfig(AppBaseModel):
     request_metrics_enabled: bool = True
     async_mode: bool = False
     parallel_mode: bool = False
-    category_mode: Literal["taxonomy", "discover"] = "taxonomy"
+    category_mode: Literal["taxonomy", "discover", "questions"] = "taxonomy"
     discovered_taxonomy_file: str = "data/interim/discovered_categories.json"
+    questions_file: str = "configs/questions_categories.json"
 
 
 class PrepareConfig(AppBaseModel):

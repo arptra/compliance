@@ -16,6 +16,7 @@ import httpx
 
 from .config import LLMConfig
 from .gigachat_schema import NormalizeTicket
+from .questions_loader import load_questions, save_questions_taxonomy
 
 
 SYSTEM_PROMPT = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
@@ -70,6 +71,24 @@ def _tls_debug_context(cfg: LLMConfig) -> str:
     )
 
 
+
+
+def _coerce_questions_payload(parsed: dict, fallback_code: str = "OTHER") -> dict:
+    if not isinstance(parsed, dict):
+        return parsed
+    out = dict(parsed)
+    primary = out.get("primary_category_code") or out.get("complaint_category") or out.get("category") or fallback_code
+    out["complaint_category"] = str(primary)
+    out["complaint_subcategory"] = None
+    if str(primary).upper() == str(fallback_code).upper():
+        out["is_complaint"] = False
+    else:
+        out["is_complaint"] = bool(out.get("is_complaint", True))
+    trig = out.get("triggered_codes")
+    if isinstance(trig, list):
+        note_prefix = f"triggered_codes={trig}"
+        out["notes"] = (note_prefix + "; " + str(out.get("notes", "")).strip()).strip("; ")
+    return out
 
 
 def _coerce_response_fields(parsed: dict, payload: dict) -> dict:
@@ -256,9 +275,14 @@ class GigaChatNormalizer:
 
         self.category_mode = getattr(cfg, "category_mode", "taxonomy")
         self.discovered_taxonomy_file = Path(getattr(cfg, "discovered_taxonomy_file", "data/interim/discovered_categories.json"))
+        self.questions_file = Path(getattr(cfg, "questions_file", "configs/questions_categories.json"))
         self.discovered_categories: list[str] = []
         self.discovered_subcategories_by_category: dict[str, list[str]] = {}
+        self.question_items: list[dict] = []
+        self.question_file_hash: str = ""
+        self.questions_fallback_code = "OTHER"
         self._load_discovered_taxonomy()
+        self._load_questions_mode()
 
         if not mock:
             if cfg.mode == "mtls":
@@ -279,13 +303,39 @@ class GigaChatNormalizer:
                 self.client = _HTTPXChatClient(base_url=cfg.base_url, verify=verify, timeout=60.0)
 
     def _key(self, payload: dict) -> str:
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version + self._mode_signature()
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _mode_signature(self) -> str:
+        if self.category_mode == "discover":
+            return f"|mode=discover|file={self.discovered_taxonomy_file}"
+        if self.category_mode == "questions":
+            return f"|mode=questions|qhash={self.question_file_hash}"
+        return "|mode=taxonomy"
 
     def _llm_input(self, payload: dict) -> dict:
         return {k: v for k, v in payload.items() if k != "client_first_message"}
 
     def _single_user_prompt(self, payload: dict) -> str:
+        if self.category_mode == "questions":
+            allowed = [x["code"] for x in self.question_items] + [self.questions_fallback_code]
+            return json.dumps(
+                {
+                    "task": "questionnaire_normalize_ticket",
+                    "rules": {
+                        "evaluate_each_question": True,
+                        "return_matched_boolean_and_short_rationale": True,
+                        "choose_primary_category_from_allowed": True,
+                        "if_no_question_matches_use_other": True,
+                        "if_primary_other_is_complaint_false": True,
+                        "return_json_compatible_with_normalize_ticket": True,
+                    },
+                    "allowed_categories": allowed,
+                    "questions": self.question_items,
+                    "input": self._llm_input(payload),
+                },
+                ensure_ascii=False,
+            )
         if self.category_mode == "discover":
             return json.dumps(
                 {
@@ -325,6 +375,81 @@ class GigaChatNormalizer:
                 "allowed_loan_products": self.loan_products,
                 "taxonomy_raw": self.taxonomy_raw,
                 "input": self._llm_input(payload),
+            },
+            ensure_ascii=False,
+        )
+
+    def _batch_user_prompt(self, batch_indexes: list[int], batch_payloads: list[dict]) -> str:
+        if self.category_mode == "questions":
+            allowed = [x["code"] for x in self.question_items] + [self.questions_fallback_code]
+            return json.dumps(
+                {
+                    "task": "questionnaire_normalize_batch",
+                    "rules": {
+                        "return_one_result_per_input": True,
+                        "must_return_batch_index": True,
+                        "for_each_input_choose_primary_category_from_allowed": True,
+                        "if_primary_other_is_complaint_false": True,
+                        "return_result_compatible_with_normalize_ticket": True,
+                    },
+                    "allowed_categories": allowed,
+                    "questions": self.question_items,
+                    "inputs": [
+                        {"_batch_index": idx, "input": self._llm_input(payload)}
+                        for idx, payload in zip(batch_indexes, batch_payloads)
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        if self.category_mode == "discover":
+            return json.dumps(
+                {
+                    "task": "discover_and_normalize_tickets",
+                    "rules": {
+                        "you_must_discover_categories_yourself": True,
+                        "do_not_use_external_taxonomy": True,
+                        "reuse_existing_discovered_categories_when_semantically_close": True,
+                        "if_no_semantic_match_create_new_category": True,
+                        "category_code_format": "snake_case_ascii_short",
+                        "subcategory_code_format": "snake_case_ascii_short",
+                        "return_category_and_subcategory_codes": True,
+                        "return_one_result_per_input": True,
+                        "must_return_batch_index": True,
+                        "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                        "ignore_empty_context_fields": True,
+                    },
+                    "existing_discovered_taxonomy": {
+                        "categories": sorted(set(self.discovered_categories)),
+                        "subcategories_by_category": self.discovered_subcategories_by_category,
+                    },
+                    "inputs": [
+                        {"_batch_index": idx, **self._llm_input(payload)}
+                        for idx, payload in zip(batch_indexes, batch_payloads)
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "task": "normalize_tickets",
+                "rules": {
+                    "choose_exactly_one_category": True,
+                    "category_must_be_from_allowed": True,
+                    "subcategory_should_match_chosen_category": True,
+                    "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
+                    "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
+                    "ignore_empty_context_fields": True,
+                    "return_one_result_per_input": True,
+                    "must_return_batch_index": True,
+                },
+                "allowed_categories": self.categories,
+                "allowed_subcategories_by_category": self.subcategories_by_category,
+                "allowed_loan_products": self.loan_products,
+                "taxonomy_raw": self.taxonomy_raw,
+                "inputs": [
+                    {"_batch_index": idx, **self._llm_input(payload)}
+                    for idx, payload in zip(batch_indexes, batch_payloads)
+                ],
             },
             ensure_ascii=False,
         )
@@ -394,6 +519,29 @@ class GigaChatNormalizer:
             encoding="utf-8",
         )
 
+    def _load_questions_mode(self) -> None:
+        if self.category_mode != "questions":
+            return
+        loaded = load_questions(self.questions_file)
+        self.question_items = loaded.get("items", [])
+        self.question_file_hash = str(loaded.get("file_hash", ""))
+        self.questions_fallback_code = str(loaded.get("fallback_code", "OTHER"))
+        out = Path("data/interim/questions_taxonomy.json")
+        need_save = True
+        if out.exists():
+            try:
+                current = json.loads(out.read_text(encoding="utf-8"))
+                need_save = str(current.get("file_hash", "")) != self.question_file_hash
+            except Exception:
+                need_save = True
+        if need_save:
+            save_questions_taxonomy(
+                out,
+                items=self.question_items,
+                file_hash=self.question_file_hash,
+                version=int(loaded.get("version", 1)),
+            )
+
     def estimate_tokens(self, payload: dict) -> int:
         prompt = self._single_user_prompt(payload)
         if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
@@ -433,30 +581,7 @@ class GigaChatNormalizer:
             batch_indexes = sorted(pending)
             batch_payloads = [uncached_payloads[idx] for idx in batch_indexes]
 
-            user_prompt = json.dumps(
-                {
-                    "task": "normalize_tickets",
-                    "rules": {
-                        "choose_exactly_one_category": True,
-                        "category_must_be_from_allowed": True,
-                        "subcategory_should_match_chosen_category": True,
-                        "loan_product_rule": "Если обращение про кредитование: loan_product != NONE, иначе loan_product = NONE",
-                        "multi_dialog_fields": "Используй ВСЕ доступные поля входа (full_dialog_text, dialog_context, signal_fields). Оценивай весь диалог.",
-                        "ignore_empty_context_fields": True,
-                        "return_one_result_per_input": True,
-                        "must_return_batch_index": True,
-                    },
-                    "allowed_categories": self.categories,
-                    "allowed_subcategories_by_category": self.subcategories_by_category,
-                    "allowed_loan_products": self.loan_products,
-                    "taxonomy_raw": self.taxonomy_raw,
-                    "inputs": [
-                        {"_batch_index": idx, **self._llm_input(payload)}
-                        for idx, payload in zip(batch_indexes, batch_payloads)
-                    ],
-                },
-                ensure_ascii=False,
-            )
+            user_prompt = self._batch_user_prompt(batch_indexes, batch_payloads)
 
             req_token_count = None
             if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
@@ -516,7 +641,8 @@ class GigaChatNormalizer:
                 if idx is None or idx not in pending or idx in assigned:
                     leftovers.append(item)
                     continue
-                obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                parsed_item = _coerce_questions_payload(item, self.questions_fallback_code) if self.category_mode == "questions" else item
+                obj = NormalizeTicket.model_validate(_coerce_response_fields(parsed_item, uncached_payloads[idx]))
                 self._remember_discovered_category(item)
                 self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
                 results[idx] = obj
@@ -524,7 +650,8 @@ class GigaChatNormalizer:
 
             unassigned_pending = [idx for idx in batch_indexes if idx not in assigned]
             for idx, item in zip(unassigned_pending, leftovers):
-                obj = NormalizeTicket.model_validate(_coerce_response_fields(item, uncached_payloads[idx]))
+                parsed_item = _coerce_questions_payload(item, self.questions_fallback_code) if self.category_mode == "questions" else item
+                obj = NormalizeTicket.model_validate(_coerce_response_fields(parsed_item, uncached_payloads[idx]))
                 self._remember_discovered_category(item)
                 self.cache.set(self._key(uncached_payloads[idx]), obj.model_dump())
                 results[idx] = obj
@@ -601,6 +728,8 @@ class GigaChatNormalizer:
         content = response.choices[0].message.content
         try:
             parsed = json.loads(content)
+            if self.category_mode == "questions":
+                parsed = _coerce_questions_payload(parsed, self.questions_fallback_code)
             obj = NormalizeTicket.model_validate(_coerce_response_fields(parsed, payload))
             self._remember_discovered_category(parsed)
         except Exception:
@@ -621,6 +750,8 @@ class GigaChatNormalizer:
                     raise hinted from e
                 raise
             repaired = json.loads(response2.choices[0].message.content)
+            if self.category_mode == "questions":
+                repaired = _coerce_questions_payload(repaired, self.questions_fallback_code)
             obj = NormalizeTicket.model_validate(_coerce_response_fields(repaired, payload))
             self._remember_discovered_category(repaired)
         self.cache.set(k, obj.model_dump())

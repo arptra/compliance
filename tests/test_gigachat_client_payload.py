@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from complaints_trends.config import LLMConfig
 from complaints_trends.gigachat_mtls import GigaChatNormalizer
@@ -315,3 +316,103 @@ def test_discover_mode_creates_empty_discovery_file_when_missing(tmp_path):
     assert (tmp_path / "disc.json").exists()
     data = json.loads((tmp_path / "disc.json").read_text(encoding="utf-8"))
     assert data.get("categories") == []
+
+
+def test_questions_mode_prompt_and_mapping_file(tmp_path):
+    qf = tmp_path / "questions.json"
+    qf.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "categories": [{"question_ru": "Есть ли жалоба на переводы?"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="questions",
+        questions_file=str(qf),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    p = n._single_user_prompt({"full_dialog_text": "text"})
+    assert "questionnaire_normalize_ticket" in p
+    assert "allowed_categories" in p
+    assert "OTHER" in p
+    assert Path("data/interim/questions_taxonomy.json").exists()
+
+
+def test_questions_mode_cache_key_depends_on_questions_hash(tmp_path):
+    q1 = tmp_path / "q1.json"
+    q2 = tmp_path / "q2.json"
+    q1.write_text(json.dumps({"version": 1, "categories": [{"question_ru": "Q1?"}]}, ensure_ascii=False), encoding="utf-8")
+    q2.write_text(json.dumps({"version": 1, "categories": [{"question_ru": "Q2?"}]}, ensure_ascii=False), encoding="utf-8")
+
+    base_kwargs = dict(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="questions",
+    )
+    cfg1 = LLMConfig(**base_kwargs, questions_file=str(q1))
+    cfg2 = LLMConfig(**base_kwargs, questions_file=str(q2))
+    n1 = GigaChatNormalizer(cfg1, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n2 = GigaChatNormalizer(cfg2, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    payload = {"full_dialog_text": "x"}
+    assert n1._key(payload) != n2._key(payload)
+
+
+def test_questions_mode_batch_prompt_is_used(tmp_path):
+    class BatchClient:
+        def chat(self, payload):
+            user = payload["messages"][1]["content"]
+            assert "questionnaire_normalize_batch" in user
+            body = {
+                "items": [
+                    {
+                        "_batch_index": 0,
+                        "primary_category_code": "OTHER",
+                        "triggered_codes": [],
+                        "keywords": ["вопрос", "инфо", "уточнение"],
+                    }
+                ]
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    qf = tmp_path / "questions.json"
+    qf.write_text(json.dumps({"version": 1, "categories": [{"question_ru": "Есть ли жалоба на переводы?"}]}, ensure_ascii=False), encoding="utf-8")
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="questions",
+        questions_file=str(qf),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = BatchClient()
+    out = n.normalize_batch([{"full_dialog_text": "test"}])
+    assert len(out) == 1
+    assert out[0].complaint_category == "OTHER"
+    assert out[0].is_complaint is False

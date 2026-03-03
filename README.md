@@ -116,6 +116,36 @@ GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
 ```
 
 
+### 4.3.2 Режим вопросов (`llm.category_mode: questions`)
+
+Поддерживается третий режим категоризации: `questions` (кроме `taxonomy` и `discover`).
+
+Пример конфига:
+
+```yaml
+llm:
+  category_mode: "questions"
+  questions_file: "configs/questions_categories.json"
+```
+
+Формат `questions_file` (строгий JSON):
+
+```json
+{
+  "version": 1,
+  "categories": [
+    {"question_ru": "Есть ли жалоба на платежи?"},
+    {"question_ru": "Есть ли жалоба на вход в приложение?"}
+  ]
+}
+```
+
+При запуске prepare в этом режиме:
+- категории кодируются стабильно как `q_<index>_<sha1_8>`,
+- mapping `code -> question_ru` сохраняется в `data/interim/questions_taxonomy.json`,
+- в parquet пишутся стандартные поля (`is_complaint_llm`, `complaint_category_llm`, `complaint_subcategory_llm`, `keywords_llm`, `notes_llm`),
+- fallback категория `OTHER` означает "не попало в вопросы".
+
 ### 4.3.1 Приоритет config vs .env для LLM
 
 Сейчас реализован следующий порядок при загрузке:

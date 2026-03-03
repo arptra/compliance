@@ -464,6 +464,17 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     return out_df
 
 
+def _load_questions_label_mapping(path: Path = Path("data/interim/questions_taxonomy.json")) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    m = data.get("mapping", {}) if isinstance(data, dict) else {}
+    return {str(k): str(v) for k, v in m.items()} if isinstance(m, dict) else {}
+
+
 def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     if "is_complaint_llm" not in df.columns:
         df = df.copy()
@@ -477,6 +488,10 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     non_complaints = df[df["is_complaint_llm"] == False]
     taxonomy = load_taxonomy(cfg.files.categories_seed_path)
     cat_labels = taxonomy.get("category_labels", {})
+    if getattr(cfg.llm, "category_mode", "taxonomy") == "questions":
+        q_labels = _load_questions_label_mapping()
+        if q_labels:
+            cat_labels = {**cat_labels, **q_labels}
     sub_labels = taxonomy.get("subcategory_labels", {})
     loan_labels = taxonomy.get("loan_product_labels", {})
 
