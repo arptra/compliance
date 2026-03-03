@@ -1,3 +1,4 @@
+from pathlib import Path
 import pandas as pd
 
 from complaints_trends.prepare_dataset import prepare_dataset
@@ -220,3 +221,27 @@ def test_prepare_exports_llm_payload_review_excel_with_assigned_category_and_sub
     assert "gigachat_assigned_subcategory" in payload_review.columns
     assert payload_review["gigachat_assigned_category"].notna().all()
     assert payload_review["gigachat_assigned_subcategory"].notna().any()
+
+
+def test_prepare_questions_mode_writes_questions_summary_json(tmp_path):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.llm.enabled = False
+    cfg.llm.category_mode = "questions"
+    qf = tmp_path / "questions.json"
+    qf.write_text('{"version":1,"categories":[{"question_ru":"Есть ли жалоба на переводы?"}]}', encoding="utf-8")
+    cfg.llm.questions_file = str(qf)
+    cfg.input.signal_columns = ["dialog_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame([
+        {"created_at": "2025-02-09 12:55:29", "dialog_text": "CLIENT: вопрос", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+    ]).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    prepare_dataset(cfg, pilot=False, llm_mock=True)
+    out = Path("data/interim/questions_prepare_categories.json")
+    assert out.exists()

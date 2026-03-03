@@ -3,6 +3,7 @@ from pathlib import Path
 
 from complaints_trends.config import LLMConfig
 from complaints_trends.gigachat_mtls import GigaChatNormalizer
+from complaints_trends.questions_loader import load_questions
 
 
 class _Msg:
@@ -416,3 +417,61 @@ def test_questions_mode_batch_prompt_is_used(tmp_path):
     assert len(out) == 1
     assert out[0].complaint_category == "OTHER"
     assert out[0].is_complaint is False
+
+
+def test_questions_mode_learns_category_name_per_question_and_reuses_it(tmp_path):
+    q_code_holder = {"code": ""}
+
+    class QClient:
+        def __init__(self):
+            self.n = 0
+
+        def chat(self, payload):
+            self.n += 1
+            # second response tries to rename same question category, should be ignored/reused
+            cat_name = "Проблема с переводом" if self.n == 1 else "Совсем другое имя"
+            q_code = q_code_holder["code"]
+            body = {
+                "primary_question_code": q_code,
+                "category_name": cat_name,
+                "triggered_codes": [q_code],
+                "keywords": ["перевод", "ошибка", "жалоба"],
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    qf = tmp_path / "questions.json"
+    qf.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "categories": [{"question_ru": "Есть ли жалоба на переводы?"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    q_code_holder["code"] = load_questions(qf)["items"][0]["code"]
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="questions",
+        questions_file=str(qf),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = QClient()
+
+    out1 = n.normalize({"full_dialog_text": "перевод не прошел"})
+    out2 = n.normalize({"full_dialog_text": "еще одна проблема с переводом"})
+    assert out1.is_complaint is True
+    assert out2.is_complaint is True
+    assert out1.complaint_category == out2.complaint_category
+    state = n.export_questions_categories_json()
+    assert q_code_holder["code"] in state["question_category_map"]

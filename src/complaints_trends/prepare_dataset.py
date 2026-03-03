@@ -447,6 +447,9 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         logger.warning("[stage=prepare/llm] rows with LLM errors: %s; saved to %s", len(llm_errors), err_path)
         logger.warning("[stage=prepare/llm] sample errors: %s", llm_errors[:3])
 
+    if getattr(cfg.llm, "category_mode", "taxonomy") == "questions":
+        _save_questions_prepare_summary(normalizer, out_df)
+
     if pilot:
         review_cols = [
             "row_id", "month", "dialog_source_field", "raw_dialog", "client_first_message", "short_summary_llm", "is_complaint_llm", "complaint_category_llm",
@@ -462,6 +465,22 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         review.to_excel(cfg.prepare.pilot_review_xlsx, index=False)
         _pilot_report(out_df, cfg)
     return out_df
+
+
+def _save_questions_prepare_summary(normalizer, out_df: pd.DataFrame, path: Path = Path("data/interim/questions_prepare_categories.json")) -> None:
+    if not hasattr(normalizer, "export_questions_categories_json"):
+        return
+    try:
+        data = normalizer.export_questions_categories_json()
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    counts = out_df.get("complaint_category_llm")
+    count_map = counts.astype(str).value_counts().to_dict() if counts is not None else {}
+    data["category_counts_in_prepare"] = {str(k): int(v) for k, v in count_map.items()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _load_questions_label_mapping(path: Path = Path("data/interim/questions_taxonomy.json")) -> dict[str, str]:

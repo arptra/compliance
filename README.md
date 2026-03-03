@@ -141,8 +141,12 @@ llm:
 ```
 
 При запуске prepare в этом режиме:
-- категории кодируются стабильно как `q_<index>_<sha1_8>`,
-- mapping `code -> question_ru` сохраняется в `data/interim/questions_taxonomy.json`,
+- вопросы из JSON валидируются и получают стабильные question-коды `q_<index>_<sha1_8>`,
+- GigaChat по каждому вопросу определяет, какую бизнес-категорию использовать,
+- первое присвоение `question_code -> category_code/category_name` сохраняется и дальше переиспользуется (модель больше не переименовывает эту категорию),
+- mapping вопросов сохраняется в `data/interim/questions_taxonomy.json`,
+- mapping `question_code -> category_code/category_name` сохраняется в `data/interim/questions_category_map.json`,
+- после `prepare` сохраняется итоговый JSON-свод по вопросам/категориям `data/interim/questions_prepare_categories.json` (включая счётчики категорий),
 - в parquet пишутся стандартные поля (`is_complaint_llm`, `complaint_category_llm`, `complaint_subcategory_llm`, `keywords_llm`, `notes_llm`),
 - fallback категория `OTHER` означает "не попало в вопросы".
 
