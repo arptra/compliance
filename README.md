@@ -144,6 +144,7 @@ llm:
 - вопросы из JSON валидируются и получают стабильные question-коды `q_<index>_<sha1_8>`,
 - GigaChat по каждому вопросу определяет, какую бизнес-категорию использовать,
 - первое присвоение `question_code -> category_code/category_name` сохраняется и дальше переиспользуется (модель больше не переименовывает эту категорию),
+- `category_name` должен быть коротким названием категории (не равным тексту вопроса); если модель вернула текст вопроса, система автоматически сокращает имя до короткой формы,
 - mapping вопросов сохраняется в `data/interim/questions_taxonomy.json`,
 - mapping `question_code -> category_code/category_name` сохраняется в `data/interim/questions_category_map.json`,
 - после `prepare` сохраняется итоговый JSON-свод по вопросам/категориям `data/interim/questions_prepare_categories.json` (включая счётчики категорий),

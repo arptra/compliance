@@ -475,3 +475,45 @@ def test_questions_mode_learns_category_name_per_question_and_reuses_it(tmp_path
     assert out1.complaint_category == out2.complaint_category
     state = n.export_questions_categories_json()
     assert q_code_holder["code"] in state["question_category_map"]
+
+
+def test_questions_mode_uses_short_name_when_model_repeats_question_text(tmp_path):
+    q_code_holder = {"code": ""}
+
+    class QClient:
+        def chat(self, payload):
+            q_code = q_code_holder["code"]
+            body = {
+                "primary_question_code": q_code,
+                "category_name": "Есть ли жалоба на переводы?",
+                "triggered_codes": [q_code],
+                "keywords": ["перевод", "ошибка", "жалоба"],
+            }
+            return _Resp(json.dumps(body, ensure_ascii=False))
+
+    qf = tmp_path / "questions.json"
+    qf.write_text(json.dumps({"version": 1, "categories": [{"question_ru": "Есть ли жалоба на переводы?"}]}, ensure_ascii=False), encoding="utf-8")
+    q_code_holder["code"] = load_questions(qf)["items"][0]["code"]
+
+    cfg = LLMConfig(
+        enabled=True,
+        mode="mtls",
+        base_url="https://x",
+        ca_bundle_file="ca.pem",
+        cert_file="cert.pem",
+        key_file="key.pem",
+        verify_ssl_certs=True,
+        model="GigaChat",
+        cache_db=str(tmp_path / "cache.sqlite"),
+        category_mode="questions",
+        questions_file=str(qf),
+    )
+    n = GigaChatNormalizer(cfg, {"category_codes": ["OTHER"], "subcategories_by_category": {"OTHER": []}, "loan_products": ["NONE"]}, mock=True)
+    n.mock = False
+    n.client = QClient()
+
+    out = n.normalize({"full_dialog_text": "перевод не прошел"})
+    assert out.is_complaint is True
+    state = n.export_questions_categories_json()
+    qmap = state["question_category_map"][q_code_holder["code"]]
+    assert qmap["category_name"].strip().lower() != "есть ли жалоба на переводы?"

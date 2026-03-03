@@ -143,6 +143,32 @@ def _normalize_code(s: str) -> str:
     return code or "other"
 
 
+def _short_category_name_from_question(question_ru: str) -> str:
+    q = str(question_ru or "").strip()
+    if not q:
+        return "Обращение"
+    low = q.lower().replace("?", "").strip()
+    prefixes = [
+        "есть ли жалоба на ",
+        "жалоба на ",
+        "есть ли проблема с ",
+        "проблема с ",
+    ]
+    for p in prefixes:
+        if low.startswith(p):
+            low = low[len(p):].strip()
+            break
+    if not low:
+        low = q.replace("?", "").strip()
+    words = [w for w in low.split() if w]
+    short = " ".join(words[:4]).strip()
+    if not short:
+        short = q.replace("?", "").strip()
+    if not short:
+        short = "Обращение"
+    return short[0].upper() + short[1:]
+
+
 def _normalize_subcategory_code(s: str) -> str:
     return _normalize_code(s)
 
@@ -331,8 +357,12 @@ class GigaChatNormalizer:
                         "return_matched_boolean_and_short_rationale": True,
                         "select_primary_question_from_allowed_question_codes": True,
                         "if_primary_question_has_existing_category_reuse_it": True,
+                        "if_primary_question_has_no_category_generate_new_short_category_name": True,
+                        "category_name_must_be_short": True,
+                        "category_name_must_not_equal_question_text": True,
                         "if_no_match_use_other": True,
                         "if_other_then_is_complaint_false": True,
+                        "return_fields": ["primary_question_code", "category_name", "triggered_codes", "keywords", "notes"],
                         "return_json_compatible_with_normalize_ticket": True,
                     },
                     "allowed_question_codes": [x["code"] for x in self.question_items],
@@ -398,7 +428,11 @@ class GigaChatNormalizer:
                         "must_return_batch_index": True,
                         "select_primary_question_from_allowed_question_codes": True,
                         "if_primary_question_has_existing_category_reuse_it": True,
+                        "if_primary_question_has_no_category_generate_new_short_category_name": True,
+                        "category_name_must_be_short": True,
+                        "category_name_must_not_equal_question_text": True,
                         "if_other_then_is_complaint_false": True,
+                        "return_result_fields": ["primary_question_code", "category_name", "triggered_codes", "keywords", "notes"],
                         "return_result_compatible_with_normalize_ticket": True,
                     },
                     "allowed_question_codes": [x["code"] for x in self.question_items],
@@ -596,10 +630,14 @@ class GigaChatNormalizer:
         mapped = self.question_category_map.get(q_code)
         if mapped and str(mapped.get("category_code", "")).strip():
             category_code = str(mapped.get("category_code"))
-            category_name = str(mapped.get("category_name") or mapped.get("question_ru") or q_map.get(q_code, ""))
+            category_name = str(mapped.get("category_name") or _short_category_name_from_question(mapped.get("question_ru") or q_map.get(q_code, "")))
         else:
-            raw_name = str(out.get("category_name") or out.get("category_label") or out.get("category") or q_map.get(q_code, "")).strip()
-            category_name = raw_name or q_map.get(q_code, "") or q_code
+            raw_name = str(out.get("category_name") or out.get("category_label") or out.get("category") or "").strip()
+            question_text = q_map.get(q_code, "")
+            if not raw_name or raw_name.strip().lower() == question_text.strip().lower():
+                category_name = _short_category_name_from_question(question_text)
+            else:
+                category_name = raw_name
             category_code = _normalize_code(category_name)
             used = {str(v.get("category_code", "")) for v in self.question_category_map.values()}
             if category_code in used:
