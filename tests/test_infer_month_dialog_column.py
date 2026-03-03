@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from complaints_trends.config import load_config
-from complaints_trends.infer_month import _enforce_subcategory_taxonomy, infer_month
+from complaints_trends.infer_month import _enforce_subcategory_taxonomy, _predict_subcategories_by_category, _select_infer_text_field, infer_month
 
 
 class _FakeVec:
@@ -55,7 +55,7 @@ def test_infer_month_works_when_dialog_column_is_none(tmp_path, monkeypatch):
     assert "raw_dialog" in out.columns
     assert "subcategory_pred" in out.columns
     assert out["category_pred"].eq("OTHER").all()
-    assert out["subcategory_pred"].eq("NOT_COMPLAINT").all()
+    assert out["subcategory_pred"].eq("UNKNOWN").all()
     assert Path("reports/month_2025-02_category_hist.png").exists()
     assert Path("reports/month_2025-02_subcategory_hist.png").exists()
     html = Path("reports/month_report_2025-02.html").read_text(encoding="utf-8")
@@ -121,8 +121,43 @@ def test_infer_month_does_not_convert_empty_dialogs_to_nan_string(tmp_path, monk
     monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
 
     out = infer_month(cfg, str(excel), "2025-04")
-    assert out["raw_dialog"].eq("").all()
-    assert out["client_first_message"].eq("").all()
+    assert len(out) == 0
+
+
+def test_infer_month_skips_rows_when_all_dialog_columns_empty(tmp_path, monkeypatch):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
+    cfg.input.dialog_columns = ["dialog_text", "call_text", "comment_text", "summary_text"]
+
+    excel = tmp_path / "month_skip_empty.xlsx"
+    pd.DataFrame(
+        [
+            {
+                "created_at": "2025-02-01 10:00:00",
+                "dialog_text": "",
+                "call_text": None,
+                "comment_text": " ",
+                "summary_text": None,
+            },
+            {
+                "created_at": "2025-02-02 11:00:00",
+                "dialog_text": "",
+                "call_text": "CLIENT: не проходит платеж",
+                "comment_text": "",
+                "summary_text": "",
+            },
+        ]
+    ).to_excel(excel, index=False)
+
+    objs = [_FakeVec(), _FakeComplaintModel(), _FakeCatModel(), _FakeEnc()]
+
+    def _fake_load(_):
+        return objs.pop(0)
+
+    monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
+
+    out = infer_month(cfg, str(excel), "2025-05")
+    assert len(out) == 1
 
 
 
@@ -132,3 +167,127 @@ def test_enforce_subcategory_taxonomy_rejects_unknown_subcategories():
     taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue"]}}
     out = _enforce_subcategory_taxonomy(cats, subs, taxonomy)
     assert out.tolist() == ["login_issue", "UNKNOWN", "NOT_COMPLAINT"]
+
+
+def test_select_infer_text_field_prefers_training_text_field():
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.text_field = "raw_dialog"
+    df = pd.DataFrame(
+        [
+            {"raw_dialog": "D1", "client_first_message": "C1"},
+            {"raw_dialog": "D2", "client_first_message": "C2"},
+        ]
+    )
+
+    series, used = _select_infer_text_field(df, cfg)
+    assert used == "raw_dialog"
+    assert series.tolist() == ["D1", "D2"]
+
+
+def test_select_infer_text_field_falls_back_to_client_message_when_column_missing():
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.text_field = "dialog_text"
+    df = pd.DataFrame(
+        [
+            {"raw_dialog": "D1", "client_first_message": "C1"},
+            {"raw_dialog": "D2", "client_first_message": "C2"},
+        ]
+    )
+
+    series, used = _select_infer_text_field(df, cfg)
+    assert used == "client_first_message (fallback from dialog_text)"
+    assert series.tolist() == ["C1", "C2"]
+
+
+class _OneRowModel:
+    def __init__(self, val):
+        self.val = val
+
+    def predict(self, x):
+        return np.array([self.val], dtype=int)
+
+
+class _OneRowEnc:
+    def __init__(self, val):
+        self.val = val
+
+    def inverse_transform(self, x):
+        return np.array([self.val], dtype=object)
+
+
+def test_predict_subcategories_by_category_prefers_category_specific_model():
+    x = np.zeros((2, 1))
+    idx = np.array([True, True])
+    categories = np.array(["TECHNICAL", "PAYMENTS_TRANSFERS"], dtype=object)
+
+    models_by_cat = {
+        "TECHNICAL": {"mode": "constant", "value": "login_issue"},
+        "PAYMENTS_TRANSFERS": {"mode": "constant", "value": "payment_error"},
+    }
+
+    out = _predict_subcategories_by_category(
+        x=x,
+        idx_mask=idx,
+        categories=categories,
+        fallback_subcat_model=None,
+        fallback_subcat_enc=None,
+        models_by_category=models_by_cat,
+    )
+    assert out.tolist() == ["login_issue", "payment_error"]
+
+
+def test_enforce_subcategory_taxonomy_keeps_value_for_unknown_category_allowlist():
+    cats = np.array(["DISCOVERED_DYNAMIC"], dtype=object)
+    subs = np.array(["fresh_sub"], dtype=object)
+    taxonomy = {"subcategories_by_category": {"TECHNICAL": ["login_issue"]}}
+    out = _enforce_subcategory_taxonomy(cats, subs, taxonomy)
+    assert out.tolist() == ["fresh_sub"]
+
+
+def test_infer_month_uses_discovered_taxonomy_for_subcategory_enforcement(tmp_path, monkeypatch):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.training.model_dir = str(tmp_path / "models")
+    cfg.llm.discovered_taxonomy_file = str(tmp_path / "discovered.json")
+
+    Path(cfg.llm.discovered_taxonomy_file).write_text(
+        '{"categories": ["DISCOVERED_DYNAMIC"], "subcategories_by_category": {"DISCOVERED_DYNAMIC": ["fresh_sub"]}}',
+        encoding="utf-8",
+    )
+
+    excel = tmp_path / "month_discovered.xlsx"
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-01 10:00:00", "dialog_text": "CLIENT: new issue"},
+        ]
+    ).to_excel(excel, index=False)
+
+    class _DiscCatModel:
+        def predict(self, x):
+            return np.zeros(x.shape[0], dtype=int)
+
+    class _DiscEnc:
+        def inverse_transform(self, x):
+            return np.array(["DISCOVERED_DYNAMIC"] * len(x), dtype=object)
+
+    model_dir = Path(cfg.training.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "subcategory_models_by_category.joblib").write_text("x", encoding="utf-8")
+
+    objs = [
+        _FakeVec(),
+        _FakeComplaintModel(),
+        _DiscCatModel(),
+        _DiscEnc(),
+        {"DISCOVERED_DYNAMIC": {"mode": "constant", "value": "fresh_sub"}},
+    ]
+
+    def _fake_load(_):
+        return objs.pop(0)
+
+    monkeypatch.setattr("complaints_trends.infer_month.joblib.load", _fake_load)
+
+    out = infer_month(cfg, str(excel), "2025-06")
+    assert out.loc[out.index[0], "category_pred"] == "DISCOVERED_DYNAMIC"
+    assert out.loc[out.index[0], "subcategory_pred"] == "fresh_sub"
+    html = Path("reports/month_report_2025-06.html").read_text(encoding="utf-8")
+    assert "DISCOVERED_DYNAMIC / fresh_sub" in html
