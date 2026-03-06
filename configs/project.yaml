@@ -48,6 +48,9 @@ llm:
   request_metrics_enabled: true
   async_mode: false
   parallel_mode: false
+  category_mode: "taxonomy"  # taxonomy|discover|questions
+  discovered_taxonomy_file: "data/interim/discovered_categories.json"
+  questions_file: "configs/questions_categories.json"
 
 prepare:
   pilot_limit: 5000
@@ -56,6 +59,7 @@ prepare:
   output_parquet: "data/processed/all_prepared.parquet"
   pilot_parquet: "data/processed/pilot_prepared.parquet"
   pilot_review_xlsx: "exports/pilot_review.xlsx"
+  llm_payload_review_xlsx: "exports/llm_payload_review.xlsx"
 
 training:
   text_field: "client_first_message"

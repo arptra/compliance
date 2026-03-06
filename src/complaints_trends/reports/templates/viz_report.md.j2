@@ -1,0 +1,19 @@
+# Visual report: {{ tag }}
+
+- label_source: `{{ label_source }}`
+- rows_total: **{{ rows_total }}**
+- complaints_count: **{{ complaints_count }}**
+- complaints_share: **{{ complaints_share }}**
+
+## Charts
+![stacked](stacked_area_counts.png)
+![share](share_lines.png)
+![pareto](pareto_categories.png)
+![heatmap](heatmap_dow_hour.png)
+![delta](delta_bars.png)
+
+## Top categories
+| category | count |
+|---|---:|
+{% for row in top_categories %}| {{ row.category }} | {{ row.count }} |
+{% endfor %}

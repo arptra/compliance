@@ -7,6 +7,23 @@
 <ul>{% for k,v in top_categories_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
 <h2>Top subcategories (RU)</h2>
 <ul>{% for k,v in top_subcategories_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
+{% if subcategory_histogram %}
+<h2>Гистограмма подкатегорий</h2>
+<img src="{{ subcategory_histogram }}" alt="Гистограмма подкатегорий" style="max-width:1200px;width:100%;height:auto;"/>
+{% endif %}
+<h2>Репорт по подкатегориям</h2>
+<p>Excel-файл с колонками <b>subcategory</b> и <b>gigachat_examples</b>: {{ subcategory_examples_path }}</p>
+<table border="1" cellpadding="6" cellspacing="0">
+  <thead><tr><th>Подкатегория</th><th>Примеры (GigaChat, обрезанные)</th></tr></thead>
+  <tbody>
+  {% for row in subcategory_examples %}
+    <tr>
+      <td>{{ row.subcategory }}</td>
+      <td><pre style="white-space:pre-wrap">{{ row.gigachat_examples }}</pre></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
 <h2>Top loan products (RU)</h2>
 <ul>{% for k,v in top_loan_products_ru.items() %}<li>{{k}}: {{v}}</li>{% endfor %}</ul>
 <h2>Complaint examples</h2>
