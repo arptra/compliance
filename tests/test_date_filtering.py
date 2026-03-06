@@ -1,3 +1,4 @@
+from pathlib import Path
 import pandas as pd
 
 from complaints_trends.prepare_dataset import prepare_dataset
@@ -112,3 +113,135 @@ def test_prepare_skips_llm_errors_and_collects_them(tmp_path, monkeypatch):
     assert len(out) == 2
     assert out["llm_error"].astype(str).str.contains("LLM_ERROR").sum() == 1
     assert (tmp_path / "reports" / "llm_errors.json").exists()
+
+
+def test_prepare_marks_non_meaningful_text_columns(tmp_path):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.llm.enabled = False
+    cfg.input.signal_columns = ["dialog_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-09 12:55:29", "dialog_text": "ok", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+            {
+                "created_at": "2025-02-10 12:55:29",
+                "dialog_text": "CLIENT: не работает оплата, ошибка в приложении, не проходит перевод",
+                "subject": "s",
+                "channel": "chat",
+                "product": "app",
+                "status": "x",
+            },
+        ]
+    ).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    out = prepare_dataset(cfg, pilot=True, llm_mock=True, limit=2)
+    assert "raw_dialog_meaningful" in out.columns
+    assert "client_first_message_meaningful" in out.columns
+    assert "text_quality_issue" in out.columns
+    assert out["text_quality_issue"].astype(str).str.contains("empty_or_short").any()
+
+
+def test_prepare_skips_rows_where_all_dialog_columns_are_empty(tmp_path):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.llm.enabled = False
+    cfg.input.signal_columns = ["dialog_text", "call_text", "comment_text", "summary_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text", "call_text", "comment_text", "summary_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        [
+            {
+                "created_at": "2025-02-01 10:00:00",
+                "dialog_text": "",
+                "call_text": None,
+                "comment_text": "   ",
+                "summary_text": None,
+                "subject": "s",
+                "channel": "chat",
+                "product": "app",
+                "status": "x",
+            },
+            {
+                "created_at": "2025-02-02 10:00:00",
+                "dialog_text": "",
+                "call_text": "CLIENT: не могу войти",
+                "comment_text": "",
+                "summary_text": "",
+                "subject": "s",
+                "channel": "chat",
+                "product": "app",
+                "status": "x",
+            },
+        ]
+    ).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    out = prepare_dataset(cfg, pilot=False, llm_mock=True)
+    assert len(out) == 1
+    assert out.iloc[0]["raw_dialog"]
+
+
+def test_prepare_exports_llm_payload_review_excel_with_assigned_category_and_subcategory(tmp_path):
+    cfg = load_config("configs/project.yaml")
+    cfg = cfg.model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.prepare.llm_payload_review_xlsx = str(tmp_path / "llm_payload_review.xlsx")
+    cfg.llm.enabled = False
+    cfg.input.signal_columns = ["dialog_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        [
+            {"created_at": "2025-02-09 12:55:29", "dialog_text": "CLIENT: не работает перевод", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+            {"created_at": "2025-02-10 12:55:29", "dialog_text": "CLIENT: просто вопрос", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+        ]
+    ).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    prepare_dataset(cfg, pilot=False, llm_mock=True)
+
+    payload_review = pd.read_excel(cfg.prepare.llm_payload_review_xlsx)
+    assert "full_dialog_text" in payload_review.columns
+    assert "client_first_message" in payload_review.columns
+    assert "gigachat_assigned_category" in payload_review.columns
+    assert "gigachat_assigned_subcategory" in payload_review.columns
+    assert payload_review["gigachat_assigned_category"].notna().all()
+    assert payload_review["gigachat_assigned_subcategory"].notna().any()
+
+
+def test_prepare_questions_mode_writes_questions_summary_json(tmp_path):
+    cfg = load_config("configs/project.yaml").model_copy(deep=True)
+    cfg.input.input_dir = str(tmp_path / "raw")
+    cfg.prepare.output_parquet = str(tmp_path / "all.parquet")
+    cfg.prepare.pilot_parquet = str(tmp_path / "pilot.parquet")
+    cfg.prepare.pilot_review_xlsx = str(tmp_path / "review.xlsx")
+    cfg.llm.enabled = False
+    cfg.llm.category_mode = "questions"
+    qf = tmp_path / "questions.json"
+    qf.write_text('{"version":1,"categories":[{"question_ru":"Есть ли жалоба на переводы?"}]}', encoding="utf-8")
+    cfg.llm.questions_file = str(qf)
+    cfg.input.signal_columns = ["dialog_text", "subject", "channel", "product", "status"]
+    cfg.input.dialog_columns = ["dialog_text"]
+    (tmp_path / "raw").mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame([
+        {"created_at": "2025-02-09 12:55:29", "dialog_text": "CLIENT: вопрос", "subject": "s", "channel": "chat", "product": "app", "status": "x"},
+    ]).to_excel(tmp_path / "raw" / "sample.xlsx", index=False)
+
+    prepare_dataset(cfg, pilot=False, llm_mock=True)
+    out = Path("data/interim/questions_prepare_categories.json")
+    assert out.exists()
