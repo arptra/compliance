@@ -12,6 +12,8 @@ from .config import load_config
 from .infer_month import infer_month
 from .novelty_hunt import novelty_hunt
 from .prepare_dataset import prepare_dataset
+from .pattern_fit import run_pattern_fit
+from .pattern_monitor import run_pattern_monitor
 from .train_models import train
 from .trends import build_trends
 from .viz.report import build_visual_report, materialize_predictions
@@ -190,6 +192,66 @@ def novelty_hunt_cmd(
     console.log(f"novelty-hunt state: {state_path}")
     console.log(f"novelty-hunt export: {export_path}")
 
+
+
+@app.command("pattern-fit")
+def pattern_fit_cmd(
+    config: str = typer.Option(..., "--config", help="Path to project yaml config"),
+    tag: str = typer.Option(..., "--tag"),
+    normal_period: str | None = typer.Option(None, "--normal-period"),
+    event_period: str | None = typer.Option(None, "--event-period"),
+    label_source: str | None = typer.Option(None, "--label-source", help="llm|pred"),
+    use_llm_summary: bool = typer.Option(False, "--use-llm-summary"),
+):
+    logger.info("[stage=pattern-fit] start")
+    cfg = load_config(config)
+    pm = cfg.analysis.pattern_monitoring
+    src = label_source or pm.label_source
+    if src not in {"llm", "pred"}:
+        raise typer.BadParameter("--label-source must be llm or pred")
+    norm = normal_period or pm.normal_period
+    ev = event_period or pm.event_period
+    if not norm or not ev:
+        raise typer.BadParameter("normal/event period must be set via CLI or config")
+    report, fit_bundle, growth = run_pattern_fit(cfg, tag=tag, normal_period=norm, event_period=ev, label_source=src)
+    logger.info("[stage=pattern-fit] done")
+    console.log(f"pattern-fit report: {report}")
+    console.log(f"pattern-fit bundle: {fit_bundle}")
+    console.log(f"pattern-fit growth summary: {growth}")
+
+
+@app.command("pattern-monitor")
+def pattern_monitor_cmd(
+    config: str = typer.Option(..., "--config", help="Path to project yaml config"),
+    tag: str = typer.Option(..., "--tag"),
+    label_source: str | None = typer.Option(None, "--label-source", help="llm|pred"),
+    date_from: str | None = typer.Option(None, "--date-from"),
+    date_to: str | None = typer.Option(None, "--date-to"),
+    month: str | None = typer.Option(None, "--month"),
+    force_materialize: bool = typer.Option(False, "--force-materialize"),
+    use_llm_summary: bool = typer.Option(False, "--use-llm-summary"),
+):
+    logger.info("[stage=pattern-monitor] start")
+    cfg = load_config(config)
+    pm = cfg.analysis.pattern_monitoring
+    src = label_source or pm.label_source
+    if src not in {"llm", "pred"}:
+        raise typer.BadParameter("--label-source must be llm or pred")
+    if month and (date_from or date_to):
+        raise typer.BadParameter("Use either --month or --date-from/--date-to")
+    scored, state, report = run_pattern_monitor(
+        cfg,
+        tag=tag,
+        label_source=src,
+        date_from=date_from,
+        date_to=date_to,
+        month=month,
+        force_materialize=force_materialize,
+    )
+    logger.info("[stage=pattern-monitor] done")
+    console.log(f"pattern-monitor scored rows: {scored}")
+    console.log(f"pattern-monitor daily state: {state}")
+    console.log(f"pattern-monitor report: {report}")
 
 
 if __name__ == "__main__":

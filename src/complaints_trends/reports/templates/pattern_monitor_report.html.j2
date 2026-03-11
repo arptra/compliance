@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pattern monitor {{ tag }}</title></head>
+<body>
+<h1>Pattern monitor: {{ tag }}</h1>
+<p>label_source={{ label_source }}, period={{ month or (date_from ~ ' .. ' ~ date_to) }}</p>
+<h2>Top alert rows</h2>
+<table border="1" cellpadding="4">
+<tr><th>category</th><th>score</th><th>text</th></tr>
+{% for r in alerts %}
+<tr><td>{{ r.category }}</td><td>{{ '%.3f'|format(r.pattern_like_score) }}</td><td>{{ r.text_original }}</td></tr>
+{% endfor %}
+</table>
+<h2>Category pressure</h2>
+<ul>
+{% for r in category_pressure %}
+<li>{{ r.date }} / {{ r.category }}: {{ '%.3f'|format(r.category_pressure) }}</li>
+{% endfor %}
+</ul>
+</body></html>

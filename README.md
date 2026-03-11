@@ -1036,3 +1036,62 @@ python -m complaints_trends.cli novelty-hunt \
 - `data/interim/novelty_hunt_clusters_<tag>.json`
 - `exports/novelty_hunt_<tag>.xlsx`
 - `reports/novelty_hunt_<tag>.html`
+
+## Pattern monitoring: ongoing special pattern внутри старых категорий
+
+Новый режим `pattern-fit` + `pattern-monitor` ищет и отслеживает продолжающийся специальный подтип жалоб **внутри существующих категорий**.
+
+### 1) Обучение профиля паттерна
+
+```bash
+python -m complaints_trends.cli pattern-fit \
+  --config configs/project.yaml \
+  --tag mig_2025_q4 \
+  --normal-period 2025-01..2025-08 \
+  --event-period 2025-11..2025-12 \
+  --label-source llm
+```
+
+`pattern-fit` строит baseline по категориям на normal-period, находит выросшие категории в event-period, выделяет внутри них event-like seed-строки и кластеризует их.
+
+### 2) Мониторинг новых дней/месяцев
+
+По диапазону дат из historical витрины:
+
+```bash
+python -m complaints_trends.cli pattern-monitor \
+  --config configs/project.yaml \
+  --tag mig_2025_q4 \
+  --date-from 2025-12-15 \
+  --date-to 2025-12-15 \
+  --label-source llm
+```
+
+По `month_YYYY-MM.parquet` после `infer-month`:
+
+```bash
+python -m complaints_trends.cli pattern-monitor \
+  --config configs/project.yaml \
+  --tag mig_2025_q4 \
+  --month 2026-01 \
+  --label-source pred \
+  --force-materialize
+```
+
+### Артефакты и валидация
+
+`pattern-fit` сохраняет в `data/interim/pattern_fit_<tag>/`:
+- `category_growth_summary.parquet`
+- `seed_pool.parquet`
+- `cluster_members.parquet`
+- `cluster_profiles.json`
+- `fit_bundle.joblib`
+
+`pattern-monitor` сохраняет в `data/interim/pattern_monitor_<tag>/`:
+- `scored_rows.parquet`
+- `category_daily_pressure.parquet`
+- `overall_daily_state.parquet`
+
+Также формируются:
+- `exports/pattern_fit_<tag>.xlsx`, `reports/pattern_fit_<tag>.html`
+- `exports/pattern_monitor_<tag>.xlsx`, `reports/pattern_monitor_<tag>.html`

@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Pattern fit {{ tag }}</title></head>
+<body>
+<h1>Pattern fit: {{ tag }}</h1>
+<p>normal_period={{ normal_period }}, event_period={{ event_period }}</p>
+<h2>Growth summary</h2>
+<table border="1" cellpadding="4">
+<tr><th>category</th><th>excess</th><th>max_z</th><th>days_over</th><th>candidate</th></tr>
+{% for r in growth_rows %}
+<tr><td>{{ r.category }}</td><td>{{ '%.2f'|format(r.total_excess_event) }}</td><td>{{ '%.2f'|format(r.max_zscore) }}</td><td>{{ r.event_days_over_threshold }}</td><td>{{ r.is_candidate }}</td></tr>
+{% endfor %}
+</table>
+<h2>Cluster profiles</h2>
+{% for c in clusters %}
+<h3>{{ c.category }} (seeds={{ c.seed_count }})</h3>
+<ul>
+{% for cl in c.clusters %}
+<li>cluster {{ cl.cluster_id }} size={{ cl.size }} terms={{ cl.top_terms|join(', ') }}</li>
+{% endfor %}
+</ul>
+{% endfor %}
+</body></html>
