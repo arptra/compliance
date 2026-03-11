@@ -10,6 +10,7 @@ from rich.console import Console
 from .compare import compare_month
 from .config import load_config
 from .infer_month import infer_month
+from .novelty_hunt import novelty_hunt
 from .prepare_dataset import prepare_dataset
 from .train_models import train
 from .trends import build_trends
@@ -165,6 +166,29 @@ def viz_view_cmd(
     if not state_path.exists():
         raise typer.BadParameter(f"state parquet not found: {state_path}")
     run_viewer(state_path, tag=tag)
+
+
+@app.command("novelty-hunt")
+def novelty_hunt_cmd(
+    config: str = typer.Option(..., "--config", help="Path to project yaml config"),
+    new_month: str = typer.Option(..., "--new-month"),
+    baseline_range: str = typer.Option(..., "--baseline-range", help="YYYY-MM..YYYY-MM"),
+    tag: str = typer.Option("latest", "--tag"),
+    use_llm_summary: bool = typer.Option(False, "--use-llm-summary"),
+):
+    logger.info("[stage=novelty-hunt] start")
+    cfg = load_config(config)
+    report_path, state_path, export_path = novelty_hunt(
+        cfg,
+        new_month=new_month,
+        baseline_range=baseline_range,
+        tag=tag,
+        use_llm_summary=use_llm_summary,
+    )
+    logger.info("[stage=novelty-hunt] done")
+    console.log(f"novelty-hunt report: {report_path}")
+    console.log(f"novelty-hunt state: {state_path}")
+    console.log(f"novelty-hunt export: {export_path}")
 
 
 

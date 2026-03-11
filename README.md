@@ -1003,3 +1003,36 @@ python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo_pre
 - `count` — абсолютное число жалоб категории в новом месяце;
 - `share_of_complaints` — доля категории среди всех жалоб нового месяца;
 - `delta_bars` — насколько доля категории изменилась относительно baseline периода (в процентных пунктах).
+
+## Novelty-hunt: поиск новых подтипов при тех же категориях
+
+`novelty-hunt` — отдельный режим для поиска "непохожего на прошлое" внутри уже известных категорий.
+Он не заменяет `compare/novelty`, а работает параллельно и ищет дрейф формулировок/контекста при том же label.
+
+Пример запуска:
+
+```bash
+python -m complaints_trends.cli novelty-hunt \
+  --config configs/project.yaml \
+  --new-month 2025-12 \
+  --baseline-range 2025-10..2025-11 \
+  --tag 2025_12
+```
+
+Опционально можно включить LLM-описания кластеров (с кэшированием):
+
+```bash
+python -m complaints_trends.cli novelty-hunt \
+  --config configs/project.yaml \
+  --new-month 2025-12 \
+  --baseline-range 2025-10..2025-11 \
+  --tag 2025_12 \
+  --use-llm-summary
+```
+
+Артефакты:
+- `data/interim/novelty_hunt_state_<tag>.parquet`
+- `data/interim/novelty_hunt_meta_<tag>.json`
+- `data/interim/novelty_hunt_clusters_<tag>.json`
+- `exports/novelty_hunt_<tag>.xlsx`
+- `reports/novelty_hunt_<tag>.html`

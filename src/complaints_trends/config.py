@@ -120,8 +120,56 @@ class NoveltyConfig(AppBaseModel):
     min_cluster_size: int = 20
 
 
+class NoveltyHuntConfig(AppBaseModel):
+    enabled: bool = True
+
+    candidate_pool: Literal["complaints_only", "score_band", "all"] = "score_band"
+    complaint_score_min: float = 0.35
+    complaint_score_max: float = 1.0
+    include_other_category: bool = True
+    include_low_margin: bool = True
+
+    novelty_scope: Literal["global", "per_category", "both"] = "both"
+    min_baseline_per_category: int = 200
+    label_source: Literal["pred", "llm"] = "pred"
+
+    text_field: str = "client_first_message"
+    use_first_message_only: bool = True
+    strip_system_speakers: bool = True
+
+    vectorizer_source: Literal["trained", "fit_baseline"] = "trained"
+
+    method_primary: Literal["knn_cosine", "lof", "kmeans_distance"] = "knn_cosine"
+    method_secondary: Literal["none", "knn_cosine", "lof", "kmeans_distance"] = "kmeans_distance"
+    combine: Literal["max", "mean", "weighted"] = "max"
+    weight_primary: float = 0.7
+    weight_secondary: float = 0.3
+    svd_components: int = 200
+    knn_k: int = 15
+    kmeans_k: int = 40
+
+    select_mode: Literal["percentile_base", "top_k", "threshold"] = "percentile_base"
+    threshold_percentile: float = 98.0
+    threshold_value: float = 0.5
+    top_k: int = 300
+
+    clustering: Literal["optics", "dbscan", "agglomerative"] = "optics"
+    min_cluster_size: int = 15
+    max_clusters: int = 12
+
+    reports_dir: str = "reports"
+    exports_dir: str = "exports"
+    interim_dir: str = "data/interim"
+    examples_per_cluster: int = 12
+
+    llm_summary_enabled: bool = False
+    llm_max_clusters: int = 8
+    llm_examples_per_cluster: int = 10
+
+
 class AnalysisConfig(AppBaseModel):
     novelty: NoveltyConfig = Field(default_factory=NoveltyConfig)
+    novelty_hunt: NoveltyHuntConfig = Field(default_factory=NoveltyHuntConfig)
     reports_dir: str = "reports"
 
 
