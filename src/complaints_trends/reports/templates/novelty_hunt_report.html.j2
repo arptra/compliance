@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Novelty Hunt</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; }
+    th { background: #f4f4f4; text-align: left; }
+    .muted { color: #666; }
+    code { background: #f3f3f3; padding: 2px 4px; }
+  </style>
+</head>
+<body>
+  <h1>Novelty Hunt Report</h1>
+  <p class="muted">new_month={{ meta.new_month }}, baseline={{ meta.baseline_range }}, scope={{ meta.scope }}, select_mode={{ meta.select_mode }}</p>
+
+  <h2>KPI</h2>
+  <ul>
+    <li>Candidate rows: <b>{{ meta.candidate_rows }}</b></li>
+    <li>Novel rows: <b>{{ meta.novel_rows }}</b></li>
+    <li>Threshold: <b>{{ '%.6f'|format(meta.threshold) }}</b></li>
+  </ul>
+
+  <h2>Clusters</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Cluster</th><th>Size</th><th>Avg novelty</th><th>Categories</th><th>Top terms</th><th>LLM title</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in cluster_summaries %}
+      <tr>
+        <td>{{ c.cluster_id }}</td>
+        <td>{{ c.size }}</td>
+        <td>{{ '%.4f'|format(c.avg_novelty_score) }}</td>
+        <td><code>{{ c.category_distribution }}</code></td>
+        <td>{{ c.top_terms|join(', ') }}</td>
+        <td>{{ c.llm_summary.title_ru if c.llm_summary else '' }}</td>
+      </tr>
+      <tr>
+        <td colspan="6">
+          <b>Examples</b>
+          <ul>
+          {% for ex in c.examples %}
+            <li>#{{ ex.row_id }} [{{ ex.event_time }}] ({{ '%.4f'|format(ex.novelty_score) if ex.novelty_score is not none else '' }}) — {{ ex.text_original }}</li>
+          {% endfor %}
+          </ul>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Top novel rows</h2>
+  <table>
+    <thead><tr><th>row_id</th><th>event_time</th><th>category</th><th>score</th><th>cluster</th><th>text</th></tr></thead>
+    <tbody>
+    {% for r in novel_examples %}
+      <tr>
+        <td>{{ r.row_id }}</td>
+        <td>{{ r.event_time }}</td>
+        <td>{{ r.category_pred }}</td>
+        <td>{{ '%.4f'|format(r.novelty_score) if r.novelty_score is not none else '' }}</td>
+        <td>{{ r.cluster_id }}</td>
+        <td>{{ r.text_original }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

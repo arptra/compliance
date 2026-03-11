@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from .config import ProjectConfig
@@ -26,6 +27,21 @@ def _non_empty(v) -> bool:
         return False
     s = str(v).strip()
     return bool(s and s.lower() not in {"nan", "none", "null"})
+
+
+def _is_meaningful_text(text: str, min_words: int = 3, min_chars: int = 12) -> bool:
+    s = str(text or "").strip()
+    if len(s) < min_chars:
+        return False
+    words = [w for w in s.replace("\n", " ").split() if w.strip()]
+    return len(words) >= min_words
+
+
+def _best_non_empty_text(*values: str) -> str:
+    for v in values:
+        if _non_empty(v):
+            return str(v).strip()
+    return ""
 
 
 def _get_dialog_fields(cfg: ProjectConfig, df: pd.DataFrame) -> list[str]:
@@ -57,6 +73,13 @@ def _select_primary_dialog(row: pd.Series, dialog_fields: list[str]) -> tuple[st
                 best_text = txt
                 best_field = c
     return best_field, best_text, snippets
+
+
+def _has_any_non_empty_dialog(row: pd.Series, dialog_fields: list[str]) -> bool:
+    for c in dialog_fields:
+        if _non_empty(row.get(c, "")):
+            return True
+    return False
 
 
 
@@ -313,12 +336,45 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     for c in text_like_cols:
         df[c] = df[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
 
+    has_dialog_mask = df.apply(lambda r: _has_any_non_empty_dialog(r, dialog_fields), axis=1)
+    dropped = int((~has_dialog_mask).sum())
+    if dropped:
+        logger.warning(
+            "[stage=prepare] dropped rows with empty dialog columns (%s): %s",
+            ", ".join(dialog_fields),
+            dropped,
+        )
+    df = df[has_dialog_mask].copy()
+
     selected = df.apply(lambda r: _select_primary_dialog(r, dialog_fields), axis=1)
     df["dialog_source_field"] = selected.apply(lambda x: x[0])
     df["raw_dialog"] = selected.apply(lambda x: x[1])
     df["dialog_context_map"] = selected.apply(lambda x: json.dumps(x[2], ensure_ascii=False))
 
     df["client_first_message"] = df["raw_dialog"].apply(lambda x: extract_client_first_message(x, cfg.client_first_extraction))
+    fallback_values = [
+        _best_non_empty_text(row.get("raw_dialog"), " ".join(json.loads(row.get("dialog_context_map", "{}")).values()))
+        for _, row in df.iterrows()
+    ]
+    df["raw_dialog_fallback"] = fallback_values
+    df["raw_dialog"] = df["raw_dialog_fallback"]
+    df["client_first_message"] = df.apply(
+        lambda r: _best_non_empty_text(r.get("client_first_message"), r.get("raw_dialog")),
+        axis=1,
+    )
+    df["raw_dialog_meaningful"] = df["raw_dialog"].apply(_is_meaningful_text)
+    df["client_first_message_meaningful"] = df["client_first_message"].apply(_is_meaningful_text)
+    df["text_quality_issue"] = df.apply(
+        lambda r: "; ".join(
+            x
+            for x in [
+                "raw_dialog_empty_or_short" if not r.get("raw_dialog_meaningful", False) else "",
+                "client_first_empty_or_short" if not r.get("client_first_message_meaningful", False) else "",
+            ]
+            if x
+        ),
+        axis=1,
+    )
     if cfg.pii.enabled:
         df["client_first_message_redacted"] = df["client_first_message"].apply(lambda x: redact_pii(x, cfg.pii))
         df["dialog_context_map_redacted"] = df["dialog_context_map"].apply(
@@ -332,6 +388,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     normalizer = GigaChatNormalizer(cfg.llm, taxonomy, mock=llm_mock or (not cfg.llm.enabled))
 
     payloads: list[tuple[int, str, dict]] = []
+    payload_rows: list[dict] = []
     total_rows = len(df)
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         signal_fields = _build_signal_payload(row, cfg.input.signal_columns, dialog_fields)
@@ -348,7 +405,9 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
             "channel": signal_fields.get("channel"),
             "status": signal_fields.get("status"),
         }
-        payloads.append((i - 1, str(row.get("row_id", i)), payload))
+        row_id = str(row.get("row_id", i))
+        payloads.append((i - 1, row_id, payload))
+        payload_rows.append({"_payload_index": i - 1, "row_id": row_id, **payload})
 
     if cfg.llm.async_mode:
         if cfg.llm.parallel_mode:
@@ -364,6 +423,19 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
     out_df = pd.concat([df.reset_index(drop=True), llm_df.add_suffix("_llm")], axis=1)
     out_df["llm_error"] = out_df.get("notes_llm", "").astype(str).where(out_df.get("notes_llm", "").astype(str).str.startswith("LLM_ERROR:"), "")
 
+    if payload_rows:
+        payload_df = pd.DataFrame(payload_rows)
+        payload_review = payload_df.merge(
+            out_df[[c for c in ["row_id", "complaint_category_llm", "complaint_subcategory_llm"] if c in out_df.columns]],
+            on="row_id",
+            how="left",
+        )
+        payload_review = payload_review.rename(columns={"complaint_category_llm": "gigachat_assigned_category", "complaint_subcategory_llm": "gigachat_assigned_subcategory"})
+        payload_review = payload_review.drop(columns=["_payload_index"], errors="ignore")
+        payload_review_path = Path(cfg.prepare.llm_payload_review_xlsx)
+        payload_review_path.parent.mkdir(parents=True, exist_ok=True)
+        payload_review.to_excel(payload_review_path, index=False)
+
     out_path = cfg.prepare.pilot_parquet if pilot else cfg.prepare.output_parquet
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
@@ -375,10 +447,14 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         logger.warning("[stage=prepare/llm] rows with LLM errors: %s; saved to %s", len(llm_errors), err_path)
         logger.warning("[stage=prepare/llm] sample errors: %s", llm_errors[:3])
 
+    if getattr(cfg.llm, "category_mode", "taxonomy") == "questions":
+        _save_questions_prepare_summary(normalizer, out_df)
+
     if pilot:
         review_cols = [
             "row_id", "month", "dialog_source_field", "raw_dialog", "client_first_message", "short_summary_llm", "is_complaint_llm", "complaint_category_llm",
-            "complaint_subcategory_llm", "loan_product_llm", "severity_llm", "keywords_llm", "confidence_llm", "llm_error",
+            "complaint_subcategory_llm", "loan_product_llm", "severity_llm", "keywords_llm", "confidence_llm", "llm_error", "raw_dialog_meaningful",
+            "client_first_message_meaningful", "text_quality_issue",
         ]
         review = out_df[[c for c in review_cols if c in out_df.columns]].copy()
         review["is_complaint_gold"] = ""
@@ -389,6 +465,33 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         review.to_excel(cfg.prepare.pilot_review_xlsx, index=False)
         _pilot_report(out_df, cfg)
     return out_df
+
+
+def _save_questions_prepare_summary(normalizer, out_df: pd.DataFrame, path: Path = Path("data/interim/questions_prepare_categories.json")) -> None:
+    if not hasattr(normalizer, "export_questions_categories_json"):
+        return
+    try:
+        data = normalizer.export_questions_categories_json()
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    counts = out_df.get("complaint_category_llm")
+    count_map = counts.astype(str).value_counts().to_dict() if counts is not None else {}
+    data["category_counts_in_prepare"] = {str(k): int(v) for k, v in count_map.items()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_questions_label_mapping(path: Path = Path("data/interim/questions_taxonomy.json")) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    m = data.get("mapping", {}) if isinstance(data, dict) else {}
+    return {str(k): str(v) for k, v in m.items()} if isinstance(m, dict) else {}
 
 
 def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
@@ -404,6 +507,10 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     non_complaints = df[df["is_complaint_llm"] == False]
     taxonomy = load_taxonomy(cfg.files.categories_seed_path)
     cat_labels = taxonomy.get("category_labels", {})
+    if getattr(cfg.llm, "category_mode", "taxonomy") == "questions":
+        q_labels = _load_questions_label_mapping()
+        if q_labels:
+            cat_labels = {**cat_labels, **q_labels}
     sub_labels = taxonomy.get("subcategory_labels", {})
     loan_labels = taxonomy.get("loan_product_labels", {})
 
@@ -411,6 +518,12 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     top_sub = complaints["complaint_subcategory_llm"].value_counts().head(10).to_dict() if "complaint_subcategory_llm" in complaints.columns else {}
     top_loan = complaints["loan_product_llm"].value_counts().head(10).to_dict() if "loan_product_llm" in complaints.columns else {}
     warn = df["short_summary_llm"].astype(str).str.contains(r"CLIENT|OPERATOR|CHATBOT", case=False).any()
+    histogram_path = _build_subcategory_histogram(complaints, Path(cfg.analysis.reports_dir) / "pilot_subcategories_hist.png")
+    subcategory_examples = _build_subcategory_examples(complaints)
+    examples_path = Path("exports") / "pilot_subcategory_examples.xlsx"
+    examples_path.parent.mkdir(parents=True, exist_ok=True)
+    subcategory_examples.to_excel(examples_path, index=False)
+
     context = {
         "n": len(df),
         "complaint_share": float(df["is_complaint_llm"].mean()) if len(df) else 0.0,
@@ -423,8 +536,78 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
         },
         "top_loan_products_ru": {f"{k} ({loan_labels.get(k, k)})": v for k, v in top_loan.items()},
         "complaint_examples": complaints.head(30).to_dict(orient="records"),
+        "subcategory_examples": subcategory_examples.to_dict(orient="records"),
+        "subcategory_examples_path": str(examples_path),
+        "subcategory_histogram": str(histogram_path),
         "non_examples": non_complaints.head(30).to_dict(orient="records"),
         "warning": warn,
     }
     render_template("pilot_report.html.j2", "reports/pilot_report.html", context)
     write_md("reports/pilot_report.md", "# Pilot report\n\nПроверить чеклист, категории и примеры.")
+
+
+def _build_subcategory_histogram(complaints: pd.DataFrame, out_path: Path) -> Path | None:
+    if "complaint_subcategory_llm" not in complaints.columns or complaints.empty:
+        return None
+    counts = (
+        complaints["complaint_subcategory_llm"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .loc[lambda s: s != ""]
+        .value_counts()
+        .head(20)
+    )
+    if counts.empty:
+        return None
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig_height = max(4, min(12, 0.45 * len(counts)))
+    plt.figure(figsize=(12, fig_height))
+    counts.sort_values().plot(kind="barh", color="#3b82f6")
+    plt.title("Топ подкатегорий (pilot)")
+    plt.xlabel("Количество обращений")
+    plt.ylabel("Подкатегория")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=140)
+    plt.close()
+    return out_path
+
+
+def _build_subcategory_examples(complaints: pd.DataFrame, max_examples_per_subcategory: int = 8, example_char_limit: int = 220) -> pd.DataFrame:
+    if "complaint_subcategory_llm" not in complaints.columns or complaints.empty:
+        return pd.DataFrame(columns=["subcategory", "gigachat_examples"])
+
+    data = complaints.copy()
+    data["complaint_subcategory_llm"] = data["complaint_subcategory_llm"].fillna("").astype(str).str.strip()
+    data = data[data["complaint_subcategory_llm"] != ""]
+    if data.empty:
+        return pd.DataFrame(columns=["subcategory", "gigachat_examples"])
+
+    source_col = "short_summary_llm" if "short_summary_llm" in data.columns else "client_first_message"
+
+    def _shorten(text: str) -> str:
+        value = str(text or "").strip().replace("\n", " ")
+        return value[:example_char_limit].rstrip() + ("…" if len(value) > example_char_limit else "")
+
+    rows = []
+    for subcategory, group in data.groupby("complaint_subcategory_llm"):
+        examples = []
+        for value in group[source_col].tolist():
+            trimmed = _shorten(value)
+            if trimmed and trimmed not in examples:
+                examples.append(trimmed)
+            if len(examples) >= max_examples_per_subcategory:
+                break
+        rows.append(
+            {
+                "subcategory": subcategory,
+                "gigachat_examples": "\n\n".join(f"- {item}" for item in examples),
+            }
+        )
+
+    report_df = pd.DataFrame(rows)
+    counts = data["complaint_subcategory_llm"].value_counts().rename("count")
+    report_df["count"] = report_df["subcategory"].map(counts).fillna(0).astype(int)
+    report_df = report_df.sort_values(["count", "subcategory"], ascending=[False, True]).drop(columns=["count"]).reset_index(drop=True)
+    return report_df

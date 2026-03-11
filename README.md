@@ -116,6 +116,41 @@ GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
 ```
 
 
+### 4.3.2 Режим вопросов (`llm.category_mode: questions`)
+
+Поддерживается третий режим категоризации: `questions` (кроме `taxonomy` и `discover`).
+
+Пример конфига:
+
+```yaml
+llm:
+  category_mode: "questions"
+  questions_file: "configs/questions_categories.json"
+```
+
+Формат `questions_file` (строгий JSON):
+
+```json
+{
+  "version": 1,
+  "categories": [
+    {"question_ru": "Есть ли жалоба на платежи?"},
+    {"question_ru": "Есть ли жалоба на вход в приложение?"}
+  ]
+}
+```
+
+При запуске prepare в этом режиме:
+- вопросы из JSON валидируются и получают стабильные question-коды `q_<index>_<sha1_8>`,
+- GigaChat по каждому вопросу определяет, какую бизнес-категорию использовать,
+- первое присвоение `question_code -> category_code/category_name` сохраняется и дальше переиспользуется (модель больше не переименовывает эту категорию),
+- `category_name` должен быть коротким названием категории (не равным тексту вопроса); если модель вернула текст вопроса, система автоматически сокращает имя до короткой формы,
+- mapping вопросов сохраняется в `data/interim/questions_taxonomy.json`,
+- mapping `question_code -> category_code/category_name` сохраняется в `data/interim/questions_category_map.json`,
+- после `prepare` сохраняется итоговый JSON-свод по вопросам/категориям `data/interim/questions_prepare_categories.json` (включая счётчики категорий),
+- в parquet пишутся стандартные поля (`is_complaint_llm`, `complaint_category_llm`, `complaint_subcategory_llm`, `keywords_llm`, `notes_llm`),
+- fallback категория `OTHER` означает "не попало в вопросы".
+
 ### 4.3.1 Приоритет config vs .env для LLM
 
 Сейчас реализован следующий порядок при загрузке:
@@ -868,3 +903,136 @@ PYTHONPATH=src python -m complaints_trends.cli demo
 - Добавить контроль дрейфа по токенам и каналам.
 - Добавить расширенные unit/integration тесты на реальные форматы диалогов.
 
+
+## 5.9 Визуальный анализ предсказаний (`viz-build`, `viz-view`)
+
+Ниже — **полный рабочий флоу**, какие команды запускать и как интерпретировать графики.
+
+### Что нужно, чтобы всё заработало
+
+Минимально:
+1. есть подготовленный датасет: `data/processed/all_prepared.parquet` (после `prepare`),
+2. для режима `--label-source pred` есть обученные модели (`models/*.joblib`) после `train`,
+3. для режима `--label-source llm` достаточно prepared parquet с LLM-колонками (`is_complaint_llm`, `complaint_category_llm`).
+
+### Команды (пошагово, с нуля)
+
+```bash
+export PYTHONPATH=src
+
+# 1) Подготовка weak labels (LLM) и parquet
+python -m complaints_trends.cli prepare --config configs/project.yaml
+
+# 2) Обучение локальных моделей (нужно для label-source=pred)
+python -m complaints_trends.cli train --config configs/project.yaml
+
+# 3) Построение визуального отчёта по предсказаниям модели
+python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_pred   --label-source pred   --freq D   --top-n 8   --baseline-range 2025-10..2025-11   --new-month 2025-12
+
+# 5) (Опционально) Построение отчёта по weak labels LLM
+python -m complaints_trends.cli viz-build   --config configs/project.yaml   --tag demo_llm   --label-source llm   --freq D   --top-n 8
+
+# 6) Интерактивный локальный просмотр (matplotlib GUI)
+python -m complaints_trends.cli viz-view --tag demo_pred
+# или явно путь
+python -m complaints_trends.cli viz-view --state data/interim/viz_state_demo_pred.parquet
+```
+
+### Что создаётся
+
+После `viz-build`:
+- `data/interim/all_predicted.parquet` (только для `--label-source pred`, если отсутствует или задан `--force-materialize`),
+- `data/interim/viz_state_<tag>.parquet` — агрегированная витрина,
+- `data/interim/viz_meta_<tag>.json` — параметры запуска,
+- `reports/viz_<tag>/stacked_area_counts.png`,
+- `reports/viz_<tag>/share_lines.png`,
+- `reports/viz_<tag>/pareto_categories.png`,
+- `reports/viz_<tag>/heatmap_dow_hour.png`,
+- `reports/viz_<tag>/delta_bars.png`,
+- `reports/viz_<tag>/report.md`.
+
+### Параметры `viz-build`
+
+- `--label-source pred|llm`
+  - `pred`: использовать локальные модели и materialize predictions,
+  - `llm`: использовать weak labels из prepared parquet.
+- `--freq D|W|M` — дневная/недельная/месячная агрегация.
+- `--top-n` — сколько категорий оставлять явно (остальные сворачиваются в `OTHER`).
+- `--date-from`, `--date-to` — фильтр периода.
+- `--baseline-range`, `--new-month` — для delta-графика изменений.
+- `--force-materialize` — пересоздать `all_predicted.parquet`.
+
+### Как анализировать графики
+
+1. **stacked_area_counts**
+   - показывает абсолютный объём жалоб по категориям во времени,
+   - ищите резкие всплески по отдельным категориям.
+2. **share_lines**
+   - показывает долю категорий среди жалоб,
+   - помогает отличать рост общего трафика от реального сдвига структуры.
+3. **pareto_categories**
+   - ранжирование категорий по объёму + кумулятивная линия,
+   - удобно выбирать приоритетные категории для улучшений.
+4. **heatmap_dow_hour**
+   - паттерн "день недели × час" для жалоб,
+   - помогает планировать операционные ресурсы/нагрузку.
+5. **delta_bars**
+   - вклад категорий в изменение между baseline и new month (в pp),
+   - быстрый ответ: какие категории дали основной рост/падение.
+
+### Быстрый troubleshooting
+
+- Ошибка про отсутствие `models/*.joblib` при `--label-source pred`:
+  сначала выполните `train`.
+- Пустые графики:
+  проверьте фильтр дат (`--date-from/--date-to`) и наличие `event_time` в исходных данных.
+- `viz-view` не открывает окно:
+  запускайте локально с доступным GUI backend matplotlib (не headless CI).
+
+
+### Как учитывается `infer-month` в визуальном отчёте
+
+Если при `viz-build --label-source pred` передан `--new-month YYYY-MM`, то отчёт пытается автоматически подхватить `data/interim/month_YYYY-MM.parquet` (результат `infer-month`) и добавить его в витрину для расчёта delta и отдельной секции интерпретации.
+
+В `reports/viz_<tag>/report.md` появится блок **"Интерпретация infer-month"**:
+- был ли реально подключён parquet из `infer-month`,
+- сколько строк оттуда использовано,
+- топ категорий нового месяца с `count` и `share_of_complaints`.
+
+Интерпретация:
+- `count` — абсолютное число жалоб категории в новом месяце;
+- `share_of_complaints` — доля категории среди всех жалоб нового месяца;
+- `delta_bars` — насколько доля категории изменилась относительно baseline периода (в процентных пунктах).
+
+## Novelty-hunt: поиск новых подтипов при тех же категориях
+
+`novelty-hunt` — отдельный режим для поиска "непохожего на прошлое" внутри уже известных категорий.
+Он не заменяет `compare/novelty`, а работает параллельно и ищет дрейф формулировок/контекста при том же label.
+
+Пример запуска:
+
+```bash
+python -m complaints_trends.cli novelty-hunt \
+  --config configs/project.yaml \
+  --new-month 2025-12 \
+  --baseline-range 2025-10..2025-11 \
+  --tag 2025_12
+```
+
+Опционально можно включить LLM-описания кластеров (с кэшированием):
+
+```bash
+python -m complaints_trends.cli novelty-hunt \
+  --config configs/project.yaml \
+  --new-month 2025-12 \
+  --baseline-range 2025-10..2025-11 \
+  --tag 2025_12 \
+  --use-llm-summary
+```
+
+Артефакты:
+- `data/interim/novelty_hunt_state_<tag>.parquet`
+- `data/interim/novelty_hunt_meta_<tag>.json`
+- `data/interim/novelty_hunt_clusters_<tag>.json`
+- `exports/novelty_hunt_<tag>.xlsx`
+- `reports/novelty_hunt_<tag>.html`

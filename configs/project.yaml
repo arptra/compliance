@@ -48,6 +48,9 @@ llm:
   request_metrics_enabled: true
   async_mode: false
   parallel_mode: false
+  category_mode: "taxonomy"  # taxonomy|discover|questions
+  discovered_taxonomy_file: "data/interim/discovered_categories.json"
+  questions_file: "configs/questions_categories.json"
 
 prepare:
   pilot_limit: 5000
@@ -56,6 +59,7 @@ prepare:
   output_parquet: "data/processed/all_prepared.parquet"
   pilot_parquet: "data/processed/pilot_prepared.parquet"
   pilot_review_xlsx: "exports/pilot_review.xlsx"
+  llm_payload_review_xlsx: "exports/llm_payload_review.xlsx"
 
 training:
   text_field: "client_first_message"
@@ -84,6 +88,42 @@ analysis:
     kmeans_k: 40
     threshold_percentile: 98
     min_cluster_size: 20
+  novelty_hunt:
+    enabled: true
+    candidate_pool: "score_band"  # complaints_only|score_band|all
+    complaint_score_min: 0.35
+    complaint_score_max: 1.0
+    include_other_category: true
+    include_low_margin: true
+    novelty_scope: "both"  # global|per_category|both
+    min_baseline_per_category: 200
+    label_source: "pred"  # pred|llm (for baseline side)
+    text_field: "client_first_message"
+    use_first_message_only: true
+    strip_system_speakers: true
+    vectorizer_source: "trained"  # trained|fit_baseline
+    method_primary: "knn_cosine"  # knn_cosine|lof|kmeans_distance
+    method_secondary: "kmeans_distance"  # none|knn_cosine|lof|kmeans_distance
+    combine: "max"  # max|mean|weighted
+    weight_primary: 0.7
+    weight_secondary: 0.3
+    svd_components: 200
+    knn_k: 15
+    kmeans_k: 40
+    select_mode: "percentile_base"  # percentile_base|top_k|threshold
+    threshold_percentile: 98.0
+    threshold_value: 0.5
+    top_k: 300
+    clustering: "optics"  # optics|dbscan|agglomerative
+    min_cluster_size: 15
+    max_clusters: 12
+    reports_dir: "reports"
+    exports_dir: "exports"
+    interim_dir: "data/interim"
+    examples_per_cluster: 12
+    llm_summary_enabled: false
+    llm_max_clusters: 8
+    llm_examples_per_cluster: 10
   reports_dir: "reports"
 
 files:
