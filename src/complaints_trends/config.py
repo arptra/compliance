@@ -17,6 +17,8 @@ class InputConfig(AppBaseModel):
     input_dir: str
     file_glob: str = "*.xlsx"
     file_names: list[str] | None = None
+    file_format: Literal["auto", "excel", "csv"] = "auto"
+    csv_delimiter: str = ","
     datetime_column: str = "created_at"
     datetime_format: str | None = None
     id_column: str | None = None

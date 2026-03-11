@@ -57,3 +57,48 @@ def test_load_excel_with_month_raises_clear_error_when_missing_datetime_column(t
         assert False, "Expected ValueError"
     except ValueError as e:
         assert "No datetime column" in str(e)
+
+
+def test_load_csv_with_month_uses_delimiter(tmp_path):
+    p = tmp_path / "sample.csv"
+    p.write_text("created_at;dialog_text\n2025-03-09 12:55:29;hello\n", encoding="utf-8")
+
+    cfg = InputConfig.model_validate(
+        {
+            "input_dir": str(tmp_path),
+            "file_glob": "*.csv",
+            "file_format": "csv",
+            "csv_delimiter": ";",
+            "datetime_column": "created_at",
+            "datetime_format": "%Y-%m-%d %H:%M:%S",
+            "id_column": None,
+            "signal_columns": ["dialog_text"],
+            "dialog_column": "dialog_text",
+            "encoding": "utf-8",
+        }
+    )
+    df = load_excel_with_month(p, cfg)
+    assert df.loc[0, "month"] == "2025-03"
+    assert df.loc[0, "dialog_text"] == "hello"
+
+
+def test_load_csv_with_auto_format_by_extension(tmp_path):
+    p = tmp_path / "sample.csv"
+    p.write_text("created_at,dialog_text\n2025-04-01 00:00:00,hi\n", encoding="utf-8")
+
+    cfg = InputConfig.model_validate(
+        {
+            "input_dir": str(tmp_path),
+            "file_glob": "*.csv",
+            "file_format": "auto",
+            "csv_delimiter": ",",
+            "datetime_column": "created_at",
+            "datetime_format": "%Y-%m-%d %H:%M:%S",
+            "id_column": None,
+            "signal_columns": ["dialog_text"],
+            "dialog_column": "dialog_text",
+            "encoding": "utf-8",
+        }
+    )
+    df = load_excel_with_month(p, cfg)
+    assert df.loc[0, "month"] == "2025-04"
