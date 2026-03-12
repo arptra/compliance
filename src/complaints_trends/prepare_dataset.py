@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -20,6 +21,45 @@ from .taxonomy import load_taxonomy
 
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE as _OPENPYXL_ILLEGAL_RE
+except Exception:  # pragma: no cover
+    _OPENPYXL_ILLEGAL_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
+
+
+def _sanitize_excel_cell(value, max_len: int = 32767):
+    if value is None:
+        return value
+    if not isinstance(value, str):
+        return value
+    cleaned = _OPENPYXL_ILLEGAL_RE.sub("", value)
+    if len(cleaned) > max_len:
+        return cleaned[:max_len]
+    return cleaned
+
+
+def _sanitize_dataframe_for_excel(df: pd.DataFrame, max_len: int = 32767) -> pd.DataFrame:
+    out = df.copy()
+    obj_cols = out.select_dtypes(include=["object", "string"]).columns
+    if len(obj_cols) == 0:
+        return out
+
+    for col in obj_cols:
+        s = out[col]
+        str_mask = s.map(lambda v: isinstance(v, str))
+        if not bool(str_mask.any()):
+            continue
+        s_str = s.loc[str_mask].astype(str)
+        s_str = s_str.str.replace(_OPENPYXL_ILLEGAL_RE, "", regex=True).str.slice(0, max_len)
+        out.loc[str_mask, col] = s_str
+    return out
+
+
+def _to_excel_safe(df: pd.DataFrame, path: str | Path, index: bool = False) -> None:
+    clean_df = _sanitize_dataframe_for_excel(df)
+    clean_df.to_excel(path, index=index)
 
 
 def _non_empty(v) -> bool:
@@ -434,7 +474,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         payload_review = payload_review.drop(columns=["_payload_index"], errors="ignore")
         payload_review_path = Path(cfg.prepare.llm_payload_review_xlsx)
         payload_review_path.parent.mkdir(parents=True, exist_ok=True)
-        payload_review.to_excel(payload_review_path, index=False)
+        _to_excel_safe(payload_review, payload_review_path, index=False)
 
     out_path = cfg.prepare.pilot_parquet if pilot else cfg.prepare.output_parquet
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -462,7 +502,7 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         review["subcategory_gold"] = ""
         review["comment"] = ""
         Path(cfg.prepare.pilot_review_xlsx).parent.mkdir(parents=True, exist_ok=True)
-        review.to_excel(cfg.prepare.pilot_review_xlsx, index=False)
+        _to_excel_safe(review, cfg.prepare.pilot_review_xlsx, index=False)
         _pilot_report(out_df, cfg)
     return out_df
 
@@ -522,7 +562,7 @@ def _pilot_report(df: pd.DataFrame, cfg: ProjectConfig) -> None:
     subcategory_examples = _build_subcategory_examples(complaints)
     examples_path = Path("exports") / "pilot_subcategory_examples.xlsx"
     examples_path.parent.mkdir(parents=True, exist_ok=True)
-    subcategory_examples.to_excel(examples_path, index=False)
+    _to_excel_safe(subcategory_examples, examples_path, index=False)
 
     context = {
         "n": len(df),

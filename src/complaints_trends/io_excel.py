@@ -26,8 +26,20 @@ def parse_event_time(series: pd.Series, dt_format: str | None = None) -> pd.Seri
     return pd.to_datetime(series, errors="coerce")
 
 
+def _is_csv(path: Path, cfg: InputConfig) -> bool:
+    if cfg.file_format == "csv":
+        return True
+    if cfg.file_format == "excel":
+        return False
+    return path.suffix.lower() == ".csv"
+
+
 def load_excel_with_month(path: Path, cfg: InputConfig) -> pd.DataFrame:
-    df = pd.read_excel(path)
+    if _is_csv(path, cfg):
+        df = pd.read_csv(path, sep=cfg.csv_delimiter, encoding=cfg.encoding)
+    else:
+        df = pd.read_excel(path)
+
     if cfg.datetime_column not in df.columns:
         raise ValueError(
             f"No datetime column '{cfg.datetime_column}' in {path.name}. "

@@ -17,6 +17,8 @@ class InputConfig(AppBaseModel):
     input_dir: str
     file_glob: str = "*.xlsx"
     file_names: list[str] | None = None
+    file_format: Literal["auto", "excel", "csv"] = "auto"
+    csv_delimiter: str = ","
     datetime_column: str = "created_at"
     datetime_format: str | None = None
     id_column: str | None = None
@@ -167,9 +169,60 @@ class NoveltyHuntConfig(AppBaseModel):
     llm_examples_per_cluster: int = 10
 
 
+
+
+class PatternMonitoringConfig(AppBaseModel):
+    enabled: bool = True
+    label_source: Literal["llm", "pred"] = "llm"
+    normal_period: str | None = None
+    event_period: str | None = None
+    freq: Literal["D"] = "D"
+    text_field: str = "client_first_message"
+    use_first_message_only: bool = True
+    strip_system_speakers: bool = True
+    complaints_only: bool = True
+    include_other_category: bool = False
+    min_rows_per_category: int = 80
+    min_normal_rows_per_category: int = 120
+    min_event_rows_per_category: int = 60
+    baseline_weekday_shrink_k: float = 5.0
+    baseline_min_std: float = 1.0
+    anomaly_z_threshold: float = 2.5
+    anomaly_min_excess_total: int = 20
+    anomaly_min_event_days: int = 3
+    top_growth_categories: int = 12
+    vectorizer_source: Literal["trained", "fit_normal"] = "trained"
+    svd_components: int = 200
+    random_state: int = 42
+    within_category_method: Literal["knn_cosine", "centroid_delta"] = "knn_cosine"
+    knn_k: int = 15
+    per_day_seed_quota_mode: Literal["residual", "percent", "fixed"] = "residual"
+    per_day_seed_percent: float = 0.3
+    per_day_seed_fixed: int = 10
+    min_total_seeds_per_category: int = 15
+    max_total_seeds_per_category: int = 500
+    cluster_method: Literal["optics", "dbscan", "agglomerative"] = "optics"
+    min_cluster_size: int = 10
+    max_clusters_per_category: int = 5
+    score_w_event_similarity: float = 0.45
+    score_w_normal_distance: float = 0.25
+    score_w_category_anomaly: float = 0.30
+    score_topk_event_neighbors: int = 10
+    score_topk_normal_neighbors: int = 20
+    daily_top_k_rows: int = 10
+    daily_pressure_mode: Literal["sum_topk", "one_minus_prod"] = "sum_topk"
+    state_alpha: float = 0.35
+    row_alert_threshold: float = 0.65
+    day_alert_threshold: float = 0.50
+    interim_dir: str = "data/interim"
+    exports_dir: str = "exports"
+    reports_dir: str = "reports"
+
+
 class AnalysisConfig(AppBaseModel):
     novelty: NoveltyConfig = Field(default_factory=NoveltyConfig)
     novelty_hunt: NoveltyHuntConfig = Field(default_factory=NoveltyHuntConfig)
+    pattern_monitoring: PatternMonitoringConfig = Field(default_factory=PatternMonitoringConfig)
     reports_dir: str = "reports"
 
 
