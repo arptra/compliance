@@ -42,7 +42,19 @@ def _sanitize_excel_cell(value, max_len: int = 32767):
 
 def _sanitize_dataframe_for_excel(df: pd.DataFrame, max_len: int = 32767) -> pd.DataFrame:
     out = df.copy()
-    return out.apply(lambda col: col.map(lambda v: _sanitize_excel_cell(v, max_len=max_len)))
+    obj_cols = out.select_dtypes(include=["object", "string"]).columns
+    if len(obj_cols) == 0:
+        return out
+
+    for col in obj_cols:
+        s = out[col]
+        str_mask = s.map(lambda v: isinstance(v, str))
+        if not bool(str_mask.any()):
+            continue
+        s_str = s.loc[str_mask].astype(str)
+        s_str = s_str.str.replace(_OPENPYXL_ILLEGAL_RE, "", regex=True).str.slice(0, max_len)
+        out.loc[str_mask, col] = s_str
+    return out
 
 
 def _to_excel_safe(df: pd.DataFrame, path: str | Path, index: bool = False) -> None:
