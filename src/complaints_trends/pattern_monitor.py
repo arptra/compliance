@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,28 @@ from .pattern_common import (
 )
 from .pattern_paths import PatternFitPaths, PatternMonitorPaths
 from .viz.report import materialize_predictions
+
+try:
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE as _OPENPYXL_ILLEGAL_RE
+except Exception:  # pragma: no cover
+    _OPENPYXL_ILLEGAL_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
+
+
+def _sanitize_for_excel(df: pd.DataFrame, max_len: int = 32767) -> pd.DataFrame:
+    out = df.copy()
+    cols = out.select_dtypes(include=["object", "string"]).columns
+    for col in cols:
+        s = out[col]
+        mask = s.map(lambda v: isinstance(v, str))
+        if not bool(mask.any()):
+            continue
+        v = s.loc[mask].astype(str).str.replace(_OPENPYXL_ILLEGAL_RE, "", regex=True).str.slice(0, max_len)
+        out.loc[mask, col] = v
+    return out
+
+
+def _to_excel_sheet_safe(df: pd.DataFrame, writer: pd.ExcelWriter, sheet_name: str, index: bool = False) -> None:
+    _sanitize_for_excel(df).to_excel(writer, sheet_name=sheet_name, index=index)
 
 
 def run_pattern_monitor(
@@ -105,10 +128,10 @@ def run_pattern_monitor(
     (out.root / "monitor_meta.json").write_text(json.dumps(monitor_meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     with pd.ExcelWriter(out.export) as writer:
-        scored.to_excel(writer, sheet_name="scored_rows", index=False)
-        cat_daily.to_excel(writer, sheet_name="category_daily_pressure", index=False)
-        overall.to_excel(writer, sheet_name="overall_daily_state", index=False)
-        scored[scored["is_pattern_alert"] == True].head(200).to_excel(writer, sheet_name="alert_examples", index=False)
+        _to_excel_sheet_safe(scored, writer, sheet_name="scored_rows", index=False)
+        _to_excel_sheet_safe(cat_daily, writer, sheet_name="category_daily_pressure", index=False)
+        _to_excel_sheet_safe(overall, writer, sheet_name="overall_daily_state", index=False)
+        _to_excel_sheet_safe(scored[scored["is_pattern_alert"] == True].head(200), writer, sheet_name="alert_examples", index=False)
 
     render_pattern_monitor_report(
         out.report,

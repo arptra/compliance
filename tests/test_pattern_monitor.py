@@ -71,3 +71,55 @@ def test_pattern_monitor_scores_event_like_rows(tmp_path: Path):
     assert not state.empty
     cat_pressure = pd.read_parquet(Path(cfg.analysis.pattern_monitoring.interim_dir) / "pattern_monitor_t2" / "category_daily_pressure.parquet")
     assert (cat_pressure["category_pressure"] > 0).any()
+
+
+def test_pattern_monitor_excel_export_sanitizes_illegal_chars(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    rows = []
+    for m in ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"]:
+        for i in range(20):
+            rows.append(
+                {
+                    "row_id": f"n-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-10 10:00:00",
+                    "client_first_message": "не работает кнопка входа",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "login",
+                }
+            )
+    for m in ["2025-11", "2025-12"]:
+        for i in range(25):
+            rows.append(
+                {
+                    "row_id": f"e-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-11 10:00:00",
+                    "client_first_message": "после ввода кода подтверждения кнопка входа не активна",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "login",
+                }
+            )
+
+    target_day = "2025-12-16"
+    rows.append(
+        {
+            "row_id": "t-illegal",
+            "month": "2025-12",
+            "event_time": f"{target_day} 12:00:00",
+            "client_first_message": "ошибкавхода",
+            "is_complaint_llm": True,
+            "complaint_category_llm": "login",
+        }
+    )
+    pd.DataFrame(rows).to_parquet(cfg.prepare.output_parquet, index=False)
+
+    run_pattern_fit(cfg, tag="t3", normal_period="2025-01..2025-08", event_period="2025-11..2025-12", label_source="llm")
+    run_pattern_monitor(cfg, tag="t3", label_source="llm", date_from=target_day, date_to=target_day)
+
+    export_path = Path(cfg.analysis.pattern_monitoring.exports_dir) / "pattern_monitor_t3.xlsx"
+    assert export_path.exists()
+
+    scored_xlsx = pd.read_excel(export_path, sheet_name="scored_rows")
+    bad_row = scored_xlsx[scored_xlsx["row_id"] == "t-illegal"].iloc[0]
+    assert "" not in str(bad_row["text_original"])
