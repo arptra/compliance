@@ -1123,3 +1123,50 @@ python -m complaints_trends.cli pattern-monitor \
 Также формируются:
 - `exports/pattern_fit_<tag>.xlsx`, `reports/pattern_fit_<tag>.html`
 - `exports/pattern_monitor_<tag>.xlsx`, `reports/pattern_monitor_<tag>.html`
+
+## Interactive Dashboard Service (FastAPI + React)
+
+Добавлен MVP интерактивного сервиса из двух частей:
+
+1. **FastAPI backend** (`src/complaints_trends/api`) — тонкий API-слой поверх существующего engine/артефактов (`prepare`, `viz-build`, `pattern-fit`, `pattern-monitor`).
+2. **React + TypeScript frontend** (`apps/dashboard`) — SPA для Overview / Categories / Timeseries / Pattern Fit / Pattern Monitor / Reports / Settings.
+
+### Запуск backend
+
+```bash
+python -m complaints_trends.cli api-serve --config configs/project.yaml --host 0.0.0.0 --port 8000
+```
+
+### Запуск frontend
+
+```bash
+npm install --prefix apps/dashboard
+npm run dev --prefix apps/dashboard
+```
+
+### Как это связано с существующим pipeline
+
+- Существующие CLI-команды не удалены и не заменены.
+- API-роуты читают существующие parquet/json/joblib артефакты и отдают JSON.
+- Run endpoints (`/api/runs/*`) запускают существующие python-функции: `viz-build`, `pattern-fit`, `pattern-monitor`, `infer-month`.
+
+### Основные endpoints
+
+- `GET /api/health`, `GET /api/meta/config`, `GET /api/meta/datasets`, `GET /api/meta/tags`
+- `GET /api/overview`
+- `GET /api/categories`, `GET /api/categories/{category}/...`
+- `GET /api/timeseries/...`
+- `GET /api/pattern-fit/...`
+- `GET /api/pattern-monitor/...`
+- `POST /api/reports/executive|operations|pattern-monitoring`
+- `POST /api/runs/viz-build|pattern-fit|pattern-monitor|infer-month`
+
+### Страницы dashboard
+
+- `/overview`
+- `/categories`
+- `/timeseries`
+- `/pattern-fit`
+- `/pattern-monitor`
+- `/reports`
+- `/settings`
