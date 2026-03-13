@@ -30,3 +30,15 @@ def test_overview_endpoint_and_baseline_modes(tmp_path: Path):
         payload = r.json()
         assert "kpis" in payload
         assert "actual_vs_expected" in payload
+
+
+def test_overview_works_without_category_column(tmp_path: Path):
+    cfg = _config(tmp_path)
+    df = pd.DataFrame({"event_time": pd.date_range("2025-01-01", periods=5, freq="D"), "subcategory": ["x"] * 5})
+    df.to_parquet(tmp_path / "all_prepared.parquet", index=False)
+
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/overview", params={"date_from": "2025-01-01", "date_to": "2025-01-05", "baseline_mode": "previous_period"})
+    assert r.status_code == 200
+    payload = r.json()
+    assert "top_growth_categories" in payload
