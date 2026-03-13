@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from threading import RLock
+
+from cachetools import TTLCache
 from fastapi import APIRouter, Depends, Query
 
 from ..deps import get_service_container
@@ -15,6 +18,18 @@ from ..services.timeseries_service import (
 )
 
 router = APIRouter(prefix="/api/timeseries", tags=["timeseries"])
+_cache = TTLCache(maxsize=256, ttl=45)
+_cache_lock = RLock()
+
+
+def _cached(key: tuple, producer):
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
+    value = producer()
+    with _cache_lock:
+        _cache[key] = value
+    return value
 
 
 def _df(services, viz_tag: str | None):
@@ -33,14 +48,20 @@ def overall(
     viz_tag: str | None = None,
     services=Depends(get_service_container),
 ):
-    df = _df(services, viz_tag)
-    if df.empty:
-        return {"actual": [], "expected": [], "delta": [], "cumulative": [], "summary": {}}
-    col = "date" if "date" in df.columns else "event_time"
-    actual = filter_by_date(df, col, date_from, date_to)
-    b_from, b_to = resolve_compare_window(date_from, date_to, baseline_mode, baseline_date_from, baseline_date_to)
-    baseline = filter_by_date(df, col, b_from.isoformat() if b_from is not None else None, b_to.isoformat() if b_to is not None else None)
-    return aggregate_timeseries_overall(actual, baseline, col, col, granularity)
+    source_mtime = services["loader"].source_mtime(viz_tag)
+    key = ("overall", source_mtime, date_from, date_to, granularity, baseline_mode, baseline_date_from, baseline_date_to, viz_tag)
+
+    def _build():
+        df = _df(services, viz_tag)
+        if df.empty:
+            return {"actual": [], "expected": [], "delta": [], "cumulative": [], "summary": {}}
+        col = "date" if "date" in df.columns else "event_time"
+        actual = filter_by_date(df, col, date_from, date_to)
+        b_from, b_to = resolve_compare_window(date_from, date_to, baseline_mode, baseline_date_from, baseline_date_to)
+        baseline = filter_by_date(df, col, b_from.isoformat() if b_from is not None else None, b_to.isoformat() if b_to is not None else None)
+        return aggregate_timeseries_overall(actual, baseline, col, col, granularity)
+
+    return _cached(key, _build)
 
 
 @router.get("/by-category")
@@ -55,16 +76,22 @@ def by_category(
     viz_tag: str | None = None,
     services=Depends(get_service_container),
 ):
-    df = _df(services, viz_tag)
-    if df.empty:
-        return {"rows": [], "resolved_categories": [], "used_other": False}
-    col = "date" if "date" in df.columns else "event_time"
-    actual = filter_by_date(df, col, date_from, date_to)
-    filtered, resolved, used_other = resolve_category_scope(actual, category_mode, top_n, categories, include_other)
-    data = aggregate_timeseries_by_category(filtered, col, granularity)
-    data["resolved_categories"] = resolved
-    data["used_other"] = used_other
-    return data
+    source_mtime = services["loader"].source_mtime(viz_tag)
+    key = ("by-category", source_mtime, date_from, date_to, granularity, category_mode, top_n, tuple(categories), include_other, viz_tag)
+
+    def _build():
+        df = _df(services, viz_tag)
+        if df.empty:
+            return {"rows": [], "resolved_categories": [], "used_other": False}
+        col = "date" if "date" in df.columns else "event_time"
+        actual = filter_by_date(df, col, date_from, date_to)
+        filtered, resolved, used_other = resolve_category_scope(actual, category_mode, top_n, categories, include_other)
+        data = aggregate_timeseries_by_category(filtered, col, granularity)
+        data["resolved_categories"] = resolved
+        data["used_other"] = used_other
+        return data
+
+    return _cached(key, _build)
 
 
 @router.get("/heatmap")
@@ -74,12 +101,18 @@ def heatmap(
     viz_tag: str | None = None,
     services=Depends(get_service_container),
 ):
-    df = _df(services, viz_tag)
-    col = "date" if "date" in df.columns else "event_time"
-    if df.empty or col not in df.columns:
-        return {"weekday_hour": [], "calendar": []}
-    actual = filter_by_date(df, col, date_from, date_to)
-    return aggregate_heatmap(actual, col)
+    source_mtime = services["loader"].source_mtime(viz_tag)
+    key = ("heatmap", source_mtime, date_from, date_to, viz_tag)
+
+    def _build():
+        df = _df(services, viz_tag)
+        col = "date" if "date" in df.columns else "event_time"
+        if df.empty or col not in df.columns:
+            return {"weekday_hour": [], "calendar": []}
+        actual = filter_by_date(df, col, date_from, date_to)
+        return aggregate_heatmap(actual, col)
+
+    return _cached(key, _build)
 
 
 @router.get("/compare")
@@ -96,23 +129,29 @@ def compare(
     viz_tag: str | None = None,
     services=Depends(get_service_container),
 ):
-    df = _df(services, viz_tag)
-    if df.empty:
-        return {"summary": {"actual_total": 0, "baseline_total": 0, "delta_abs": 0, "delta_pct": None}, "contributions": []}
+    source_mtime = services["loader"].source_mtime(viz_tag)
+    key = ("compare", source_mtime, date_from, date_to, baseline_mode, baseline_date_from, baseline_date_to, category_mode, top_n, tuple(categories), include_other, viz_tag)
 
-    col = "date" if "date" in df.columns else "event_time"
-    actual = filter_by_date(df, col, date_from, date_to)
-    b_from, b_to = resolve_compare_window(date_from, date_to, baseline_mode, baseline_date_from, baseline_date_to)
-    baseline = filter_by_date(df, col, b_from.isoformat() if b_from is not None else None, b_to.isoformat() if b_to is not None else None)
+    def _build():
+        df = _df(services, viz_tag)
+        if df.empty:
+            return {"summary": {"actual_total": 0, "baseline_total": 0, "delta_abs": 0, "delta_pct": None}, "contributions": []}
 
-    actual_f, _, _ = resolve_category_scope(actual, category_mode, top_n, categories, include_other)
-    base_f, _, _ = resolve_category_scope(baseline, category_mode, top_n, categories, include_other)
+        col = "date" if "date" in df.columns else "event_time"
+        actual = filter_by_date(df, col, date_from, date_to)
+        b_from, b_to = resolve_compare_window(date_from, date_to, baseline_mode, baseline_date_from, baseline_date_to)
+        baseline = filter_by_date(df, col, b_from.isoformat() if b_from is not None else None, b_to.isoformat() if b_to is not None else None)
 
-    actual_f = actual_f.copy()
-    baseline_f = base_f.copy()
-    actual_f["date"] = actual_f[col]
-    baseline_f["date"] = baseline_f[col]
-    return {
-        "summary": compute_compare_summary(actual_f, baseline_f),
-        "contributions": compute_category_contribution(actual_f, baseline_f),
-    }
+        actual_f, _, _ = resolve_category_scope(actual, category_mode, top_n, categories, include_other)
+        base_f, _, _ = resolve_category_scope(baseline, category_mode, top_n, categories, include_other)
+
+        actual_f = actual_f.copy()
+        baseline_f = base_f.copy()
+        actual_f["date"] = actual_f[col]
+        baseline_f["date"] = baseline_f[col]
+        return {
+            "summary": compute_compare_summary(actual_f, baseline_f),
+            "contributions": compute_category_contribution(actual_f, baseline_f),
+        }
+
+    return _cached(key, _build)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryResponse
@@ -48,8 +50,11 @@ class PatternMonitorService:
 
     def summary(self, tag: str, params: dict) -> PatternMonitorSummaryResponse:
         resolved = self._resolved_tag(tag)
-        scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
-        pressure = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_scored = ex.submit(self.loader.load_pattern_monitor_scored, resolved)
+            f_pressure = ex.submit(self.loader.load_pattern_monitor_pressure, resolved)
+            scored = self._filter(f_scored.result(), params)
+            pressure = self._filter(f_pressure.result(), params)
         alert_rows = int(self._alert_mask(scored).sum()) if not scored.empty else 0
         return PatternMonitorSummaryResponse(
             tag=resolved,

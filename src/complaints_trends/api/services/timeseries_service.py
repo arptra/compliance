@@ -34,15 +34,16 @@ def _ensure_category(df: pd.DataFrame) -> pd.DataFrame:
 def filter_by_date(df: pd.DataFrame, date_col: str, date_from: str | None, date_to: str | None) -> pd.DataFrame:
     if df.empty or date_col not in df.columns:
         return df
-    out = df.copy()
-    out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
-    out = out[out[date_col].notna()]
+    dt = pd.to_datetime(df[date_col], errors="coerce")
+    mask = dt.notna()
     start = _to_dt(date_from)
     end = _to_dt(date_to)
     if start is not None:
-        out = out[out[date_col] >= start]
+        mask &= dt >= start
     if end is not None:
-        out = out[out[date_col] <= end]
+        mask &= dt <= end
+    out = df.loc[mask].copy(deep=False)
+    out[date_col] = dt.loc[mask]
     return out
 
 
@@ -175,7 +176,7 @@ def aggregate_timeseries_by_category(df: pd.DataFrame, date_col: str, granularit
     grp = out.groupby(["bucket", "category"])["value"].sum().reset_index(name="count")
     totals = grp.groupby("bucket")["count"].sum().rename("total")
     grp = grp.merge(totals, on="bucket", how="left")
-    grp["share"] = grp.apply(lambda r: r["count"] / r["total"] if r["total"] else 0.0, axis=1)
+    grp["share"] = (grp["count"] / grp["total"].where(grp["total"] != 0, 1.0)).fillna(0.0)
     return {
         "rows": [
             {"date": r.bucket.date().isoformat(), "category": str(r.category), "count": float(r.count), "share": float(r.share)}
@@ -224,7 +225,7 @@ def compute_category_contribution(actual_df: pd.DataFrame, baseline_df: pd.DataF
     bg = b.groupby("category")["value"].sum().rename("expected_count")
     out = pd.concat([ag, bg], axis=1).fillna(0.0).reset_index()
     out["delta_abs"] = out["actual_count"] - out["expected_count"]
-    out["delta_pct"] = out.apply(lambda r: (r["delta_abs"] / r["expected_count"]) if r["expected_count"] else None, axis=1)
+    out["delta_pct"] = out["delta_abs"] / out["expected_count"].replace({0.0: pd.NA})
     total_actual = max(float(out["actual_count"].sum()), 1.0)
     total_delta = float(out["delta_abs"].sum())
     out["share"] = out["actual_count"] / total_actual

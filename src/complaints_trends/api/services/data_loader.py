@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import joblib
@@ -25,24 +27,35 @@ class DataLoader:
             interim_dir=Path(cfg.analysis.pattern_monitoring.interim_dir),
         )
         self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = RLock()
 
     def _load_cached(self, path: Path, loader) -> Any:
         if not path.exists():
             return None
         mtime = path.stat().st_mtime
         key = str(path)
-        cached = self._cache.get(key)
-        if cached and cached[0] == mtime:
-            return cached[1]
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached and cached[0] == mtime:
+                return cached[1]
         value = loader(path)
-        self._cache[key] = (mtime, value)
+        with self._lock:
+            self._cache[key] = (mtime, value)
         return value
+
+    def read_many_parquet(self, paths: list[Path]) -> dict[str, pd.DataFrame]:
+        def _one(p: Path) -> tuple[str, pd.DataFrame]:
+            return str(p), self.read_parquet(p)
+
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(paths)))) as ex:
+            return dict(ex.map(_one, paths))
 
     def read_parquet(self, path: Path) -> pd.DataFrame:
         df = self._load_cached(path, pd.read_parquet)
         if df is None:
             return pd.DataFrame()
-        return df.copy()
+        # shallow copy dramatically reduces latency/memory for big parquet reads
+        return df.copy(deep=False)
 
     def read_json(self, path: Path) -> dict[str, Any]:
         data = self._load_cached(path, lambda p: json.loads(p.read_text(encoding="utf-8")))
@@ -51,25 +64,25 @@ class DataLoader:
     def read_joblib(self, path: Path) -> Any:
         return self._load_cached(path, joblib.load)
 
+    def source_mtime(self, viz_tag: str | None = None) -> float:
+        if viz_tag:
+            p = self.paths.interim_dir / f"viz_state_{viz_tag}.parquet"
+        else:
+            p = self.paths.prepare_parquet
+        return p.stat().st_mtime if p.exists() else 0.0
+
     def _normalize_prepare_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return df
         out = df.copy()
-
-        # Normalize category/subcategory naming from prepare artifacts.
         if "category" not in out.columns and "complaint_category_llm" in out.columns:
             out["category"] = out["complaint_category_llm"]
         if "subcategory" not in out.columns and "complaint_subcategory_llm" in out.columns:
             out["subcategory"] = out["complaint_subcategory_llm"]
-
-        # Normalize complaint flag naming.
         if "is_complaint_flag" not in out.columns and "is_complaint_llm" in out.columns:
             out["is_complaint_flag"] = out["is_complaint_llm"]
-
-        # Normalize date column naming.
         if "event_time" not in out.columns and "created_at" in out.columns:
             out["event_time"] = out["created_at"]
-
         if "category" in out.columns:
             out["category"] = out["category"].fillna("UNKNOWN").astype(str)
         if "subcategory" in out.columns:
