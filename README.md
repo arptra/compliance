@@ -1170,3 +1170,41 @@ npm run dev --prefix apps/dashboard
 - `/pattern-monitor`
 - `/reports`
 - `/settings`
+
+## Interactive Dashboard: Timeseries tab and category scope filter
+
+В дашборде обновлена вкладка `/timeseries` как основной экран динамики:
+- `Actual vs Expected`,
+- `Daily Delta/Excess`,
+- `Cumulative`,
+- структура категорий (stacked/lines + 100% share),
+- `weekday x hour` heatmap,
+- calendar heatmap,
+- compare summary и вклад категорий (contribution table/chart).
+
+### Единый category scope filter
+
+В глобальный `FilterBar` вынесен общий фильтр категории с режимами:
+- `Top N` (дефолт `10`),
+- `Custom` (ручной multiselect),
+- `All`.
+
+Поддерживаются параметры:
+- `categoryMode=top|custom|all`
+- `topN=10`
+- `categories=cat1,cat2`
+- `includeOther=true|false`
+
+Для режима `Top N` backend сам рассчитывает топ категорий за выбранный период.
+`includeOther=true` агрегирует хвост в `OTHER` для графиков структуры.
+
+### Сравнение с baseline
+
+Во вкладке `/timeseries` сравнение поддерживает baseline mode:
+- `previous_period`
+- `same_weekday`
+- `seasonal`
+- `custom_range`
+
+Также доступна таблица category compare:
+`actual_count`, `expected_count`, `delta_abs`, `delta_pct`, `share`, `contribution_to_growth`, `anomaly_score`.

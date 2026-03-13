@@ -9,10 +9,21 @@ type FilterState = {
   viz_tag?: string
   pattern_tag?: string
   metric: 'count' | 'share' | 'delta' | 'anomaly' | 'pattern'
+  categoryMode: 'top' | 'custom' | 'all'
+  topN: number
+  categories: string[]
+  includeOther: boolean
   set: (patch: Partial<FilterState>) => void
   reset: () => void
 }
 
-const initial = { baseline_mode: 'previous_period', metric: 'count' } as const
+const initial: Omit<FilterState, 'set' | 'reset'> = {
+  baseline_mode: 'previous_period',
+  metric: 'count',
+  categoryMode: 'top',
+  topN: 10,
+  categories: [],
+  includeOther: true,
+}
 
 export const useFilters = create<FilterState>((set) => ({ ...initial, set: (patch) => set(patch), reset: () => set(initial) }))

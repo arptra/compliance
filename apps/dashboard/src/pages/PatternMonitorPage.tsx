@@ -21,6 +21,7 @@ export default function PatternMonitorPage() {
     q.set('pattern_tag', patternTag)
     if (f.date_from) q.set('date_from', f.date_from)
     if (f.date_to) q.set('date_to', f.date_to)
+    for (const c of f.categories) q.append('category', c)
     return q.toString()
   }, [patternTag, f.date_from, f.date_to])
 

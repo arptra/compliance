@@ -32,7 +32,7 @@ def get_services(config_path: str) -> dict:
         "categories": CategoriesService(loader),
         "pattern_fit": PatternFitService(loader),
         "pattern_monitor": monitor,
-        "report": ReportService(overview, monitor),
+        "report": ReportService(overview, monitor, loader),
         "run": RunService(cfg),
     }
 
