@@ -11,6 +11,12 @@ export function FilterBar() {
       <option value="seasonal">seasonal</option>
       <option value="custom_range">custom_range</option>
     </select>
+    {f.baseline_mode === 'custom_range' && (
+      <>
+        <input type="date" value={f.baseline_date_from || ''} onChange={(e)=>f.set({baseline_date_from:e.target.value || undefined})} />
+        <input type="date" value={f.baseline_date_to || ''} onChange={(e)=>f.set({baseline_date_to:e.target.value || undefined})} />
+      </>
+    )}
     <button onClick={f.reset}>Reset filters</button>
   </div>
 }

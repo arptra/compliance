@@ -4,6 +4,8 @@ type FilterState = {
   date_from?: string
   date_to?: string
   baseline_mode: 'previous_period' | 'same_weekday' | 'seasonal' | 'custom_range'
+  baseline_date_from?: string
+  baseline_date_to?: string
   viz_tag?: string
   pattern_tag?: string
   metric: 'count' | 'share' | 'delta' | 'anomaly' | 'pattern'

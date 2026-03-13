@@ -9,7 +9,15 @@ router = APIRouter(prefix="/api/categories", tags=["categories"])
 
 
 @router.get("", response_model=CategoryTableResponse)
-def categories(date_from: str | None = None, date_to: str | None = None, viz_tag: str | None = None, services=Depends(get_service_container)):
+def categories(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    viz_tag: str | None = None,
+    baseline_mode: str = "previous_period",
+    baseline_date_from: str | None = None,
+    baseline_date_to: str | None = None,
+    services=Depends(get_service_container),
+):
     return services["categories"].table(locals())
 
 
