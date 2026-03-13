@@ -51,6 +51,31 @@ class DataLoader:
     def read_joblib(self, path: Path) -> Any:
         return self._load_cached(path, joblib.load)
 
+    def _normalize_prepare_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        out = df.copy()
+
+        # Normalize category/subcategory naming from prepare artifacts.
+        if "category" not in out.columns and "complaint_category_llm" in out.columns:
+            out["category"] = out["complaint_category_llm"]
+        if "subcategory" not in out.columns and "complaint_subcategory_llm" in out.columns:
+            out["subcategory"] = out["complaint_subcategory_llm"]
+
+        # Normalize complaint flag naming.
+        if "is_complaint_flag" not in out.columns and "is_complaint_llm" in out.columns:
+            out["is_complaint_flag"] = out["is_complaint_llm"]
+
+        # Normalize date column naming.
+        if "event_time" not in out.columns and "created_at" in out.columns:
+            out["event_time"] = out["created_at"]
+
+        if "category" in out.columns:
+            out["category"] = out["category"].fillna("UNKNOWN").astype(str)
+        if "subcategory" in out.columns:
+            out["subcategory"] = out["subcategory"].fillna("UNKNOWN").astype(str)
+        return out
+
     def find_viz_tags(self) -> list[str]:
         return sorted(p.stem.replace("viz_state_", "") for p in self.paths.interim_dir.glob("viz_state_*.parquet"))
 
@@ -64,7 +89,7 @@ class DataLoader:
         return self.read_parquet(self.paths.interim_dir / f"viz_state_{tag}.parquet")
 
     def load_prepare(self) -> pd.DataFrame:
-        return self.read_parquet(self.paths.prepare_parquet)
+        return self._normalize_prepare_columns(self.read_parquet(self.paths.prepare_parquet))
 
     def load_pattern_fit_growth(self, tag: str) -> pd.DataFrame:
         return self.read_parquet(self.paths.interim_dir / f"pattern_fit_{tag}" / "category_growth_summary.parquet")
