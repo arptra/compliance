@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
@@ -11,6 +11,7 @@ type RunResp = { status: string; outputs?: Record<string, string>; error?: strin
 export default function PatternMonitorPage() {
   const f = useFilters()
   const qc = useQueryClient()
+  const [dialogPreview, setDialogPreview] = useState<string | null>(null)
   const patternTag = f.pattern_tag || 'latest'
 
   const tagsQ = useQuery({ queryKey: ['meta-tags'], queryFn: () => apiGet<TagsResp>('/api/meta/tags') })
@@ -70,21 +71,31 @@ export default function PatternMonitorPage() {
     </div>
 
     <div className='card' style={{ marginTop: 12 }}>
-      <h3>Все найденные жалобы за выбранный период</h3>
+      <h3>Найденные аномальные жалобы за выбранный период</h3>
+      <p style={{ marginTop: 0, color: '#475569' }}>Период берётся из глобальных фильтров даты. Это аналог листа <b>alert_examples</b> из Excel-выгрузки.</p>
       {examplesQ.isLoading && <div>Загрузка...</div>}
       {examplesQ.error && <div>Ошибка: {(examplesQ.error as Error).message}</div>}
       {!examplesQ.isLoading && <table className='table'>
-        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Score</th><th>Text</th></tr></thead>
+        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Score</th><th>row_dialog</th></tr></thead>
         <tbody>
-          {(examplesQ.data?.rows ?? []).map((r, i) => (
-            <tr key={i}>
-              <td>{i + 1}</td>
-              <td>{String(r.date ?? '')}</td>
-              <td>{String(r.category ?? 'UNKNOWN')}</td>
-              <td>{String(r.row_score ?? r.score ?? '')}</td>
-              <td>{String(r.client_first_message ?? r.dialog_text ?? r.complaint_text ?? '')}</td>
-            </tr>
-          ))}
+          {(examplesQ.data?.rows ?? []).map((r, i) => {
+            const dialog = String(r.row_dialog ?? '')
+            const preview = dialog.length > 160 ? `${dialog.slice(0, 160)}…` : dialog
+            return (
+              <tr key={i}>
+                <td>{i + 1}</td>
+                <td>{String(r.date ?? '')}</td>
+                <td>{String(r.category ?? 'UNKNOWN')}</td>
+                <td>{String(r.subcategory ?? 'UNKNOWN')}</td>
+                <td>{String(r.score ?? '')}</td>
+                <td>
+                  <button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>
+                    {preview || '—'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>}
     </div>
@@ -94,5 +105,15 @@ export default function PatternMonitorPage() {
       {alertsQ.isLoading && <div>Загрузка...</div>}
       {!alertsQ.isLoading && <div>Alerts rows: {(alertsQ.data?.rows ?? []).length}</div>}
     </div>
+
+    {dialogPreview !== null && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60, zIndex: 40 }} onClick={() => setDialogPreview(null)}>
+        <div className='card' style={{ width: 'min(1000px, 92vw)', maxHeight: '80vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+          <h3 style={{ marginTop: 0 }}>Полный row_dialog</h3>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{dialogPreview}</pre>
+          <div style={{ marginTop: 12 }}><button onClick={() => setDialogPreview(null)}>Закрыть</button></div>
+        </div>
+      </div>
+    )}
   </div>
 }

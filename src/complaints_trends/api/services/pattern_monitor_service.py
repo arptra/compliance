@@ -31,15 +31,31 @@ class PatternMonitorService:
                 out = out[out[score_col] >= float(params["min_score"])]
         return out
 
+
+    @staticmethod
+    def _series(df: pd.DataFrame, col: str, default: str = "") -> pd.Series:
+        if col in df.columns:
+            return df[col]
+        return pd.Series([default] * len(df), index=df.index)
+
+    @staticmethod
+    def _alert_mask(df: pd.DataFrame) -> pd.Series:
+        if "is_pattern_alert" in df.columns:
+            return df["is_pattern_alert"] == True
+        if "is_alert" in df.columns:
+            return df["is_alert"] == True
+        return pd.Series([False] * len(df), index=df.index)
+
     def summary(self, tag: str, params: dict) -> PatternMonitorSummaryResponse:
         resolved = self._resolved_tag(tag)
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
         pressure = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
+        alert_rows = int(self._alert_mask(scored).sum()) if not scored.empty else 0
         return PatternMonitorSummaryResponse(
             tag=resolved,
             summary={
                 "scored_rows": int(len(scored)),
-                "alert_rows": int((scored.get("is_alert", False) == True).sum()) if not scored.empty and "is_alert" in scored.columns else 0,
+                "alert_rows": alert_rows,
                 "pressure_days": int(len(pressure)),
             },
         )
@@ -47,8 +63,8 @@ class PatternMonitorService:
     def alerts(self, tag: str, params: dict) -> AlertRowResponse:
         resolved = self._resolved_tag(tag)
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
-        if "is_alert" in scored.columns:
-            scored = scored[scored["is_alert"] == True]
+        if not scored.empty:
+            scored = scored[self._alert_mask(scored)]
         return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"))
 
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
@@ -64,12 +80,28 @@ class PatternMonitorService:
     def examples(self, tag: str, params: dict) -> dict:
         resolved = self._resolved_tag(tag)
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
-        cols = [
-            c
-            for c in ["date", "category", "subcategory", "row_score", "client_first_message", "dialog_text", "complaint_text"]
-            if c in scored.columns
-        ]
+        if not scored.empty:
+            scored = scored[self._alert_mask(scored)]
+
+        response = pd.DataFrame()
+        if not scored.empty:
+            response["date"] = self._series(scored, "date", "")
+            response["category"] = self._series(scored, "category", "UNKNOWN").fillna("UNKNOWN").astype(str)
+            response["subcategory"] = self._series(scored, "subcategory", "UNKNOWN").fillna("UNKNOWN").astype(str)
+            if "pattern_like_score" in scored.columns:
+                response["score"] = scored["pattern_like_score"]
+            elif "row_score" in scored.columns:
+                response["score"] = scored["row_score"]
+            else:
+                response["score"] = self._series(scored, "score", "")
+            for field in ("row_dialog", "raw_dialog", "dialog_text", "client_first_message"):
+                if field in scored.columns:
+                    response["row_dialog"] = scored[field].fillna("").astype(str)
+                    break
+            if "row_dialog" not in response.columns:
+                response["row_dialog"] = self._series(scored, "row_dialog", "").astype(str)
+
         return {
             "tag": resolved,
-            "rows": scored[cols].head(int(params.get("top_n", 200))).to_dict(orient="records") if not scored.empty else [],
+            "rows": response.head(int(params.get("top_n", 200))).to_dict(orient="records") if not response.empty else [],
         }
