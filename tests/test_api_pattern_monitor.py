@@ -30,3 +30,11 @@ def test_pattern_monitor_endpoints(tmp_path: Path):
     assert r.status_code == 200
     assert r.json()["summary"]["alert_rows"] == 1
     assert client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"}).status_code == 200
+
+
+
+def test_pattern_monitor_latest_tag_resolves(tmp_path: Path):
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    r = client.get("/api/pattern-monitor/summary", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    assert r.json()["tag"] == "latest"

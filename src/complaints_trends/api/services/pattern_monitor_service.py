@@ -10,6 +10,9 @@ class PatternMonitorService:
     def __init__(self, loader: DataLoader) -> None:
         self.loader = loader
 
+    def _resolved_tag(self, tag: str) -> str:
+        return self.loader.resolve_tag("pattern_monitor", tag)
+
     def _filter(self, df: pd.DataFrame, params: dict) -> pd.DataFrame:
         out = df.copy()
         if out.empty:
@@ -29,10 +32,11 @@ class PatternMonitorService:
         return out
 
     def summary(self, tag: str, params: dict) -> PatternMonitorSummaryResponse:
-        scored = self._filter(self.loader.load_pattern_monitor_scored(tag), params)
-        pressure = self._filter(self.loader.load_pattern_monitor_pressure(tag), params)
+        resolved = self._resolved_tag(tag)
+        scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
+        pressure = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
         return PatternMonitorSummaryResponse(
-            tag=tag,
+            tag=resolved,
             summary={
                 "scored_rows": int(len(scored)),
                 "alert_rows": int((scored.get("is_alert", False) == True).sum()) if not scored.empty and "is_alert" in scored.columns else 0,
@@ -41,20 +45,31 @@ class PatternMonitorService:
         )
 
     def alerts(self, tag: str, params: dict) -> AlertRowResponse:
-        scored = self._filter(self.loader.load_pattern_monitor_scored(tag), params)
+        resolved = self._resolved_tag(tag)
+        scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
         if "is_alert" in scored.columns:
             scored = scored[scored["is_alert"] == True]
         return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"))
 
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
-        data = self._filter(self.loader.load_pattern_monitor_pressure(tag), params)
+        resolved = self._resolved_tag(tag)
+        data = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
         return DailyPressureResponse(rows=data.to_dict(orient="records"))
 
     def state(self, tag: str, params: dict) -> OverallStateResponse:
-        data = self._filter(self.loader.load_pattern_monitor_state(tag), params)
+        resolved = self._resolved_tag(tag)
+        data = self._filter(self.loader.load_pattern_monitor_state(resolved), params)
         return OverallStateResponse(rows=data.to_dict(orient="records"))
 
     def examples(self, tag: str, params: dict) -> dict:
-        scored = self._filter(self.loader.load_pattern_monitor_scored(tag), params)
-        cols = [c for c in ["date", "category", "subcategory", "row_score", "client_first_message", "dialog_text"] if c in scored.columns]
-        return {"rows": scored[cols].head(int(params.get("top_n", 50))).to_dict(orient="records") if not scored.empty else []}
+        resolved = self._resolved_tag(tag)
+        scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
+        cols = [
+            c
+            for c in ["date", "category", "subcategory", "row_score", "client_first_message", "dialog_text", "complaint_text"]
+            if c in scored.columns
+        ]
+        return {
+            "tag": resolved,
+            "rows": scored[cols].head(int(params.get("top_n", 200))).to_dict(orient="records") if not scored.empty else [],
+        }

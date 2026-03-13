@@ -85,6 +85,38 @@ class DataLoader:
     def find_pattern_monitor_tags(self) -> list[str]:
         return sorted(p.name.replace("pattern_monitor_", "") for p in self.paths.interim_dir.glob("pattern_monitor_*") if p.is_dir())
 
+    def resolve_tag(self, family: str, tag: str) -> str:
+        if tag != "latest":
+            return tag
+        if family == "pattern_fit":
+            tags = self.find_pattern_fit_tags()
+        elif family == "pattern_monitor":
+            tags = self.find_pattern_monitor_tags()
+        elif family == "viz":
+            tags = self.find_viz_tags()
+        else:
+            return tag
+        return tags[-1] if tags else tag
+
+    def _normalize_common_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        out = df.copy()
+        if "date" not in out.columns:
+            for candidate in ("event_date", "event_time", "created_at", "timestamp"):
+                if candidate in out.columns:
+                    out["date"] = out[candidate]
+                    break
+        if "category" not in out.columns and "complaint_category_llm" in out.columns:
+            out["category"] = out["complaint_category_llm"]
+        if "subcategory" not in out.columns and "complaint_subcategory_llm" in out.columns:
+            out["subcategory"] = out["complaint_subcategory_llm"]
+        if "category" in out.columns:
+            out["category"] = out["category"].fillna("UNKNOWN").astype(str)
+        if "subcategory" in out.columns:
+            out["subcategory"] = out["subcategory"].fillna("UNKNOWN").astype(str)
+        return out
+
     def load_viz_state(self, tag: str) -> pd.DataFrame:
         return self.read_parquet(self.paths.interim_dir / f"viz_state_{tag}.parquet")
 
@@ -92,22 +124,29 @@ class DataLoader:
         return self._normalize_prepare_columns(self.read_parquet(self.paths.prepare_parquet))
 
     def load_pattern_fit_growth(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_fit_{tag}" / "category_growth_summary.parquet")
+        resolved = self.resolve_tag("pattern_fit", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_fit_{resolved}" / "category_growth_summary.parquet"))
 
     def load_pattern_fit_seed_pool(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_fit_{tag}" / "seed_pool.parquet")
+        resolved = self.resolve_tag("pattern_fit", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_fit_{resolved}" / "seed_pool.parquet"))
 
     def load_pattern_fit_clusters(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_fit_{tag}" / "cluster_members.parquet")
+        resolved = self.resolve_tag("pattern_fit", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_fit_{resolved}" / "cluster_members.parquet"))
 
     def load_pattern_fit_profiles(self, tag: str) -> dict[str, Any]:
-        return self.read_json(self.paths.interim_dir / f"pattern_fit_{tag}" / "cluster_profiles.json")
+        resolved = self.resolve_tag("pattern_fit", tag)
+        return self.read_json(self.paths.interim_dir / f"pattern_fit_{resolved}" / "cluster_profiles.json")
 
     def load_pattern_monitor_scored(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{tag}" / "scored_rows.parquet")
+        resolved = self.resolve_tag("pattern_monitor", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{resolved}" / "scored_rows.parquet"))
 
     def load_pattern_monitor_pressure(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{tag}" / "category_daily_pressure.parquet")
+        resolved = self.resolve_tag("pattern_monitor", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{resolved}" / "category_daily_pressure.parquet"))
 
     def load_pattern_monitor_state(self, tag: str) -> pd.DataFrame:
-        return self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{tag}" / "overall_daily_state.parquet")
+        resolved = self.resolve_tag("pattern_monitor", tag)
+        return self._normalize_common_columns(self.read_parquet(self.paths.interim_dir / f"pattern_monitor_{resolved}" / "overall_daily_state.parquet"))
