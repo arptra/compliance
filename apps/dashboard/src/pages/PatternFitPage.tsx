@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
+import { useShallow } from 'zustand/react/shallow'
 
 type TagsResp = { pattern_fit_tags: string[] }
 type FitSummary = { tag: string; categories: string[]; growth_summary: Array<Record<string, unknown>> }
@@ -10,7 +11,7 @@ type CategoryRows = { tag: string; category: string; rows: Array<Record<string, 
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 
 export default function PatternFitPage() {
-  const f = useFilters()
+  const f = useFilters(useShallow((s) => ({ pattern_tag: s.pattern_tag, set: s.set })))
   const qc = useQueryClient()
   const [normalFrom, setNormalFrom] = useState('')
   const [normalTo, setNormalTo] = useState('')

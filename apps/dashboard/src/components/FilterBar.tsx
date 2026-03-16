@@ -2,16 +2,29 @@ import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useFilters } from '../state/filters'
+import { useShallow } from 'zustand/react/shallow'
 import { apiGet } from '../lib/api'
 import { CategoryScopeFilter } from './filters/CategoryScopeFilter'
 
 export function FilterBar() {
-  const f = useFilters()
+  const f = useFilters(useShallow((s) => ({
+    date_from: s.date_from,
+    date_to: s.date_to,
+    baseline_mode: s.baseline_mode,
+    baseline_date_from: s.baseline_date_from,
+    baseline_date_to: s.baseline_date_to,
+    categoryMode: s.categoryMode,
+    topN: s.topN,
+    categories: s.categories,
+    includeOther: s.includeOther,
+    set: s.set,
+    reset: s.reset,
+  })))
   const loc = useLocation()
   const nav = useNavigate()
   const catsQ = useQuery({
-    queryKey: ['meta-categories', f.date_from, f.date_to],
-    queryFn: () => apiGet<{ categories: string[] }>(`/api/meta/categories?${new URLSearchParams({ date_from: f.date_from || '', date_to: f.date_to || '' }).toString()}`),
+    queryKey: ['meta-categories'],
+    queryFn: () => apiGet<{ categories: string[] }>(`/api/meta/categories`),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   })

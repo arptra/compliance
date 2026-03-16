@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
+import { useShallow } from 'zustand/react/shallow'
 
 type TagsResp = { pattern_fit_tags: string[]; pattern_monitor_tags: string[] }
 type SummaryResp = { tag: string; summary: Record<string, number> }
@@ -9,7 +10,13 @@ type RowsResp = { rows: Array<Record<string, unknown>>; tag?: string }
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 
 export default function PatternMonitorPage() {
-  const f = useFilters()
+  const f = useFilters(useShallow((s) => ({
+    date_from: s.date_from,
+    date_to: s.date_to,
+    categories: s.categories,
+    pattern_tag: s.pattern_tag,
+    set: s.set,
+  })))
   const qc = useQueryClient()
   const [dialogPreview, setDialogPreview] = useState<string | null>(null)
   const patternTag = f.pattern_tag || 'latest'

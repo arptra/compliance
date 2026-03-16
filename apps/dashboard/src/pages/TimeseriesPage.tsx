@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiGet } from '../lib/api'
 import { useFilters } from '../state/filters'
+import { useShallow } from 'zustand/react/shallow'
 import { ActualExpectedChart } from '../components/charts/ActualExpectedChart'
 import { DailyDeltaBars } from '../components/charts/DailyDeltaBars'
 import { CumulativeChart } from '../components/charts/CumulativeChart'
@@ -15,7 +16,17 @@ import { ContributionChart } from '../components/charts/ContributionChart'
 type CategoryRow = { date: string; category: string; count: number; share: number }
 
 export default function TimeseriesPage() {
-  const f = useFilters()
+  const f = useFilters(useShallow((s) => ({
+    date_from: s.date_from,
+    date_to: s.date_to,
+    baseline_mode: s.baseline_mode,
+    baseline_date_from: s.baseline_date_from,
+    baseline_date_to: s.baseline_date_to,
+    categoryMode: s.categoryMode,
+    topN: s.topN,
+    includeOther: s.includeOther,
+    categories: s.categories,
+  })))
   const [granularity, setGranularity] = useState<'D' | 'W' | 'M'>('D')
   const [categoryChartMode, setCategoryChartMode] = useState<'stacked' | 'lines'>('stacked')
 
