@@ -19,6 +19,8 @@ from .trends import build_trends
 from .viz.report import build_visual_report, materialize_predictions
 from .viz.state import VizPaths
 from .viz.viewer import run_viewer
+from .api import create_app
+import uvicorn
 
 app = typer.Typer(help="complaints-trends CLI")
 console = Console()
@@ -252,6 +254,18 @@ def pattern_monitor_cmd(
     console.log(f"pattern-monitor scored rows: {scored}")
     console.log(f"pattern-monitor daily state: {state}")
     console.log(f"pattern-monitor report: {report}")
+
+
+@app.command("api-serve")
+def api_serve_cmd(
+    config: str = typer.Option("configs/project.yaml", "--config", help="Path to project yaml config"),
+    host: str = typer.Option("0.0.0.0", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    reload: bool = typer.Option(False, "--reload"),
+):
+    logger.info("[stage=api-serve] start")
+    app_instance = create_app(config)
+    uvicorn.run(app_instance, host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

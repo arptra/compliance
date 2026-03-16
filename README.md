@@ -1123,3 +1123,210 @@ python -m complaints_trends.cli pattern-monitor \
 Также формируются:
 - `exports/pattern_fit_<tag>.xlsx`, `reports/pattern_fit_<tag>.html`
 - `exports/pattern_monitor_<tag>.xlsx`, `reports/pattern_monitor_<tag>.html`
+
+## Interactive Dashboard Service (FastAPI + React)
+
+Добавлен MVP интерактивного сервиса из двух частей:
+
+1. **FastAPI backend** (`src/complaints_trends/api`) — тонкий API-слой поверх существующего engine/артефактов (`prepare`, `viz-build`, `pattern-fit`, `pattern-monitor`).
+2. **React + TypeScript frontend** (`apps/dashboard`) — SPA для Overview / Categories / Timeseries / Pattern Fit / Pattern Monitor / Reports / Settings.
+
+### Запуск backend
+
+```bash
+python -m complaints_trends.cli api-serve --config configs/project.yaml --host 0.0.0.0 --port 8000
+```
+
+### Запуск frontend
+
+```bash
+npm install --prefix apps/dashboard
+npm run dev --prefix apps/dashboard
+```
+
+### Как это связано с существующим pipeline
+
+- Существующие CLI-команды не удалены и не заменены.
+- API-роуты читают существующие parquet/json/joblib артефакты и отдают JSON.
+- Run endpoints (`/api/runs/*`) запускают существующие python-функции: `viz-build`, `pattern-fit`, `pattern-monitor`, `infer-month`.
+
+### Основные endpoints
+
+- `GET /api/health`, `GET /api/meta/config`, `GET /api/meta/datasets`, `GET /api/meta/tags`
+- `GET /api/overview`
+- `GET /api/categories`, `GET /api/categories/{category}/...`
+- `GET /api/timeseries/...`
+- `GET /api/pattern-fit/...`
+- `GET /api/pattern-monitor/...`
+- `POST /api/reports/executive|operations|pattern-monitoring`
+- `POST /api/runs/viz-build|pattern-fit|pattern-monitor|infer-month`
+
+### Страницы dashboard
+
+- `/overview`
+- `/categories`
+- `/timeseries`
+- `/pattern-fit`
+- `/pattern-monitor`
+- `/reports`
+- `/settings`
+
+## Interactive Dashboard: Timeseries tab and category scope filter
+
+В дашборде обновлена вкладка `/timeseries` как основной экран динамики:
+- `Actual vs Expected`,
+- `Daily Delta/Excess`,
+- `Cumulative`,
+- структура категорий (stacked/lines + 100% share),
+- `weekday x hour` heatmap,
+- calendar heatmap,
+- compare summary и вклад категорий (contribution table/chart).
+
+### Единый category scope filter
+
+В глобальный `FilterBar` вынесен общий фильтр категории с режимами:
+- `Top N` (дефолт `10`),
+- `Custom` (ручной multiselect),
+- `All`.
+
+Поддерживаются параметры:
+- `categoryMode=top|custom|all`
+- `topN=10`
+- `categories=cat1,cat2`
+- `includeOther=true|false`
+
+Для режима `Top N` backend сам рассчитывает топ категорий за выбранный период.
+`includeOther=true` агрегирует хвост в `OTHER` для графиков структуры.
+
+### Сравнение с baseline
+
+Во вкладке `/timeseries` сравнение поддерживает baseline mode:
+- `previous_period`
+- `same_weekday`
+- `seasonal`
+- `custom_range`
+
+Также доступна таблица category compare:
+`actual_count`, `expected_count`, `delta_abs`, `delta_pct`, `share`, `contribution_to_growth`, `anomaly_score`.
+
+### Как читать графики Timeseries (объяснение для руководителя)
+
+Ниже — практическая расшифровка каждого блока вкладки `/timeseries`: что он показывает, как его читать и какой управленческий вывод из него делать.
+
+#### 1) Actual vs Expected
+**Что показывает:**
+- `Actual` — фактическое число жалоб по дням/неделям/месяцам.
+- `Expected` — ожидаемый уровень (baseline) по выбранному режиму сравнения.
+
+**Как смотреть:**
+- Если `Actual` системно выше `Expected`, есть устойчивый негативный сдвиг.
+- Разовые “шипы” — это инциденты, системный разрыв — это тренд.
+
+**Что говорит начальству:**
+- “Нагрузка на поддержку выше/ниже нормы”.
+- “Ситуация разовая или структурная”.
+
+#### 2) Daily Delta / Excess
+**Что показывает:**
+- Отклонение `Actual - Expected` в каждом периоде (столбики +/−).
+
+**Как смотреть:**
+- Положительные столбики: жалоб больше нормы.
+- Отрицательные: меньше нормы.
+- Серия положительных столбиков подряд — признак длительной проблемы.
+
+**Что говорит начальству:**
+- “Когда именно началось ухудшение и как долго длится”.
+
+#### 3) Cumulative complaints
+**Что показывает:**
+- Накопленную сумму жалоб и ожидаемого уровня.
+
+**Как смотреть:**
+- Расхождение кривых = накопленный “перерасход” по жалобам.
+- Чем быстрее расходятся линии, тем выше темп ухудшения.
+
+**Что говорит начальству:**
+- “Общий масштаб проблемы за период, а не только ежедневный шум”.
+
+#### 4) Category structure over time (stacked/lines)
+**Что показывает:**
+- Вклад категорий в общий поток жалоб по времени.
+- В режиме `stacked` — структура потока, в `lines` — динамика каждой категории отдельно.
+
+**Как смотреть:**
+- Рост “толщины” одной категории в stacked — её вклад в общий рост.
+- В режиме lines удобно смотреть 1–5 приоритетных категорий.
+
+**Что говорит начальству:**
+- “Какие направления болят сильнее всего и кто формирует общий рост”.
+
+#### 5) 100% category shares
+**Что показывает:**
+- Не абсолютный объем, а долю категорий внутри общего потока (сумма = 100%).
+
+**Как смотреть:**
+- Если доля категории растет при стабильном общем объеме — структура ухудшается.
+- Полезно, когда общий объем «ровный», но состав жалоб меняется.
+
+**Что говорит начальству:**
+- “Меняется ли природа проблем, даже если общий уровень похож на прошлый”.
+
+#### 6) Weekday × Hour heatmap
+**Что показывает:**
+- В какие дни недели и часы чаще возникает поток жалоб.
+
+**Как смотреть:**
+- Самые “горячие” клетки — пики нагрузки.
+- Используется для планирования смен, SLA и коммуникаций.
+
+**Что говорит начальству:**
+- “Когда нужна усиленная операционная готовность”.
+
+#### 7) Calendar heatmap
+**Что показывает:**
+- “Тепловую карту” по календарным датам.
+
+**Как смотреть:**
+- Видно сезонность, периоды всплесков, предпраздничные/послепраздничные эффекты.
+- Легко сопоставлять с релизами, маркетингом, внешними событиями.
+
+**Что говорит начальству:**
+- “Какие даты/недели исторически рискованные”.
+
+#### 8) Compare to baseline (summary)
+**Что показывает:**
+- Сводные метрики по выбранному периоду против baseline:
+  - `actual_total`
+  - `baseline_total`
+  - `delta_abs`
+  - `delta_pct`
+
+**Как смотреть:**
+- Это короткий “executive snapshot”: насколько хуже/лучше текущий период.
+
+**Что говорит начальству:**
+- “На сколько процентов мы выше/ниже нормы и каков абсолютный эффект”.
+
+#### 9) Contribution chart + таблица вкладов категорий
+**Что показывает:**
+- Какие категории дали основной вклад в рост/снижение относительно baseline.
+- Таблица с `actual_count`, `expected_count`, `delta_abs`, `delta_pct`, `share`, `contribution_to_growth`, `anomaly_score`.
+
+**Как смотреть:**
+- Сначала смотрим топ по `delta_abs` и `contribution_to_growth`.
+- Затем проверяем `delta_pct` (скорость роста) и `share` (масштаб влияния).
+
+**Что говорит начальству:**
+- “Где приоритетно запускать корректирующие действия, чтобы быстрее всего снизить общий поток жалоб”.
+
+---
+
+### Рекомендуемый порядок анализа для руководства (1–2 минуты)
+1. **Compare summary**: общий итог по периоду против нормы.
+2. **Actual vs Expected + Delta bars**: когда началось отклонение и устойчиво ли оно.
+3. **Contribution / category table**: какие 3–5 категорий дают основной негатив.
+4. **Heatmaps**: когда по времени суток/дням недели усилять операционный контур.
+5. **100% shares**: меняется ли структура проблем (не только объем).
+
+Такой порядок позволяет быстро перейти от “есть проблема” к “где именно и что делать в первую очередь”.
