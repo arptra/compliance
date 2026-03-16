@@ -11,13 +11,8 @@ const items = [
 
 function StartupLoader() {
   return <div className='startup-loader'>
+    <div className='spinner' aria-label='loading' />
     <div className='loader-title'>Загрузка данных из parquet…</div>
-    <div className='bins'>
-      <div className='bin'>PAYMENTS</div><div className='bin'>LOGIN</div><div className='bin'>DELIVERY</div>
-    </div>
-    <div className='complaint complaint-1'>💬</div>
-    <div className='complaint complaint-2'>💬</div>
-    <div className='complaint complaint-3'>💬</div>
   </div>
 }
 
