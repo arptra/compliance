@@ -12,10 +12,12 @@ import { WeekdayHourHeatmap } from '../components/charts/WeekdayHourHeatmap'
 import { CalendarHeatmap } from '../components/charts/CalendarHeatmap'
 import { ContributionChart } from '../components/charts/ContributionChart'
 
+type CategoryRow = { date: string; category: string; count: number; share: number }
+
 export default function TimeseriesPage() {
   const f = useFilters()
-  const [granularity, setGranularity] = useState<'D'|'W'|'M'>('D')
-  const [categoryChartMode, setCategoryChartMode] = useState<'stacked'|'lines'>('stacked')
+  const [granularity, setGranularity] = useState<'D' | 'W' | 'M'>('D')
+  const [categoryChartMode, setCategoryChartMode] = useState<'stacked' | 'lines'>('stacked')
 
   const qs = useMemo(() => {
     const q = new URLSearchParams()
@@ -30,31 +32,75 @@ export default function TimeseriesPage() {
     q.set('include_other', String(f.includeOther))
     for (const c of f.categories) q.append('categories', c)
     return q.toString()
-  }, [f, granularity])
+  }, [
+    granularity,
+    f.date_from,
+    f.date_to,
+    f.baseline_mode,
+    f.baseline_date_from,
+    f.baseline_date_to,
+    f.categoryMode,
+    f.topN,
+    f.includeOther,
+    f.categories,
+  ])
 
-  const overall = useQuery({ queryKey: ['ts-overall-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/overall?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
-  const byCategory = useQuery({ queryKey: ['ts-by-category-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/by-category?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
-  const heatmap = useQuery({ queryKey: ['ts-heatmap-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/heatmap?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
-  const compare = useQuery({ queryKey: ['ts-compare-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/compare?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const queryCommon = { staleTime: 30_000, refetchOnWindowFocus: false, placeholderData: (prev: unknown) => prev }
+  const overall = useQuery({ queryKey: ['ts-overall-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/overall?${qs}`), ...queryCommon })
+  const byCategory = useQuery({ queryKey: ['ts-by-category-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/by-category?${qs}`), ...queryCommon })
+  const heatmap = useQuery({ queryKey: ['ts-heatmap-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/heatmap?${qs}`), ...queryCommon })
+  const compare = useQuery({ queryKey: ['ts-compare-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/compare?${qs}`), ...queryCommon })
 
   if (overall.isLoading || byCategory.isLoading || heatmap.isLoading || compare.isLoading) return <div className='card'>Загрузка timeseries...</div>
   if (overall.error) return <div className='card'>Ошибка overall: {(overall.error as Error).message}</div>
 
-  const actual = overall.data?.actual ?? []
-  const expected = overall.data?.expected ?? []
   const delta = overall.data?.delta ?? []
   const cumulative = overall.data?.cumulative ?? []
   const summary = overall.data?.summary ?? {}
 
-  const rows: Array<{date:string;category:string;count:number;share:number}> = byCategory.data?.rows ?? []
-  const categories: string[] = Array.from(new Set(rows.map((r) => String(r.category))))
-  const dates: string[] = Array.from(new Set(rows.map((r) => String(r.date)))).sort()
-  const countMatrix: Record<string, number[]> = {}
-  const shareMatrix: Record<string, number[]> = {}
-  for (const c of categories) {
-    countMatrix[c] = dates.map((d) => rows.filter((r) => r.date === d && r.category === c).reduce((s, r) => s + r.count, 0))
-    shareMatrix[c] = dates.map((d) => rows.filter((r) => r.date === d && r.category === c).reduce((s, r) => s + r.share, 0))
-  }
+  const rows: CategoryRow[] = byCategory.data?.rows ?? []
+
+  const chartData = useMemo(() => {
+    if (!rows.length) {
+      return { categories: [] as string[], dates: [] as string[], countMatrix: {} as Record<string, number[]>, shareMatrix: {} as Record<string, number[]> }
+    }
+
+    const categories: string[] = []
+    const dates: string[] = []
+    const catIdx = new Map<string, number>()
+    const dateIdx = new Map<string, number>()
+
+    for (const r of rows) {
+      if (!catIdx.has(r.category)) {
+        catIdx.set(r.category, categories.length)
+        categories.push(r.category)
+      }
+      if (!dateIdx.has(r.date)) {
+        dateIdx.set(r.date, dates.length)
+        dates.push(r.date)
+      }
+    }
+
+    dates.sort()
+    dateIdx.clear()
+    dates.forEach((d, i) => dateIdx.set(d, i))
+
+    const countMatrix: Record<string, number[]> = {}
+    const shareMatrix: Record<string, number[]> = {}
+    for (const c of categories) {
+      countMatrix[c] = new Array(dates.length).fill(0)
+      shareMatrix[c] = new Array(dates.length).fill(0)
+    }
+
+    for (const r of rows) {
+      const di = dateIdx.get(r.date)
+      if (di === undefined) continue
+      countMatrix[r.category][di] += r.count
+      shareMatrix[r.category][di] += r.share
+    }
+
+    return { categories, dates, countMatrix, shareMatrix }
+  }, [rows])
 
   const mergedAE = delta.map((d: any) => ({ date: d.date, actual: d.actual, expected: d.expected, delta_abs: d.delta_abs, delta_pct: d.delta_pct }))
 
@@ -79,10 +125,10 @@ export default function TimeseriesPage() {
 
     <div className='card' style={{ marginTop: 12 }}>
       <h3>Category structure over time</h3>
-      {dates.length === 0 ? <div>Нет данных по категориям</div> : categoryChartMode === 'stacked' ? <CategoryStackedArea dates={dates} categories={categories} matrix={countMatrix} /> : <CategoryLinesChart dates={dates} categories={categories} matrix={countMatrix} />}
+      {chartData.dates.length === 0 ? <div>Нет данных по категориям</div> : categoryChartMode === 'stacked' ? <CategoryStackedArea dates={chartData.dates} categories={chartData.categories} matrix={chartData.countMatrix} /> : <CategoryLinesChart dates={chartData.dates} categories={chartData.categories} matrix={chartData.countMatrix} />}
     </div>
 
-    <div className='card' style={{ marginTop: 12 }}><h3>100% shares by category</h3>{dates.length ? <CategoryShareArea dates={dates} categories={categories} matrix={shareMatrix} /> : <div>Нет данных</div>}</div>
+    <div className='card' style={{ marginTop: 12 }}><h3>100% shares by category</h3>{chartData.dates.length ? <CategoryShareArea dates={chartData.dates} categories={chartData.categories} matrix={chartData.shareMatrix} /> : <div>Нет данных</div>}</div>
 
     <div className='card' style={{ marginTop: 12 }}><h3>Weekday × hour heatmap</h3>{(heatmap.data?.weekday_hour ?? []).length ? <WeekdayHourHeatmap rows={heatmap.data.weekday_hour} /> : <div>Нет часовой детализации</div>}</div>
     <div className='card' style={{ marginTop: 12 }}><h3>Calendar heatmap</h3>{(heatmap.data?.calendar ?? []).length ? <CalendarHeatmap rows={heatmap.data.calendar} /> : <div>Нет календарных данных</div>}</div>
