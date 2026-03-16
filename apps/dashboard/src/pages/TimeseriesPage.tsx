@@ -32,10 +32,10 @@ export default function TimeseriesPage() {
     return q.toString()
   }, [f, granularity])
 
-  const overall = useQuery({ queryKey: ['ts-overall-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/overall?${qs}`) })
-  const byCategory = useQuery({ queryKey: ['ts-by-category-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/by-category?${qs}`) })
-  const heatmap = useQuery({ queryKey: ['ts-heatmap-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/heatmap?${qs}`) })
-  const compare = useQuery({ queryKey: ['ts-compare-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/compare?${qs}`) })
+  const overall = useQuery({ queryKey: ['ts-overall-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/overall?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const byCategory = useQuery({ queryKey: ['ts-by-category-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/by-category?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const heatmap = useQuery({ queryKey: ['ts-heatmap-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/heatmap?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const compare = useQuery({ queryKey: ['ts-compare-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/compare?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
 
   if (overall.isLoading || byCategory.isLoading || heatmap.isLoading || compare.isLoading) return <div className='card'>Загрузка timeseries...</div>
   if (overall.error) return <div className='card'>Ошибка overall: {(overall.error as Error).message}</div>

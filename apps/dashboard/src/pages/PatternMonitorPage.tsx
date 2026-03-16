@@ -23,11 +23,11 @@ export default function PatternMonitorPage() {
     if (f.date_to) q.set('date_to', f.date_to)
     for (const c of f.categories) q.append('category', c)
     return q.toString()
-  }, [patternTag, f.date_from, f.date_to])
+  }, [patternTag, f.date_from, f.date_to, f.categories])
 
-  const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(`/api/pattern-monitor/summary?${qs}`) })
-  const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`) })
-  const examplesQ = useQuery({ queryKey: ['pm-examples', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/examples?${qs}&top_n=300`) })
+  const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(`/api/pattern-monitor/summary?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const examplesQ = useQuery({ queryKey: ['pm-examples', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/examples?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false })
 
   const runMonitor = useMutation({
     mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', {

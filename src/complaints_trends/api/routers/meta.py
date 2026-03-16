@@ -52,3 +52,22 @@ def tags_meta(services=Depends(get_service_container)):
         pattern_fit_tags=loader.find_pattern_fit_tags(),
         pattern_monitor_tags=loader.find_pattern_monitor_tags(),
     )
+
+
+@router.get("/categories")
+def categories_meta(date_from: str | None = None, date_to: str | None = None, services=Depends(get_service_container)):
+    loader = services["loader"]
+    df = loader.load_prepare()
+    if df.empty:
+        return {"categories": []}
+    if "event_time" in df.columns:
+        dt = pd.to_datetime(df["event_time"], errors="coerce")
+        if date_from:
+            df = df[dt >= pd.to_datetime(date_from)]
+            dt = pd.to_datetime(df.get("event_time"), errors="coerce")
+        if date_to:
+            df = df[dt <= pd.to_datetime(date_to)]
+    if "category" not in df.columns and "complaint_category_llm" in df.columns:
+        df["category"] = df["complaint_category_llm"]
+    cats = sorted(df.get("category", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    return {"categories": cats}

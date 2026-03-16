@@ -37,6 +37,8 @@ export default function CategoriesPage() {
   const q = useQuery({
     queryKey: ['categories', qs],
     queryFn: () => apiGet<{ rows: Row[] }>(`/api/categories?${qs}`),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   const rows = q.data?.rows ?? []
@@ -52,6 +54,8 @@ export default function CategoriesPage() {
     queryKey: ['subcategories', selectedCategory, qs],
     enabled: Boolean(selectedCategory),
     queryFn: () => apiGet<{ category: string; subcategories: SubRow[] }>(`/api/categories/${encodeURIComponent(selectedCategory)}/subcategories?${qs}`),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   if (q.isLoading) return <div className='card'>Загрузка категорий...</div>

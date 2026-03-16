@@ -9,7 +9,12 @@ export function FilterBar() {
   const f = useFilters()
   const loc = useLocation()
   const nav = useNavigate()
-  const catsQ = useQuery({ queryKey: ['cats-for-filter', f.date_from, f.date_to], queryFn: () => apiGet<{ rows: Array<{ category: string }> }>(`/api/categories?${new URLSearchParams({ date_from: f.date_from || '', date_to: f.date_to || '' }).toString()}`) })
+  const catsQ = useQuery({
+    queryKey: ['meta-categories', f.date_from, f.date_to],
+    queryFn: () => apiGet<{ categories: string[] }>(`/api/meta/categories?${new URLSearchParams({ date_from: f.date_from || '', date_to: f.date_to || '' }).toString()}`),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
 
   useEffect(() => {
     const q = new URLSearchParams(loc.search)
@@ -36,10 +41,13 @@ export function FilterBar() {
     q.set('topN', String(f.topN))
     q.set('includeOther', String(f.includeOther))
     if (f.categories.length) q.set('categories', f.categories.join(',')); else q.delete('categories')
-    nav({ pathname: loc.pathname, search: q.toString() }, { replace: true })
+    const nextSearch = q.toString()
+    if (nextSearch !== loc.search.replace(/^\?/, '')) {
+      nav({ pathname: loc.pathname, search: nextSearch }, { replace: true })
+    }
   }, [f.date_from, f.date_to, f.categoryMode, f.topN, f.categories, f.includeOther, loc.pathname])
 
-  const available = Array.from(new Set((catsQ.data?.rows ?? []).map((r) => r.category))).filter(Boolean)
+  const available = catsQ.data?.categories ?? []
 
   return <div className="filters">
     <input type="date" value={f.date_from || ''} onChange={(e)=>f.set({date_from:e.target.value || undefined})} />

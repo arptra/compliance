@@ -19,6 +19,8 @@ export function useOverview() {
   for (const c of f.categories) qs.append('category', c)
   return useQuery({
     queryKey: ['overview', qs.toString()],
-    queryFn: async () => overviewSchema.parse(await apiGet(`/api/overview?${qs.toString()}`))
+    queryFn: async () => overviewSchema.parse(await apiGet(`/api/overview?${qs.toString()}`)),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 }
