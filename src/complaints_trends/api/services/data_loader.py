@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from collections import OrderedDict
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 import joblib
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ...config import ProjectConfig
 
@@ -26,21 +28,36 @@ class DataLoader:
             prepare_parquet=Path(cfg.prepare.output_parquet),
             interim_dir=Path(cfg.analysis.pattern_monitoring.interim_dir),
         )
-        self._cache: dict[str, tuple[float, Any]] = {}
+        self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._lock = RLock()
+        self._cache_max_items = 24
+        self._prepare_cache: tuple[float, pd.DataFrame] | None = None
+        self._prepare_columns_cache: tuple[float, set[str]] | None = None
 
-    def _load_cached(self, path: Path, loader) -> Any:
+    def _cache_get(self, key: str, mtime: float) -> Any | None:
+        cached = self._cache.get(key)
+        if not cached or cached[0] != mtime:
+            return None
+        self._cache.move_to_end(key)
+        return cached[1]
+
+    def _cache_set(self, key: str, mtime: float, value: Any) -> None:
+        self._cache[key] = (mtime, value)
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_max_items:
+            self._cache.popitem(last=False)
+
+    def _load_cached(self, path: Path, cache_key: str, loader) -> Any:
         if not path.exists():
             return None
         mtime = path.stat().st_mtime
-        key = str(path)
         with self._lock:
-            cached = self._cache.get(key)
-            if cached and cached[0] == mtime:
-                return cached[1]
+            cached_value = self._cache_get(cache_key, mtime)
+            if cached_value is not None:
+                return cached_value
         value = loader(path)
         with self._lock:
-            self._cache[key] = (mtime, value)
+            self._cache_set(cache_key, mtime, value)
         return value
 
     def read_many_parquet(self, paths: list[Path]) -> dict[str, pd.DataFrame]:
@@ -50,19 +67,22 @@ class DataLoader:
         with ThreadPoolExecutor(max_workers=min(8, max(1, len(paths)))) as ex:
             return dict(ex.map(_one, paths))
 
-    def read_parquet(self, path: Path) -> pd.DataFrame:
-        df = self._load_cached(path, pd.read_parquet)
+    def read_parquet(self, path: Path, columns: list[str] | None = None) -> pd.DataFrame:
+        projection = tuple(columns or ())
+        cache_key = f"parquet::{path}::{','.join(projection)}"
+        loader = (lambda p: pd.read_parquet(p, columns=list(projection))) if projection else pd.read_parquet
+        df = self._load_cached(path, cache_key, loader)
         if df is None:
             return pd.DataFrame()
         # shallow copy dramatically reduces latency/memory for big parquet reads
         return df.copy(deep=False)
 
     def read_json(self, path: Path) -> dict[str, Any]:
-        data = self._load_cached(path, lambda p: json.loads(p.read_text(encoding="utf-8")))
+        data = self._load_cached(path, f"json::{path}", lambda p: json.loads(p.read_text(encoding="utf-8")))
         return dict(data or {})
 
     def read_joblib(self, path: Path) -> Any:
-        return self._load_cached(path, joblib.load)
+        return self._load_cached(path, f"joblib::{path}", joblib.load)
 
     def source_mtime(self, viz_tag: str | None = None) -> float:
         if viz_tag:
@@ -134,7 +154,33 @@ class DataLoader:
         return self.read_parquet(self.paths.interim_dir / f"viz_state_{tag}.parquet")
 
     def load_prepare(self) -> pd.DataFrame:
-        return self._normalize_prepare_columns(self.read_parquet(self.paths.prepare_parquet))
+        p = self.paths.prepare_parquet
+        if not p.exists():
+            return pd.DataFrame()
+        mtime = p.stat().st_mtime
+        with self._lock:
+            if self._prepare_cache and self._prepare_cache[0] == mtime:
+                return self._prepare_cache[1].copy(deep=False)
+        normalized = self._normalize_prepare_columns(self.read_parquet(p))
+        with self._lock:
+            self._prepare_cache = (mtime, normalized)
+        return normalized.copy(deep=False)
+
+    def load_prepare_timeseries(self) -> pd.DataFrame:
+        columns = ["event_time", "created_at", "date", "count", "metric_count", "category", "subcategory", "complaint_category_llm", "complaint_subcategory_llm"]
+        if not self.paths.prepare_parquet.exists():
+            return pd.DataFrame()
+        mtime = self.paths.prepare_parquet.stat().st_mtime
+        with self._lock:
+            if self._prepare_columns_cache and self._prepare_columns_cache[0] == mtime:
+                available = self._prepare_columns_cache[1]
+            else:
+                available = set(pq.ParquetFile(self.paths.prepare_parquet).schema_arrow.names)
+                self._prepare_columns_cache = (mtime, available)
+        present = [c for c in columns if c in available]
+        if not present:
+            return self.load_prepare()
+        return self._normalize_prepare_columns(self.read_parquet(self.paths.prepare_parquet, columns=present))
 
     def load_pattern_fit_growth(self, tag: str) -> pd.DataFrame:
         resolved = self.resolve_tag("pattern_fit", tag)

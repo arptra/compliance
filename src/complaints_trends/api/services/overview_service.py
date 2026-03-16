@@ -23,7 +23,7 @@ class OverviewService:
                 if "metric_count" in df.columns:
                     df = df.rename(columns={"metric_count": "count"})
                 return df
-        return self.loader.load_prepare()
+        return self.loader.load_prepare_timeseries()
 
     def _timeseries(self, df: pd.DataFrame, date_col: str) -> pd.DataFrame:
         ds = df.copy()
@@ -67,7 +67,7 @@ class OverviewService:
             params.get("baseline_date_to"),
         )
 
-        hist = self.loader.load_prepare().copy()
+        hist = self.loader.load_prepare_timeseries()
         if not hist.empty:
             hist_col = "event_time" if "event_time" in hist.columns else ("date" if "date" in hist.columns else None)
             if hist_col:
@@ -82,7 +82,7 @@ class OverviewService:
         )
         ts["delta"] = ts["actual"] - ts["expected"].fillna(0.0)
 
-        baseline_df = self.loader.load_prepare()
+        baseline_df = self.loader.load_prepare_timeseries()
         baseline_col = "event_time" if "event_time" in baseline_df.columns else ("date" if "date" in baseline_df.columns else None)
         if baseline_col is not None:
             baseline_df = filter_by_date(

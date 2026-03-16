@@ -12,7 +12,7 @@ class CategoriesService:
         self.loader = loader
 
     def _df(self, viz_tag: str | None, date_from: str | None, date_to: str | None) -> pd.DataFrame:
-        df = self.loader.load_viz_state(viz_tag) if viz_tag else self.loader.load_prepare()
+        df = self.loader.load_viz_state(viz_tag) if viz_tag else self.loader.load_prepare_timeseries()
         col = "date" if "date" in df.columns else "event_time"
         df = filter_by_date(df, col, date_from, date_to)
         if "category" not in df.columns:
@@ -34,7 +34,7 @@ class CategoriesService:
             params.get("baseline_date_to"),
         )
 
-        base = self.loader.load_prepare()
+        base = self.loader.load_prepare_timeseries()
         base_col = "event_time" if "event_time" in base.columns else ("date" if "date" in base.columns else None)
         if base_col:
             base = filter_by_date(

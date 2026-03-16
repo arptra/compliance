@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from ..schemas import ReportRequest, ReportResponse
@@ -23,13 +22,10 @@ class ReportService:
 
     def build_report(self, report_type: str, req: ReportRequest) -> ReportResponse:
         filters = req.filters
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_overview = ex.submit(self.overview.get_overview, filters)
-            f_monitor = ex.submit(self.monitor.summary, filters.get("pattern_tag", "latest"), filters)
-            overview = f_overview.result()
-            monitor = f_monitor.result()
+        overview = self.overview.get_overview(filters)
+        monitor = self.monitor.summary(filters.get("pattern_tag", "latest"), filters)
 
-        df = self.loader.load_prepare()
+        df = self.loader.load_prepare_timeseries()
         col = "date" if "date" in df.columns else "event_time"
         actual = filter_by_date(df, col, filters.get("date_from"), filters.get("date_to"))
         b_from, b_to = resolve_compare_window(

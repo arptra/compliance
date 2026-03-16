@@ -32,7 +32,8 @@ def datasets_meta(services=Depends(get_service_container)):
     min_date = max_date = None
     label_sources: set[str] = set()
     if prepare.exists():
-        df = pd.read_parquet(prepare)
+        loader = services["loader"]
+        df = loader.read_parquet(prepare, columns=["event_time", "label_source"])
         col = "event_time" if "event_time" in df.columns else None
         if col:
             dt = pd.to_datetime(df[col], errors="coerce")
@@ -57,7 +58,7 @@ def tags_meta(services=Depends(get_service_container)):
 @router.get("/categories")
 def categories_meta(date_from: str | None = None, date_to: str | None = None, services=Depends(get_service_container)):
     loader = services["loader"]
-    df = loader.load_prepare()
+    df = loader.load_prepare_timeseries()
     if df.empty:
         return {"categories": []}
     if "event_time" in df.columns:

@@ -34,7 +34,7 @@ def _cached(key: tuple, producer):
 
 def _df(services, viz_tag: str | None):
     loader = services["loader"]
-    return loader.load_viz_state(viz_tag) if viz_tag else loader.load_prepare()
+    return loader.load_viz_state(viz_tag) if viz_tag else loader.load_prepare_timeseries()
 
 
 @router.get("/overall")
