@@ -62,15 +62,7 @@ export default function TimeseriesPage() {
   const heatmap = useQuery({ queryKey: ['ts-heatmap-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/heatmap?${qs}`), ...queryCommon })
   const compare = useQuery({ queryKey: ['ts-compare-v2', qs], queryFn: () => apiGet<any>(`/api/timeseries/compare?${qs}`), ...queryCommon })
 
-  if (overall.isLoading || byCategory.isLoading || heatmap.isLoading || compare.isLoading) return <div className='card'>Загрузка timeseries...</div>
-  if (overall.error) return <div className='card'>Ошибка overall: {(overall.error as Error).message}</div>
-
-  const delta = overall.data?.delta ?? []
-  const cumulative = overall.data?.cumulative ?? []
-  const summary = overall.data?.summary ?? {}
-
   const rows: CategoryRow[] = byCategory.data?.rows ?? []
-
   const chartData = useMemo(() => {
     if (!rows.length) {
       return { categories: [] as string[], dates: [] as string[], countMatrix: {} as Record<string, number[]>, shareMatrix: {} as Record<string, number[]> }
@@ -113,6 +105,12 @@ export default function TimeseriesPage() {
     return { categories, dates, countMatrix, shareMatrix }
   }, [rows])
 
+  if (overall.isLoading || byCategory.isLoading || heatmap.isLoading || compare.isLoading) return <div className='card'>Загрузка timeseries...</div>
+  if (overall.error) return <div className='card'>Ошибка overall: {(overall.error as Error).message}</div>
+
+  const delta = overall.data?.delta ?? []
+  const cumulative = overall.data?.cumulative ?? []
+  const summary = overall.data?.summary ?? {}
   const mergedAE = delta.map((d: any) => ({ date: d.date, actual: d.actual, expected: d.expected, delta_abs: d.delta_abs, delta_pct: d.delta_pct }))
 
   return <div>
