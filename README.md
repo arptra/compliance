@@ -1171,6 +1171,47 @@ npm run dev --prefix apps/dashboard
 - `/reports`
 - `/settings`
 
+
+## Executive report (/reports)
+
+Вкладка `/reports` переработана в executive dashboard для руководства с фокусом на 30–60 секунд понимания ситуации:
+
+- **Минимальные controls**: period, compare mode, custom baseline (только для `custom_range`), category scope, toggles `include examples` и `include ownership`, кнопки `Build`, `Reset`, `Download HTML`, `Download Markdown`, `Print view`.
+- **KPI cards**: total complaints, delta vs baseline, categories above baseline, top growth category, pattern risk, primary area/owner (опционально).
+- **4 ключевых блока**: `Actual vs Expected`, вклад категорий в рост, список категорий выше baseline с priority, top alert examples.
+- **Executive summary**: детерминированный блок `headline + bullets + recommended actions` от backend (без LLM).
+- **Glossary tooltips**: у ключевых терминов (baseline, expected, delta, anomaly, pattern risk, contribution, owner/area, priority и др.) доступны hover-пояснения на русском.
+
+### Новый API контракт executive report
+
+`POST /api/reports/executive`
+
+Request:
+- `date_from`, `date_to`
+- `compare_mode`: `previous_period|same_weekday|seasonal|custom_range`
+- `baseline_date_from`, `baseline_date_to` (для custom range)
+- `categories` (optional)
+- `include_examples`
+- `include_ownership`
+- `pattern_tag` (optional, default `latest`)
+
+Response:
+- `meta`
+- `kpis`
+- `charts` (`actual_expected`, `category_contribution`, `category_priority`, `alert_examples`)
+- `summary`
+- `definitions`
+- `export` (`markdown`, `html`)
+
+### Ownership mapping (optional)
+
+Если есть файл:
+- `configs/category_ownership.csv` или
+- `data/reference/category_ownership.csv`
+
+то backend рассчитывает `primary_area` (наиболее вероятный контур для первичной проверки).
+Если файла нет — блок ownership корректно скрывается, ошибок нет.
+
 ## Interactive Dashboard: Timeseries tab and category scope filter
 
 В дашборде обновлена вкладка `/timeseries` как основной экран динамики:
