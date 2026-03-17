@@ -26,8 +26,8 @@ def _setup(tmp_path: Path) -> Path:
 
 def test_report_markdown_html(tmp_path: Path):
     client = TestClient(create_app(str(_setup(tmp_path))))
-    r = client.post("/api/reports/executive", json={"filters": {"pattern_tag": "latest"}, "output_format": "json"})
+    r = client.post('/api/reports/executive', json={'date_from':'2025-01-01','date_to':'2025-01-02','pattern_tag':'latest'})
     assert r.status_code == 200
     payload = r.json()
-    assert payload["markdown"]
-    assert payload["html"]
+    assert payload['export']['markdown']
+    assert payload['export']['html']
