@@ -133,9 +133,21 @@ def aggregate_timeseries_overall(
     if not baseline_df.empty and baseline_col in baseline_df.columns:
         b = _prepare(baseline_df, baseline_col)
         b["bucket"] = b["date"].dt.to_period(_freq_rule(granularity)).dt.to_timestamp()
-        expected = b.groupby("bucket")["value"].sum().reset_index(name="expected")
+        expected = b.groupby("bucket")["value"].sum().reset_index(name="expected").sort_values("bucket")
 
     merged = actual.merge(expected, on="bucket", how="left")
+
+    # Baseline window usually has different dates than actual window; if exact date join gives no overlap,
+    # align expected by bucket order (relative position in period) instead of calendar date.
+    if not expected.empty and merged["expected"].isna().all():
+        exp_vals = expected["expected"].tolist()
+        if len(exp_vals) == len(merged):
+            merged["expected"] = exp_vals
+        elif len(exp_vals) > 0:
+            # fallback: repeat last known expected or trim to the actual horizon
+            padded = (exp_vals + [exp_vals[-1]] * len(merged))[: len(merged)]
+            merged["expected"] = padded
+
     merged["expected"] = merged["expected"].fillna(0.0)
     merged["delta"] = merged["actual"] - merged["expected"]
     merged["delta_pct"] = merged.apply(lambda r: (r["delta"] / r["expected"]) if r["expected"] else None, axis=1)

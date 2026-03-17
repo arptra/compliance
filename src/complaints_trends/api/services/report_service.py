@@ -259,35 +259,53 @@ class ReportService:
     def _build_examples(self, req: ExecutiveReportRequest, actual: pd.DataFrame, contrib_rows: list[dict]) -> list[AlertExampleCard]:
         if not req.include_examples:
             return []
-        if actual.empty:
-            return []
-        df = actual.copy()
-        if "category" not in df.columns:
-            df["category"] = "UNKNOWN"
-        text_col = "text" if "text" in df.columns else ("complaint_text" if "complaint_text" in df.columns else None)
-        if text_col is None:
-            return []
-        top_cat = [r["category"] for r in contrib_rows if r.get("delta_abs", 0) > 0][:3]
-        sample = df[df["category"].isin(top_cat)] if top_cat else df
-        if sample.empty:
-            sample = df
-        sample = sample.head(5)
-        out: list[AlertExampleCard] = []
-        for _, row in sample.iterrows():
-            reason = "Рост категории относительно baseline"
-            cat = str(row.get("category", "UNKNOWN"))
-            if cat == (top_cat[0] if top_cat else ""):
-                reason = "Ключевой вклад в общий рост"
-            out.append(
-                AlertExampleCard(
-                    text=str(row.get(text_col, ""))[:280],
-                    category=cat,
-                    reason=reason,
-                    priority="high" if cat in top_cat[:1] else "medium",
-                    score=None,
+
+        def _from_df(df: pd.DataFrame) -> list[AlertExampleCard]:
+            if df.empty:
+                return []
+            work = df.copy()
+            if "category" not in work.columns:
+                work["category"] = "UNKNOWN"
+            text_col = next((c for c in ("text", "complaint_text", "raw_dialog", "row_dialog", "dialog_text", "client_first_message") if c in work.columns), None)
+            if text_col is None:
+                return []
+            top_cat = [r["category"] for r in contrib_rows if r.get("delta_abs", 0) > 0][:3]
+            sample = work[work["category"].isin(top_cat)] if top_cat else work
+            if sample.empty:
+                sample = work
+            sample = sample.head(5)
+            out: list[AlertExampleCard] = []
+            for _, row in sample.iterrows():
+                reason = "Рост категории относительно baseline"
+                cat = str(row.get("category", "UNKNOWN"))
+                if cat == (top_cat[0] if top_cat else ""):
+                    reason = "Ключевой вклад в общий рост"
+                out.append(
+                    AlertExampleCard(
+                        text=str(row.get(text_col, ""))[:2000],
+                        category=cat,
+                        reason=reason,
+                        priority="high" if cat in top_cat[:1] else "medium",
+                        score=None,
+                    )
                 )
-            )
-        return out
+            return out
+
+        direct = _from_df(actual)
+        if direct:
+            return direct
+
+        # fallback to pattern-monitor alert examples (raw_dialog/row_dialog) when available
+        try:
+            monitor_rows = self.monitor.examples(req.pattern_tag, {"date_from": req.date_from, "date_to": req.date_to, "top_n": 5}).get("rows", [])
+        except Exception:
+            monitor_rows = []
+        if not monitor_rows:
+            return []
+        mdf = pd.DataFrame(monitor_rows)
+        if "row_dialog" in mdf.columns and "raw_dialog" not in mdf.columns:
+            mdf["raw_dialog"] = mdf["row_dialog"]
+        return _from_df(mdf)
 
     def _build_summary(
         self,
