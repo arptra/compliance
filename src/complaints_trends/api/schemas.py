@@ -117,9 +117,22 @@ class ClusterProfileResponse(BaseModel):
     clusters: list[dict[str, Any]]
 
 
+class PatternMonitorSummaryPayload(BaseModel):
+    scored_rows: int = 0
+    alert_rows: int = 0
+    pressure_days: int = 0
+    latest_overall_pressure: float | None = None
+    latest_smoothed_state: float | None = None
+    pattern_risk_score: float | None = None
+    pattern_risk_label: Literal["low", "medium", "high", "unavailable"] = "unavailable"
+    pattern_risk_display_label: str = "Недоступно"
+    pattern_risk_status: Literal["success", "warning", "danger", "neutral"] = "neutral"
+    pattern_risk_calc_mode: Literal["full", "state_only", "alerts_only", "unavailable"] = "unavailable"
+
+
 class PatternMonitorSummaryResponse(BaseModel):
     tag: str
-    summary: dict[str, Any]
+    summary: PatternMonitorSummaryPayload
 
 
 class AlertRowResponse(BaseModel):
@@ -164,6 +177,9 @@ class ExecutiveReportRequest(BaseModel):
 class PatternRisk(BaseModel):
     score: float | None = None
     label: Literal["low", "medium", "high", "unavailable"] = "unavailable"
+    display_label: str = "Недоступно"
+    status: Literal["success", "warning", "danger", "neutral"] = "neutral"
+    calc_mode: Literal["full", "state_only", "alerts_only", "unavailable"] = "unavailable"
 
 
 class PrimaryArea(BaseModel):
@@ -179,6 +195,10 @@ class ExecutiveKpis(BaseModel):
     categories_above_baseline: int
     top_growth_category: str | None = None
     pattern_risk: PatternRisk
+    pattern_risk_score: float | None = None
+    pattern_risk_label: str = "unavailable"
+    pattern_risk_display_label: str = "Недоступно"
+    pattern_risk_status: str = "neutral"
     primary_area: PrimaryArea | None = None
 
 

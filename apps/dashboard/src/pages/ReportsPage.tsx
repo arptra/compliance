@@ -97,6 +97,16 @@ export default function ReportsPage() {
     {report.isError && <div className='card' style={{ marginTop: 12 }}>Ошибка загрузки отчета</div>}
 
     {data && <>
+      <div className='card-grid' style={{ marginTop: 12 }}>
+        <div className='card'><div>Total complaints</div><strong>{data.kpis.total_complaints}</strong></div>
+        <div className='card'><div>Delta</div><strong>{data.kpis.delta_abs >= 0 ? '+' : ''}{data.kpis.delta_abs}</strong></div>
+        <div className='card'><div>Alert rows</div><strong>{data.meta.alert_rows ?? 0}</strong></div>
+        <div className='card'>
+          <div>Pattern Risk <span className='term-help' title='Индикатор того, насколько вероятно, что в текущих жалобах сохраняется ранее выявленный нетипичный проблемный сценарий.'>ⓘ</span></div>
+          <strong><span className={`badge ${data.kpis.pattern_risk.status === 'danger' ? 'high' : data.kpis.pattern_risk.status === 'warning' ? 'medium' : data.kpis.pattern_risk.status === 'success' ? 'low' : 'neutral'}`}>{data.kpis.pattern_risk.display_label}</span></strong>
+          <div>{data.kpis.pattern_risk.score == null ? 'Недостаточно данных pattern monitoring' : `score ${data.kpis.pattern_risk.score.toFixed(2)}`}</div>
+        </div>
+      </div>
       <div style={{ marginTop: 12 }}><ExecutiveKpiCards kpis={data.kpis} /></div>
       <div className='executive-grid' style={{ marginTop: 12 }}>
         <ActualExpectedPanel rows={data.charts.actual_expected} />

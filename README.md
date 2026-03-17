@@ -1212,6 +1212,21 @@ Response:
 то backend рассчитывает `primary_area` (наиболее вероятный контур для первичной проверки).
 Если файла нет — блок ownership корректно скрывается, ошибок нет.
 
+### Pattern risk в executive report
+
+`Pattern risk` — это не метрика объема жалоб, а индикатор вероятности сохранения ранее выявленного нетипичного проблемного сценария.
+
+High-level расчет (диапазон `0..1`):
+- `state_component` из `overall_daily_state` (приоритет `smoothed_state`, fallback `overall_pressure`),
+- `alert_component` как доля alert-строк в `scored_rows`,
+- `pressure_component` как доля дней с pressure в `category_daily_pressure`.
+
+Итоговая формула при полном наборе данных:
+`0.60 * state + 0.25 * alerts + 0.15 * pressure`.
+
+Если доступна только часть данных, используется degraded-режим (`state_only` или `alerts_only`).
+Если pattern-monitor артефактов нет, возвращается `unavailable`.
+
 ## Interactive Dashboard: Timeseries tab and category scope filter
 
 В дашборде обновлена вкладка `/timeseries` как основной экран динамики:

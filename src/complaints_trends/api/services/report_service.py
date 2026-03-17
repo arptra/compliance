@@ -42,6 +42,7 @@ class ReportService:
         filters = req.filters
         overview = self.overview.get_overview(filters)
         monitor = self.monitor.summary(filters.get("pattern_tag", "latest"), filters)
+        monitor_summary = monitor.summary.model_dump()
 
         df = self.loader.load_prepare_timeseries()
         col = "date" if "date" in df.columns else "event_time"
@@ -62,13 +63,17 @@ class ReportService:
             {"title": "KPI", "body": [k.model_dump() for k in overview.kpis]},
             {"title": "Timeseries summary", "body": ts.get("summary", {})},
             {"title": "Top growth contribution", "body": contrib},
-            {"title": "Pattern monitor", "body": monitor.summary},
+            {"title": "Pattern monitor", "body": monitor_summary},
+            {"title": "Pattern risk", "body": {"label": monitor_summary.get("pattern_risk_label", "unavailable"), "score": monitor_summary.get("pattern_risk_score"), "calc_mode": monitor_summary.get("pattern_risk_calc_mode", "unavailable"), "alert_rows": monitor_summary.get("alert_rows", 0), "pressure_days": monitor_summary.get("pressure_days", 0)}},
         ]
-        summary = overview.executive_summary
+        risk_phrase = self._pattern_risk_phrase(monitor_summary.get("pattern_risk_label", "unavailable"))
+        summary = f"{overview.executive_summary} {risk_phrase}".strip()
         metrics = {
             "actual_total": next((k.value for k in overview.kpis if k.key == "actual_total"), 0),
-            "alert_rows": monitor.summary.get("alert_rows", 0),
+            "alert_rows": monitor_summary.get("alert_rows", 0),
             "timeseries_delta_abs": ts.get("summary", {}).get("delta_abs", 0),
+            "pattern_risk_score": monitor_summary.get("pattern_risk_score"),
+            "pattern_risk_label": monitor_summary.get("pattern_risk_label", "unavailable"),
         }
         md = self._to_markdown(report_type, sections)
         html = self._to_html(report_type, sections)
@@ -135,18 +140,17 @@ class ReportService:
 
         monitor_summary = {}
         try:
-            monitor_summary = self.monitor.summary(req.pattern_tag, {}).summary
+            monitor_summary = self.monitor.summary(req.pattern_tag, {"date_from": req.date_from, "date_to": req.date_to}).summary.model_dump()
         except Exception:
             monitor_summary = {}
-        risk_score = monitor_summary.get("median_score")
-        risk = PatternRisk(score=(None if risk_score is None else float(risk_score)), label="unavailable")
-        if risk_score is not None:
-            if risk_score >= 0.7:
-                risk.label = "high"
-            elif risk_score >= 0.4:
-                risk.label = "medium"
-            else:
-                risk.label = "low"
+
+        risk = PatternRisk(
+            score=monitor_summary.get("pattern_risk_score"),
+            label=monitor_summary.get("pattern_risk_label", "unavailable"),
+            display_label=monitor_summary.get("pattern_risk_display_label", "Недоступно"),
+            status=monitor_summary.get("pattern_risk_status", "neutral"),
+            calc_mode=monitor_summary.get("pattern_risk_calc_mode", "unavailable"),
+        )
 
         primary_area = self._resolve_primary_area(contrib_rows, req.include_ownership)
 
@@ -186,6 +190,7 @@ class ReportService:
                 "categories": req.categories or [],
                 "include_examples": req.include_examples,
                 "include_ownership": req.include_ownership,
+                "alert_rows": monitor_summary.get("alert_rows", 0),
             },
             kpis=ExecutiveKpis(
                 total_complaints=total,
@@ -195,6 +200,10 @@ class ReportService:
                 categories_above_baseline=above_baseline,
                 top_growth_category=top_growth,
                 pattern_risk=risk,
+                pattern_risk_score=risk.score,
+                pattern_risk_label=risk.label,
+                pattern_risk_display_label=risk.display_label,
+                pattern_risk_status=risk.status,
                 primary_area=primary_area,
             ),
             charts=ExecutiveCharts(
@@ -297,7 +306,8 @@ class ReportService:
         bullets = [
             f"За выбранный период получено {total} жалоб, это на {pct_text} {sign} baseline ({delta_abs:+d}).",
             f"Основной вклад в изменение дали категории: {top_names}.",
-            f"Состояние pattern risk: {risk.label}.",
+            f"Состояние pattern risk: {risk.display_label} ({risk.label}).",
+            self._pattern_risk_phrase(risk.label),
         ]
         if area is not None:
             bullets.append(f"Для первичной проверки рекомендуется зона/контур: {area.label}.")
@@ -372,6 +382,16 @@ class ReportService:
             f"<h3>Вклад категорий</h3><ul>{contrib}</ul>"
             "</body></html>"
         )
+
+    @staticmethod
+    def _pattern_risk_phrase(label: str) -> str:
+        if label == "high":
+            return "Сохраняются сильные признаки продолжающегося нетипичного проблемного сценария."
+        if label == "medium":
+            return "Есть отдельные признаки сохранения нетипичного проблемного сценария, требуется проверка."
+        if label == "low":
+            return "Признаки продолжающегося нетипичного проблемного сценария выражены слабо."
+        return "Оценка pattern risk недоступна: недостаточно данных pattern monitoring."
 
     def _to_markdown(self, report_type: str, sections: list[dict]) -> str:
         lines = [f"# {report_type.title()} report"]

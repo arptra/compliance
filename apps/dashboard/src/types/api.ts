@@ -12,7 +12,7 @@ export const overviewSchema = z.object({
 })
 
 export const executiveReportSchema = z.object({
-  meta: z.record(z.any()),
+  meta: z.object({ generated_at: z.string().optional(), date_from: z.string().nullable().optional(), date_to: z.string().nullable().optional(), compare_mode: z.string().optional(), baseline_date_from: z.string().nullable().optional(), baseline_date_to: z.string().nullable().optional(), categories: z.array(z.string()).optional(), include_examples: z.boolean().optional(), include_ownership: z.boolean().optional(), alert_rows: z.number().optional() }),
   kpis: z.object({
     total_complaints: z.number(),
     expected_complaints: z.number(),
@@ -20,7 +20,11 @@ export const executiveReportSchema = z.object({
     delta_pct: z.number().nullable(),
     categories_above_baseline: z.number(),
     top_growth_category: z.string().nullable(),
-    pattern_risk: z.object({ score: z.number().nullable(), label: z.enum(['low', 'medium', 'high', 'unavailable']) }),
+    pattern_risk: z.object({ score: z.number().nullable(), label: z.enum(['low', 'medium', 'high', 'unavailable']), display_label: z.string(), status: z.enum(['success','warning','danger','neutral']), calc_mode: z.enum(['full','state_only','alerts_only','unavailable']) }),
+    pattern_risk_score: z.number().nullable().optional(),
+    pattern_risk_label: z.string().optional(),
+    pattern_risk_display_label: z.string().optional(),
+    pattern_risk_status: z.string().optional(),
     primary_area: z.object({ label: z.string(), confidence_note: z.string() }).nullable(),
   }),
   charts: z.object({
