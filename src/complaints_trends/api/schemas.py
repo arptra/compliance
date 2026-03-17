@@ -149,6 +149,99 @@ class ReportResponse(BaseModel):
     html: str | None = None
 
 
+class ExecutiveReportRequest(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    compare_mode: Literal["previous_period", "same_weekday", "seasonal", "custom_range"] = "previous_period"
+    baseline_date_from: str | None = None
+    baseline_date_to: str | None = None
+    categories: list[str] | None = None
+    include_examples: bool = True
+    include_ownership: bool = True
+    pattern_tag: str = "latest"
+
+
+class PatternRisk(BaseModel):
+    score: float | None = None
+    label: Literal["low", "medium", "high", "unavailable"] = "unavailable"
+
+
+class PrimaryArea(BaseModel):
+    label: str
+    confidence_note: str
+
+
+class ExecutiveKpis(BaseModel):
+    total_complaints: int
+    expected_complaints: int
+    delta_abs: int
+    delta_pct: float | None = None
+    categories_above_baseline: int
+    top_growth_category: str | None = None
+    pattern_risk: PatternRisk
+    primary_area: PrimaryArea | None = None
+
+
+class ActualExpectedPoint(BaseModel):
+    date: str
+    actual: float
+    expected: float
+    delta: float
+    delta_pct: float | None = None
+
+
+class ContributionRow(BaseModel):
+    category: str
+    actual: float
+    expected: float
+    delta: float
+    contribution_pct: float
+
+
+class CategoryPriorityRow(BaseModel):
+    category: str
+    actual: float
+    expected: float
+    delta: float
+    delta_pct: float | None = None
+    priority: Literal["high", "medium", "low"]
+
+
+class AlertExampleCard(BaseModel):
+    text: str
+    category: str
+    reason: str
+    priority: Literal["high", "medium", "low"]
+    score: float | None = None
+
+
+class SummaryBlock(BaseModel):
+    headline: str
+    bullets: list[str]
+    recommended_actions: list[str]
+
+
+class ExecutiveCharts(BaseModel):
+    actual_expected: list[ActualExpectedPoint]
+    category_contribution: list[ContributionRow]
+    category_priority: list[CategoryPriorityRow]
+    alert_examples: list[AlertExampleCard]
+
+
+class ExecutiveExport(BaseModel):
+    markdown: str
+    html: str
+
+
+class ExecutiveReportResponse(BaseModel):
+    meta: dict[str, Any]
+    kpis: ExecutiveKpis
+    charts: ExecutiveCharts
+    summary: SummaryBlock
+    definitions: dict[str, str]
+    export: ExecutiveExport
+
+
 class RunRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 

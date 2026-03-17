@@ -11,28 +11,34 @@ export const overviewSchema = z.object({
   sparklines: z.record(z.array(z.number()))
 })
 
-export const overallTimeseriesSchema = z.object({
-  actual: z.array(z.object({ date: z.string(), value: z.number() })),
-  expected: z.array(z.object({ date: z.string(), value: z.number() })),
-  delta: z.array(z.object({ date: z.string(), actual: z.number(), expected: z.number(), delta_abs: z.number(), delta_pct: z.number().nullable() })),
-  cumulative: z.array(z.object({ date: z.string(), actual: z.number(), expected: z.number() })),
-  summary: z.record(z.any())
-})
-
-export const categoryTimeseriesSchema = z.object({
-  rows: z.array(z.object({ date: z.string(), category: z.string(), count: z.number(), share: z.number() })),
-  resolved_categories: z.array(z.string()).optional(),
-  used_other: z.boolean().optional()
-})
-
-export const heatmapSchema = z.object({
-  weekday_hour: z.array(z.object({ dow: z.number(), hour: z.number(), value: z.number() })),
-  calendar: z.array(z.object({ date: z.string(), value: z.number() }))
-})
-
-export const compareSummarySchema = z.object({
-  summary: z.object({ actual_total: z.number(), baseline_total: z.number(), delta_abs: z.number(), delta_pct: z.number().nullable() }),
-  contributions: z.array(z.object({ category: z.string(), actual_count: z.number(), expected_count: z.number(), delta_abs: z.number(), delta_pct: z.number().nullable(), share: z.number(), contribution_to_growth: z.number(), anomaly_score: z.number() }))
+export const executiveReportSchema = z.object({
+  meta: z.record(z.any()),
+  kpis: z.object({
+    total_complaints: z.number(),
+    expected_complaints: z.number(),
+    delta_abs: z.number(),
+    delta_pct: z.number().nullable(),
+    categories_above_baseline: z.number(),
+    top_growth_category: z.string().nullable(),
+    pattern_risk: z.object({ score: z.number().nullable(), label: z.enum(['low', 'medium', 'high', 'unavailable']) }),
+    primary_area: z.object({ label: z.string(), confidence_note: z.string() }).nullable(),
+  }),
+  charts: z.object({
+    actual_expected: z.array(z.object({ date: z.string(), actual: z.number(), expected: z.number(), delta: z.number(), delta_pct: z.number().nullable() })),
+    category_contribution: z.array(z.object({ category: z.string(), actual: z.number(), expected: z.number(), delta: z.number(), contribution_pct: z.number() })),
+    category_priority: z.array(z.object({ category: z.string(), actual: z.number(), expected: z.number(), delta: z.number(), delta_pct: z.number().nullable(), priority: z.enum(['high', 'medium', 'low']) })),
+    alert_examples: z.array(z.object({ text: z.string(), category: z.string(), reason: z.string(), priority: z.enum(['high', 'medium', 'low']), score: z.number().nullable() })),
+  }),
+  summary: z.object({ headline: z.string(), bullets: z.array(z.string()), recommended_actions: z.array(z.string()) }),
+  definitions: z.record(z.string()),
+  export: z.object({ markdown: z.string(), html: z.string() }),
 })
 
 export type OverviewResponse = z.infer<typeof overviewSchema>
+export type ExecutiveReportResponse = z.infer<typeof executiveReportSchema>
+export type ExecutiveKpis = ExecutiveReportResponse['kpis']
+export type ActualExpectedPoint = ExecutiveReportResponse['charts']['actual_expected'][number]
+export type ContributionRow = ExecutiveReportResponse['charts']['category_contribution'][number]
+export type CategoryPriorityRow = ExecutiveReportResponse['charts']['category_priority'][number]
+export type AlertExampleCard = ExecutiveReportResponse['charts']['alert_examples'][number]
+export type SummaryBlock = ExecutiveReportResponse['summary']
