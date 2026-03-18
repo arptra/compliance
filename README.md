@@ -1386,3 +1386,24 @@ High-level расчет (диапазон `0..1`):
 5. **100% shares**: меняется ли структура проблем (не только объем).
 
 Такой порядок позволяет быстро перейти от “есть проблема” к “где именно и что делать в первую очередь”.
+
+
+## Preparation flow (upload + GigaChat prepare)
+
+Добавлена новая вкладка `/preparation` для интерактивной подготовки нового Excel:
+
+1. Загрузить файл (`POST /api/preparation/upload`)
+2. Запустить разметку (`POST /api/preparation/{upload_id}/run`)
+3. Дождаться статуса `succeeded`
+4. Открыть Pattern Monitor по готовому файлу (`POST /api/preparation/jobs/{upload_id}/open-pattern-monitor`)
+
+Что делает backend после `run`:
+- прогоняет загруженный файл через существующий `prepare_dataset` (GigaChat/LLM flow не переписан),
+- сохраняет per-job артефакты в `.../preparation_jobs/<upload_id>/`,
+- добавляет `source_upload_id` и метаданные происхождения строк,
+- безопасно merge-ит результат в основной `prepare.output_parquet`:
+  - перед append удаляет старые строки этого же `source_upload_id`.
+
+Пока job в `uploaded|queued|running`, file-scoped Pattern Monitor блокируется с причиной `preparation_not_finished`.
+После `succeeded` UI автоматически может открыть `/pattern-monitor` с preset-фильтрами `uploadId` и `date range`.
+

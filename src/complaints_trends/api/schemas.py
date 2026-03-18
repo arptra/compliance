@@ -133,6 +133,9 @@ class PatternMonitorSummaryPayload(BaseModel):
 class PatternMonitorSummaryResponse(BaseModel):
     tag: str
     summary: PatternMonitorSummaryPayload
+    allowed: bool = True
+    reason: str | None = None
+    upload_id: str | None = None
 
 
 class AlertRowResponse(BaseModel):
@@ -260,6 +263,66 @@ class ExecutiveReportResponse(BaseModel):
     summary: SummaryBlock
     definitions: dict[str, str]
     export: ExecutiveExport
+
+
+class PreparationJobSummary(BaseModel):
+    upload_id: str
+    original_filename: str
+    stored_path: str
+    uploaded_at: datetime
+    status: Literal["uploaded", "queued", "running", "succeeded", "failed"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    rows_total: int = 0
+    prepared_rows: int = 0
+    complaints_rows: int = 0
+    date_min: str | None = None
+    date_max: str | None = None
+    output_prepared_parquet: str | None = None
+    merged_into_main: bool = False
+    available_for_pattern_monitor: bool = False
+
+
+class PreparationUploadResponse(BaseModel):
+    upload_id: str
+    filename: str
+    uploaded_at: datetime
+    status: str
+
+
+class PreparationRunResponse(BaseModel):
+    upload_id: str
+    status: str
+    error_message: str | None = None
+
+
+class PreparationJobsResponse(BaseModel):
+    jobs: list[PreparationJobSummary]
+
+
+class PreparationPreviewResponse(BaseModel):
+    upload_id: str
+    filename: str
+    status: str
+    rows_total: int = 0
+    date_min: str | None = None
+    date_max: str | None = None
+    available_columns: list[str] = Field(default_factory=list)
+
+
+class PatternMonitorPresetPayload(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    upload_id: str
+    label_source: str = "llm"
+    source_filename: str | None = None
+
+
+class PatternMonitorPresetResponse(BaseModel):
+    allowed: bool
+    reason: str | None = None
+    pattern_monitor_preset: PatternMonitorPresetPayload | None = None
 
 
 class RunRequest(BaseModel):

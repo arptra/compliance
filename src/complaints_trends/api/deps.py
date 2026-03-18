@@ -11,6 +11,7 @@ from .services.overview_service import OverviewService
 from .services.pattern_fit_service import PatternFitService
 from .services.pattern_monitor_service import PatternMonitorService
 from .services.report_service import ReportService
+from .services.preparation_service import PreparationService
 from .services.run_service import RunService
 
 
@@ -33,6 +34,7 @@ def get_services(config_path: str) -> dict:
         "pattern_fit": PatternFitService(loader),
         "pattern_monitor": monitor,
         "report": ReportService(overview, monitor, loader),
+        "preparation": PreparationService(cfg),
         "run": RunService(cfg),
     }
 
