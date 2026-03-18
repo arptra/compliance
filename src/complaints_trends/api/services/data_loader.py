@@ -70,7 +70,24 @@ class DataLoader:
     def read_parquet(self, path: Path, columns: list[str] | None = None) -> pd.DataFrame:
         projection = tuple(columns or ())
         cache_key = f"parquet::{path}::{','.join(projection)}"
-        loader = (lambda p: pd.read_parquet(p, columns=list(projection))) if projection else pd.read_parquet
+        if projection:
+            requested = list(projection)
+
+            def loader(p: Path) -> pd.DataFrame:
+                try:
+                    return pd.read_parquet(p, columns=requested)
+                except Exception:
+                    available = set(pq.ParquetFile(p).schema.names)
+                    present = [c for c in requested if c in available]
+                    if not present:
+                        return pd.DataFrame(columns=requested)
+                    out = pd.read_parquet(p, columns=present)
+                    for c in requested:
+                        if c not in out.columns:
+                            out[c] = pd.NA
+                    return out[requested]
+        else:
+            loader = pd.read_parquet
         df = self._load_cached(path, cache_key, loader)
         if df is None:
             return pd.DataFrame()
