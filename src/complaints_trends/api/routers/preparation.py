@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from ..deps import get_service_container
 from ..schemas import (
@@ -22,14 +22,21 @@ async def upload(file: UploadFile = File(...), services=Depends(get_service_cont
 
 @router.post("/{upload_id}/run", response_model=PreparationRunResponse)
 def run(upload_id: str, services=Depends(get_service_container)):
-    return services["preparation"].run_preparation_job(upload_id)
+    resp = services["preparation"].run_preparation_job(upload_id)
+    if resp.status == "failed":
+        code = 404 if resp.error_message == "upload_not_found" else 400
+        raise HTTPException(status_code=code, detail=resp.error_message or "preparation_failed")
+    return resp
 
 
 @router.post("/upload-and-run", response_model=PreparationRunResponse)
 async def upload_and_run(file: UploadFile = File(...), services=Depends(get_service_container)):
     content = await file.read()
     created = services["preparation"].create_upload_job(file.filename or "upload.xlsx", content)
-    return services["preparation"].run_preparation_job(created.upload_id)
+    resp = services["preparation"].run_preparation_job(created.upload_id)
+    if resp.status == "failed":
+        raise HTTPException(status_code=400, detail=resp.error_message or "preparation_failed")
+    return resp
 
 
 @router.get("/jobs", response_model=PreparationJobsResponse)

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiGet, apiPost } from '../lib/api'
+import { apiGet, apiPost, apiPostForm } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
 
 type Job = {
@@ -45,9 +45,7 @@ export default function PreparationPage() {
       if (!file) throw new Error('Выберите файл')
       const form = new FormData()
       form.append('file', file)
-      const r = await fetch('/api/preparation/upload', { method: 'POST', body: form })
-      if (!r.ok) throw new Error(await r.text())
-      return (await r.json()) as UploadResp
+      return apiPostForm<UploadResp>('/api/preparation/upload', form)
     },
     onSuccess: async (d) => {
       setSelectedId(d.upload_id)
@@ -60,9 +58,11 @@ export default function PreparationPage() {
       if (!file) throw new Error('Выберите файл')
       const form = new FormData()
       form.append('file', file)
-      const r = await fetch('/api/preparation/upload-and-run', { method: 'POST', body: form })
-      if (!r.ok) throw new Error(await r.text())
-      return (await r.json()) as RunResp
+      const run = await apiPostForm<RunResp>('/api/preparation/upload-and-run', form)
+      if (run.status !== 'succeeded') {
+        throw new Error(run.error_message || `Разметка не завершена (status=${run.status})`)
+      }
+      return run
     },
     onSuccess: async (d) => {
       setSelectedId(d.upload_id)
@@ -71,7 +71,13 @@ export default function PreparationPage() {
   })
 
   const run = useMutation({
-    mutationFn: (upload_id: string) => apiPost<RunResp>(`/api/preparation/${encodeURIComponent(upload_id)}/run`, {}),
+    mutationFn: async (upload_id: string) => {
+      const resp = await apiPost<RunResp>(`/api/preparation/${encodeURIComponent(upload_id)}/run`, {})
+      if (resp.status !== 'succeeded') {
+        throw new Error(resp.error_message || `Разметка не завершена (status=${resp.status})`)
+      }
+      return resp
+    },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['prep-jobs'] })
     },
