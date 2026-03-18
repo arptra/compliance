@@ -55,6 +55,21 @@ export default function PreparationPage() {
     },
   })
 
+  const uploadAndRun = useMutation({
+    mutationFn: async () => {
+      if (!file) throw new Error('Выберите файл')
+      const form = new FormData()
+      form.append('file', file)
+      const r = await fetch('/api/preparation/upload-and-run', { method: 'POST', body: form })
+      if (!r.ok) throw new Error(await r.text())
+      return (await r.json()) as RunResp
+    },
+    onSuccess: async (d) => {
+      setSelectedId(d.upload_id)
+      await qc.invalidateQueries({ queryKey: ['prep-jobs'] })
+    },
+  })
+
   const run = useMutation({
     mutationFn: (upload_id: string) => apiPost<RunResp>(`/api/preparation/${encodeURIComponent(upload_id)}/run`, {}),
     onSuccess: async () => {
@@ -85,8 +100,12 @@ export default function PreparationPage() {
       <div className='filters'>
         <input type='file' accept='.xlsx,.xls,.csv' onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         <button onClick={() => upload.mutate()} disabled={!file || upload.isPending}>Загрузить файл</button>
+        <button onClick={() => uploadAndRun.mutate()} disabled={!file || uploadAndRun.isPending}>
+          {uploadAndRun.isPending ? 'Разметка...' : 'Разметить файл'}
+        </button>
       </div>
       {upload.error && <div>Ошибка upload: {(upload.error as Error).message}</div>}
+      {uploadAndRun.error && <div>Ошибка upload/run: {(uploadAndRun.error as Error).message}</div>}
     </div>
 
     <div className='card' style={{ marginTop: 12 }}>

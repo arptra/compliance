@@ -106,6 +106,14 @@ class PreparationService:
             cfg2 = self.cfg.model_copy(deep=True)
             cfg2.input.input_dir = str(source_path.parent)
             cfg2.input.file_names = [source_path.name]
+            cfg2.input.file_glob = source_path.name
+            suffix = source_path.suffix.lower()
+            if suffix == ".csv":
+                cfg2.input.file_format = "csv"
+            elif suffix in {".xlsx", ".xls"}:
+                cfg2.input.file_format = "excel"
+            else:
+                cfg2.input.file_format = "auto"
             cfg2.prepare.output_parquet = str(prepared_path)
 
             df = prepare_dataset(cfg2, pilot=False, llm_mock=not cfg2.llm.enabled)
