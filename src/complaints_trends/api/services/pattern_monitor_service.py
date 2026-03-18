@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
-from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryResponse
+from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 from .data_loader import DataLoader
 
 
@@ -33,7 +33,6 @@ class PatternMonitorService:
                 out = out[out[score_col] >= float(params["min_score"])]
         return out
 
-
     @staticmethod
     def _series(df: pd.DataFrame, col: str, default: str = "") -> pd.Series:
         if col in df.columns:
@@ -48,21 +47,145 @@ class PatternMonitorService:
             return df["is_alert"] == True
         return pd.Series([False] * len(df), index=df.index)
 
+    @staticmethod
+    def _clamp01(value: float | None) -> float | None:
+        if value is None or pd.isna(value):
+            return None
+        return float(max(0.0, min(1.0, float(value))))
+
+    @staticmethod
+    def _safe_last_state(state: pd.DataFrame) -> tuple[float | None, float | None]:
+        if state.empty:
+            return None, None
+        out = state.copy()
+        if "date" in out.columns:
+            out = out.sort_values("date")
+        last = out.iloc[-1]
+        smoothed = None
+        overall = None
+        for c in ("smoothed_state", "smoothed", "state"):
+            if c in out.columns and not pd.isna(last.get(c)):
+                smoothed = float(last.get(c))
+                break
+        for c in ("overall_pressure", "pressure", "state"):
+            if c in out.columns and not pd.isna(last.get(c)):
+                overall = float(last.get(c))
+                break
+        return PatternMonitorService._clamp01(smoothed), PatternMonitorService._clamp01(overall)
+
+    def _compute_alert_component(self, scored: pd.DataFrame) -> tuple[float | None, int, int]:
+        if scored.empty:
+            return None, 0, 0
+        total_rows = int(len(scored))
+        alert_rows = int(self._alert_mask(scored).sum())
+        return self._clamp01(alert_rows / max(total_rows, 1)), alert_rows, total_rows
+
+    def _compute_pressure_component(self, pressure: pd.DataFrame, period_days: int) -> tuple[float | None, int]:
+        if pressure.empty:
+            return None, 0
+        out = pressure.copy()
+        if "date" in out.columns:
+            out["date"] = pd.to_datetime(out["date"], errors="coerce")
+            out = out[out["date"].notna()]
+        if out.empty:
+            return None, 0
+
+        metric_col = next((c for c in ("pressure_score", "pressure", "overall_pressure", "severity") if c in out.columns), None)
+        if metric_col is not None:
+            pressure_days = int(out.loc[pd.to_numeric(out[metric_col], errors="coerce").fillna(0.0) > 0, "date"].nunique()) if "date" in out.columns else int((pd.to_numeric(out[metric_col], errors="coerce").fillna(0.0) > 0).sum())
+        else:
+            pressure_days = int(out["date"].nunique()) if "date" in out.columns else int(len(out))
+        component = self._clamp01(pressure_days / max(period_days, 1))
+        return component, pressure_days
+
+    @staticmethod
+    def _risk_label(score: float | None) -> tuple[str, str, str]:
+        if score is None:
+            return "unavailable", "Недоступно", "neutral"
+        if score < 0.30:
+            return "low", "Низкий", "success"
+        if score < 0.60:
+            return "medium", "Средний", "warning"
+        return "high", "Высокий", "danger"
+
+    def _compute_pattern_risk(self, state_component: float | None, alert_component: float | None, pressure_component: float | None) -> tuple[float | None, str]:
+        if state_component is not None and alert_component is not None and pressure_component is not None:
+            score = 0.60 * state_component + 0.25 * alert_component + 0.15 * pressure_component
+            return self._clamp01(score), "full"
+        if state_component is not None:
+            return self._clamp01(state_component), "state_only"
+
+        components = []
+        weights = []
+        if alert_component is not None:
+            components.append(alert_component)
+            weights.append(0.25)
+        if pressure_component is not None:
+            components.append(pressure_component)
+            weights.append(0.15)
+        if components and weights:
+            total_weight = sum(weights)
+            weighted = sum(c * w for c, w in zip(components, weights)) / total_weight
+            return self._clamp01(weighted), "alerts_only"
+        return None, "unavailable"
+
+    @staticmethod
+    def _period_days(params: dict, scored: pd.DataFrame, pressure: pd.DataFrame, state: pd.DataFrame) -> int:
+        d_from = pd.to_datetime(params.get("date_from"), errors="coerce") if params.get("date_from") else None
+        d_to = pd.to_datetime(params.get("date_to"), errors="coerce") if params.get("date_to") else None
+        if d_from is not None and d_to is not None and not pd.isna(d_from) and not pd.isna(d_to):
+            return max((d_to.normalize() - d_from.normalize()).days + 1, 1)
+
+        dates = set()
+        for df in (scored, pressure, state):
+            if not df.empty and "date" in df.columns:
+                vals = pd.to_datetime(df["date"], errors="coerce").dropna()
+                dates.update(v.date().isoformat() for v in vals)
+        return max(len(dates), 1)
+
     def summary(self, tag: str, params: dict) -> PatternMonitorSummaryResponse:
         resolved = self._resolved_tag(tag)
-        with ThreadPoolExecutor(max_workers=2) as ex:
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
             f_scored = ex.submit(self.loader.load_pattern_monitor_scored, resolved)
             f_pressure = ex.submit(self.loader.load_pattern_monitor_pressure, resolved)
-            scored = self._filter(f_scored.result(), params)
-            pressure = self._filter(f_pressure.result(), params)
-        alert_rows = int(self._alert_mask(scored).sum()) if not scored.empty else 0
+            f_state = ex.submit(self.loader.load_pattern_monitor_state, resolved)
+            try:
+                scored = self._filter(f_scored.result(), params)
+            except Exception:
+                scored = pd.DataFrame()
+            try:
+                pressure = self._filter(f_pressure.result(), params)
+            except Exception:
+                pressure = pd.DataFrame()
+            try:
+                state = self._filter(f_state.result(), params)
+            except Exception:
+                state = pd.DataFrame()
+
+        state_smoothed, state_overall = self._safe_last_state(state)
+        state_component = state_smoothed if state_smoothed is not None else state_overall
+        alert_component, alert_rows, scored_rows = self._compute_alert_component(scored)
+        period_days = self._period_days(params, scored, pressure, state)
+        pressure_component, pressure_days = self._compute_pressure_component(pressure, period_days)
+
+        risk_score, calc_mode = self._compute_pattern_risk(state_component, alert_component, pressure_component)
+        risk_label, display_label, risk_status = self._risk_label(risk_score)
+
         return PatternMonitorSummaryResponse(
             tag=resolved,
-            summary={
-                "scored_rows": int(len(scored)),
-                "alert_rows": alert_rows,
-                "pressure_days": int(len(pressure)),
-            },
+            summary=PatternMonitorSummaryPayload(
+                scored_rows=int(scored_rows),
+                alert_rows=int(alert_rows),
+                pressure_days=int(pressure_days),
+                latest_overall_pressure=state_overall,
+                latest_smoothed_state=state_smoothed,
+                pattern_risk_score=risk_score,
+                pattern_risk_label=risk_label,
+                pattern_risk_display_label=display_label,
+                pattern_risk_status=risk_status,
+                pattern_risk_calc_mode=calc_mode,
+            ),
         )
 
     def alerts(self, tag: str, params: dict) -> AlertRowResponse:

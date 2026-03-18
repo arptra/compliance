@@ -117,9 +117,25 @@ class ClusterProfileResponse(BaseModel):
     clusters: list[dict[str, Any]]
 
 
+class PatternMonitorSummaryPayload(BaseModel):
+    scored_rows: int = 0
+    alert_rows: int = 0
+    pressure_days: int = 0
+    latest_overall_pressure: float | None = None
+    latest_smoothed_state: float | None = None
+    pattern_risk_score: float | None = None
+    pattern_risk_label: Literal["low", "medium", "high", "unavailable"] = "unavailable"
+    pattern_risk_display_label: str = "Недоступно"
+    pattern_risk_status: Literal["success", "warning", "danger", "neutral"] = "neutral"
+    pattern_risk_calc_mode: Literal["full", "state_only", "alerts_only", "unavailable"] = "unavailable"
+
+
 class PatternMonitorSummaryResponse(BaseModel):
     tag: str
-    summary: dict[str, Any]
+    summary: PatternMonitorSummaryPayload
+    allowed: bool = True
+    reason: str | None = None
+    upload_id: str | None = None
 
 
 class AlertRowResponse(BaseModel):
@@ -147,6 +163,166 @@ class ReportResponse(BaseModel):
     examples: list[dict[str, Any]] = Field(default_factory=list)
     markdown: str | None = None
     html: str | None = None
+
+
+class ExecutiveReportRequest(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    compare_mode: Literal["previous_period", "same_weekday", "seasonal", "custom_range"] = "previous_period"
+    baseline_date_from: str | None = None
+    baseline_date_to: str | None = None
+    categories: list[str] | None = None
+    include_examples: bool = True
+    include_ownership: bool = True
+    pattern_tag: str = "latest"
+
+
+class PatternRisk(BaseModel):
+    score: float | None = None
+    label: Literal["low", "medium", "high", "unavailable"] = "unavailable"
+    display_label: str = "Недоступно"
+    status: Literal["success", "warning", "danger", "neutral"] = "neutral"
+    calc_mode: Literal["full", "state_only", "alerts_only", "unavailable"] = "unavailable"
+
+
+class PrimaryArea(BaseModel):
+    label: str
+    confidence_note: str
+
+
+class ExecutiveKpis(BaseModel):
+    total_complaints: int
+    expected_complaints: int
+    delta_abs: int
+    delta_pct: float | None = None
+    categories_above_baseline: int
+    top_growth_category: str | None = None
+    pattern_risk: PatternRisk
+    pattern_risk_score: float | None = None
+    pattern_risk_label: str = "unavailable"
+    pattern_risk_display_label: str = "Недоступно"
+    pattern_risk_status: str = "neutral"
+    primary_area: PrimaryArea | None = None
+
+
+class ActualExpectedPoint(BaseModel):
+    date: str
+    actual: float
+    expected: float
+    delta: float
+    delta_pct: float | None = None
+
+
+class ContributionRow(BaseModel):
+    category: str
+    actual: float
+    expected: float
+    delta: float
+    contribution_pct: float
+
+
+class CategoryPriorityRow(BaseModel):
+    category: str
+    actual: float
+    expected: float
+    delta: float
+    delta_pct: float | None = None
+    priority: Literal["high", "medium", "low"]
+
+
+class AlertExampleCard(BaseModel):
+    text: str
+    category: str
+    reason: str
+    priority: Literal["high", "medium", "low"]
+    score: float | None = None
+
+
+class SummaryBlock(BaseModel):
+    headline: str
+    bullets: list[str]
+    recommended_actions: list[str]
+
+
+class ExecutiveCharts(BaseModel):
+    actual_expected: list[ActualExpectedPoint]
+    category_contribution: list[ContributionRow]
+    category_priority: list[CategoryPriorityRow]
+    alert_examples: list[AlertExampleCard]
+
+
+class ExecutiveExport(BaseModel):
+    markdown: str
+    html: str
+
+
+class ExecutiveReportResponse(BaseModel):
+    meta: dict[str, Any]
+    kpis: ExecutiveKpis
+    charts: ExecutiveCharts
+    summary: SummaryBlock
+    definitions: dict[str, str]
+    export: ExecutiveExport
+
+
+class PreparationJobSummary(BaseModel):
+    upload_id: str
+    original_filename: str
+    stored_path: str
+    uploaded_at: datetime
+    status: Literal["uploaded", "queued", "running", "succeeded", "failed"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    rows_total: int = 0
+    prepared_rows: int = 0
+    complaints_rows: int = 0
+    date_min: str | None = None
+    date_max: str | None = None
+    output_prepared_parquet: str | None = None
+    merged_into_main: bool = False
+    available_for_pattern_monitor: bool = False
+
+
+class PreparationUploadResponse(BaseModel):
+    upload_id: str
+    filename: str
+    uploaded_at: datetime
+    status: str
+
+
+class PreparationRunResponse(BaseModel):
+    upload_id: str
+    status: str
+    error_message: str | None = None
+
+
+class PreparationJobsResponse(BaseModel):
+    jobs: list[PreparationJobSummary]
+
+
+class PreparationPreviewResponse(BaseModel):
+    upload_id: str
+    filename: str
+    status: str
+    rows_total: int = 0
+    date_min: str | None = None
+    date_max: str | None = None
+    available_columns: list[str] = Field(default_factory=list)
+
+
+class PatternMonitorPresetPayload(BaseModel):
+    date_from: str | None = None
+    date_to: str | None = None
+    upload_id: str
+    label_source: str = "llm"
+    source_filename: str | None = None
+
+
+class PatternMonitorPresetResponse(BaseModel):
+    allowed: bool
+    reason: str | None = None
+    pattern_monitor_preset: PatternMonitorPresetPayload | None = None
 
 
 class RunRequest(BaseModel):

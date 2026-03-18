@@ -29,3 +29,4 @@ def test_timeseries_overall_expected_delta(tmp_path: Path):
     body = r.json()
     assert len(body['actual']) > 0
     assert len(body['delta']) > 0
+    assert any((r.get('value', 0) or 0) > 0 for r in body['expected'])

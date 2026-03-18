@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
 import { useShallow } from 'zustand/react/shallow'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 type TagsResp = { pattern_fit_tags: string[]; pattern_monitor_tags: string[] }
-type SummaryResp = { tag: string; summary: Record<string, number> }
-type RowsResp = { rows: Array<Record<string, unknown>>; tag?: string }
+type SummaryResp = { tag: string; allowed?: boolean; reason?: string | null; upload_id?: string | null; summary: Record<string, number | string | null> }
+type RowsResp = { rows: Array<Record<string, unknown>>; tag?: string; allowed?: boolean; reason?: string | null }
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 
 export default function PatternMonitorPage() {
@@ -19,6 +20,14 @@ export default function PatternMonitorPage() {
   })))
   const qc = useQueryClient()
   const [dialogPreview, setDialogPreview] = useState<string | null>(null)
+  const [sp, setSp] = useSearchParams()
+  const navigate = useNavigate()
+
+  const uploadId = sp.get('uploadId') || undefined
+  const sourceFilename = sp.get('sourceFilename') || undefined
+  const autoDateFrom = sp.get('autoDateFrom') || undefined
+  const autoDateTo = sp.get('autoDateTo') || undefined
+
   const patternTag = f.pattern_tag || 'latest'
 
   const tagsQ = useQuery({ queryKey: ['meta-tags'], queryFn: () => apiGet<TagsResp>('/api/meta/tags') })
@@ -26,22 +35,23 @@ export default function PatternMonitorPage() {
   const qs = useMemo(() => {
     const q = new URLSearchParams()
     q.set('pattern_tag', patternTag)
-    if (f.date_from) q.set('date_from', f.date_from)
-    if (f.date_to) q.set('date_to', f.date_to)
+    q.set('date_from', f.date_from || autoDateFrom || '')
+    q.set('date_to', f.date_to || autoDateTo || '')
+    if (uploadId) q.set('upload_id', uploadId)
     for (const c of f.categories) q.append('category', c)
     return q.toString()
-  }, [patternTag, f.date_from, f.date_to, f.categories])
+  }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo])
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(`/api/pattern-monitor/summary?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
-  const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false })
-  const examplesQ = useQuery({ queryKey: ['pm-examples', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/examples?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false })
+  const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
+  const examplesQ = useQuery({ queryKey: ['pm-examples', qs], queryFn: () => apiGet<RowsResp>(`/api/pattern-monitor/examples?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
 
   const runMonitor = useMutation({
     mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', {
       params: {
         tag: patternTag,
-        date_from: f.date_from,
-        date_to: f.date_to,
+        date_from: f.date_from || autoDateFrom,
+        date_to: f.date_to || autoDateTo,
         fit_tag: patternTag,
       },
     }),
@@ -53,7 +63,22 @@ export default function PatternMonitorPage() {
     },
   })
 
+  const clearUploadFilter = () => {
+    const next = new URLSearchParams(sp)
+    next.delete('uploadId')
+    next.delete('sourceFilename')
+    next.delete('autoDateFrom')
+    next.delete('autoDateTo')
+    setSp(next)
+    navigate(`/pattern-monitor${next.toString() ? `?${next.toString()}` : ''}`)
+  }
+
   return <div>
+    {uploadId && <div className='card' style={{ marginBottom: 12 }}>
+      <b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.
+      <div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div>
+    </div>}
+
     <div className='card'>
       <h3>Pattern Monitor: модель и период</h3>
       <div className='filters'>
@@ -67,52 +92,63 @@ export default function PatternMonitorPage() {
       {runMonitor.data && <p>Run status: <b>{runMonitor.data.status}</b> {runMonitor.data.error ? `(${runMonitor.data.error})` : ''}</p>}
     </div>
 
-    <div className='card' style={{ marginTop: 12 }}>
-      <h3>Сводка</h3>
-      {summaryQ.isLoading && <div>Загрузка...</div>}
-      {summaryQ.error && <div>Ошибка: {(summaryQ.error as Error).message}</div>}
-      {!!summaryQ.data && <ul>
-        <li>Tag: {summaryQ.data.tag}</li>
-        <li>Scored rows: {summaryQ.data.summary.scored_rows ?? 0}</li>
-        <li>Alert rows: {summaryQ.data.summary.alert_rows ?? 0}</li>
-      </ul>}
-    </div>
+    {summaryQ.data?.allowed === false ? (
+      <div className='card' style={{ marginTop: 12 }}>
+        <h3>Pattern Monitor</h3>
+        <p>Файл ещё размечается. Анализ станет доступен после завершения подготовки.</p>
+        <p style={{ color: '#64748b' }}>Причина: {summaryQ.data.reason ?? 'preparation_not_finished'}</p>
+      </div>
+    ) : (
+      <>
+        <div className='card' style={{ marginTop: 12 }}>
+          <h3>Сводка</h3>
+          {summaryQ.isLoading && <div>Загрузка...</div>}
+          {summaryQ.error && <div>Ошибка: {(summaryQ.error as Error).message}</div>}
+          {!!summaryQ.data && <ul>
+            <li>Tag: {summaryQ.data.tag}</li>
+            <li>Scored rows: {Number(summaryQ.data.summary.scored_rows ?? 0)}</li>
+            <li>Alert rows: {Number(summaryQ.data.summary.alert_rows ?? 0)}</li>
+            <li>Pattern risk: {String(summaryQ.data.summary.pattern_risk_display_label ?? 'Недоступно')} ({summaryQ.data.summary.pattern_risk_score ?? 'n/a'})</li>
+          </ul>}
+        </div>
 
-    <div className='card' style={{ marginTop: 12 }}>
-      <h3>Найденные аномальные жалобы за выбранный период</h3>
-      <p style={{ marginTop: 0, color: '#475569' }}>Период берётся из глобальных фильтров даты. Это аналог листа <b>alert_examples</b> из Excel-выгрузки.</p>
-      {examplesQ.isLoading && <div>Загрузка...</div>}
-      {examplesQ.error && <div>Ошибка: {(examplesQ.error as Error).message}</div>}
-      {!examplesQ.isLoading && <table className='table'>
-        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Score</th><th>row_dialog</th></tr></thead>
-        <tbody>
-          {(examplesQ.data?.rows ?? []).map((r, i) => {
-            const dialog = String(r.row_dialog ?? '')
-            const preview = dialog.length > 160 ? `${dialog.slice(0, 160)}…` : dialog
-            return (
-              <tr key={i}>
-                <td>{i + 1}</td>
-                <td>{String(r.date ?? '')}</td>
-                <td>{String(r.category ?? 'UNKNOWN')}</td>
-                <td>{String(r.subcategory ?? 'UNKNOWN')}</td>
-                <td>{String(r.score ?? '')}</td>
-                <td>
-                  <button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>
-                    {preview || '—'}
-                  </button>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>}
-    </div>
+        <div className='card' style={{ marginTop: 12 }}>
+          <h3>Найденные аномальные жалобы за выбранный период</h3>
+          <p style={{ marginTop: 0, color: '#475569' }}>Период берётся из глобальных фильтров даты. Это аналог листа <b>alert_examples</b> из Excel-выгрузки.</p>
+          {examplesQ.isLoading && <div>Загрузка...</div>}
+          {examplesQ.error && <div>Ошибка: {(examplesQ.error as Error).message}</div>}
+          {!examplesQ.isLoading && <table className='table'>
+            <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Score</th><th>row_dialog</th></tr></thead>
+            <tbody>
+              {(examplesQ.data?.rows ?? []).map((r, i) => {
+                const dialog = String(r.row_dialog ?? '')
+                const preview = dialog.length > 160 ? `${dialog.slice(0, 160)}…` : dialog
+                return (
+                  <tr key={i}>
+                    <td>{i + 1}</td>
+                    <td>{String(r.date ?? '')}</td>
+                    <td>{String(r.category ?? 'UNKNOWN')}</td>
+                    <td>{String(r.subcategory ?? 'UNKNOWN')}</td>
+                    <td>{String(r.score ?? '')}</td>
+                    <td>
+                      <button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>
+                        {preview || '—'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>}
+        </div>
 
-    <div className='card' style={{ marginTop: 12 }}>
-      <h3>Alerts</h3>
-      {alertsQ.isLoading && <div>Загрузка...</div>}
-      {!alertsQ.isLoading && <div>Alerts rows: {(alertsQ.data?.rows ?? []).length}</div>}
-    </div>
+        <div className='card' style={{ marginTop: 12 }}>
+          <h3>Alerts</h3>
+          {alertsQ.isLoading && <div>Загрузка...</div>}
+          {!alertsQ.isLoading && <div>Alerts rows: {(alertsQ.data?.rows ?? []).length}</div>}
+        </div>
+      </>
+    )}
 
     {dialogPreview !== null && (
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60, zIndex: 40 }} onClick={() => setDialogPreview(null)}>

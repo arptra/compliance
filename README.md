@@ -1171,6 +1171,62 @@ npm run dev --prefix apps/dashboard
 - `/reports`
 - `/settings`
 
+
+## Executive report (/reports)
+
+Вкладка `/reports` переработана в executive dashboard для руководства с фокусом на 30–60 секунд понимания ситуации:
+
+- **Минимальные controls**: period, compare mode, custom baseline (только для `custom_range`), category scope, toggles `include examples` и `include ownership`, кнопки `Build`, `Reset`, `Download HTML`, `Download Markdown`, `Print view`.
+- **KPI cards**: total complaints, delta vs baseline, categories above baseline, top growth category, pattern risk, primary area/owner (опционально).
+- **4 ключевых блока**: `Actual vs Expected`, вклад категорий в рост, список категорий выше baseline с priority, top alert examples.
+- **Executive summary**: детерминированный блок `headline + bullets + recommended actions` от backend (без LLM).
+- **Glossary tooltips**: у ключевых терминов (baseline, expected, delta, anomaly, pattern risk, contribution, owner/area, priority и др.) доступны hover-пояснения на русском.
+
+### Новый API контракт executive report
+
+`POST /api/reports/executive`
+
+Request:
+- `date_from`, `date_to`
+- `compare_mode`: `previous_period|same_weekday|seasonal|custom_range`
+- `baseline_date_from`, `baseline_date_to` (для custom range)
+- `categories` (optional)
+- `include_examples`
+- `include_ownership`
+- `pattern_tag` (optional, default `latest`)
+
+Response:
+- `meta`
+- `kpis`
+- `charts` (`actual_expected`, `category_contribution`, `category_priority`, `alert_examples`)
+- `summary`
+- `definitions`
+- `export` (`markdown`, `html`)
+
+### Ownership mapping (optional)
+
+Если есть файл:
+- `configs/category_ownership.csv` или
+- `data/reference/category_ownership.csv`
+
+то backend рассчитывает `primary_area` (наиболее вероятный контур для первичной проверки).
+Если файла нет — блок ownership корректно скрывается, ошибок нет.
+
+### Pattern risk в executive report
+
+`Pattern risk` — это не метрика объема жалоб, а индикатор вероятности сохранения ранее выявленного нетипичного проблемного сценария.
+
+High-level расчет (диапазон `0..1`):
+- `state_component` из `overall_daily_state` (приоритет `smoothed_state`, fallback `overall_pressure`),
+- `alert_component` как доля alert-строк в `scored_rows`,
+- `pressure_component` как доля дней с pressure в `category_daily_pressure`.
+
+Итоговая формула при полном наборе данных:
+`0.60 * state + 0.25 * alerts + 0.15 * pressure`.
+
+Если доступна только часть данных, используется degraded-режим (`state_only` или `alerts_only`).
+Если pattern-monitor артефактов нет, возвращается `unavailable`.
+
 ## Interactive Dashboard: Timeseries tab and category scope filter
 
 В дашборде обновлена вкладка `/timeseries` как основной экран динамики:
@@ -1330,3 +1386,24 @@ npm run dev --prefix apps/dashboard
 5. **100% shares**: меняется ли структура проблем (не только объем).
 
 Такой порядок позволяет быстро перейти от “есть проблема” к “где именно и что делать в первую очередь”.
+
+
+## Preparation flow (upload + GigaChat prepare)
+
+Добавлена новая вкладка `/preparation` для интерактивной подготовки нового Excel:
+
+1. Загрузить файл (`POST /api/preparation/upload`)
+2. Запустить разметку (`POST /api/preparation/{upload_id}/run`)
+3. Дождаться статуса `succeeded`
+4. Открыть Pattern Monitor по готовому файлу (`POST /api/preparation/jobs/{upload_id}/open-pattern-monitor`)
+
+Что делает backend после `run`:
+- прогоняет загруженный файл через существующий `prepare_dataset` (GigaChat/LLM flow не переписан),
+- сохраняет per-job артефакты в `.../preparation_jobs/<upload_id>/`,
+- добавляет `source_upload_id` и метаданные происхождения строк,
+- безопасно merge-ит результат в основной `prepare.output_parquet`:
+  - перед append удаляет старые строки этого же `source_upload_id`.
+
+Пока job в `uploaded|queued|running`, file-scoped Pattern Monitor блокируется с причиной `preparation_not_finished`.
+После `succeeded` UI автоматически может открыть `/pattern-monitor` с preset-фильтрами `uploadId` и `date range`.
+
