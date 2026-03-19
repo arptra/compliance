@@ -81,3 +81,23 @@ def test_pattern_monitor_alerts_single_day_filter_inclusive(tmp_path: Path):
     rows = r.json()["rows"]
     assert len(rows) == 1
     assert rows[0]["category"] == "A"
+
+
+def test_pattern_monitor_alerts_handles_nat_and_nan_serialization(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": [None, "2025-01-02 10:00:00"],
+            "category": ["A", "B"],
+            "subcategory": ["SUB_A", "SUB_B"],
+            "pattern_like_score": [0.91, 0.20],
+            "is_pattern_alert": [True, True],
+            "row_dialog": ["full dialog a", "full dialog b"],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 2

@@ -48,6 +48,13 @@ class PatternMonitorService:
         return pd.Series([default] * len(df), index=df.index)
 
     @staticmethod
+    def _json_records(df: pd.DataFrame, limit: int | None = None) -> list[dict]:
+        out = df.head(limit) if limit is not None else df
+        # Normalize pandas/numpy null markers (NaN/NaT) to plain None first.
+        out = out.astype(object).where(pd.notnull(out), None)
+        return jsonable_encoder(out.to_dict(orient="records"))
+
+    @staticmethod
     def _alert_mask(df: pd.DataFrame) -> pd.Series:
         if "is_pattern_alert" in df.columns:
             return df["is_pattern_alert"] == True
@@ -222,9 +229,9 @@ class PatternMonitorService:
                 scored = scored.sort_values(sort_col, ascending=False)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
-        rows = scored.head(int(params.get("top_n", 200))).to_dict(orient="records")
+        rows = self._json_records(scored, int(params.get("top_n", 200)))
         return AlertRowResponse(
-            rows=jsonable_encoder(rows),
+            rows=rows,
             scoring_mode_requested=requested_mode,
             scoring_mode_effective=effective_mode,
             reranker_available=reranker_available,
@@ -234,12 +241,12 @@ class PatternMonitorService:
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
-        return DailyPressureResponse(rows=jsonable_encoder(data.to_dict(orient="records")))
+        return DailyPressureResponse(rows=self._json_records(data))
 
     def state(self, tag: str, params: dict) -> OverallStateResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_state(resolved), params)
-        return OverallStateResponse(rows=jsonable_encoder(data.to_dict(orient="records")))
+        return OverallStateResponse(rows=self._json_records(data))
 
     def examples(self, tag: str, params: dict) -> dict:
         resolved = self._resolved_tag(tag)
@@ -267,5 +274,5 @@ class PatternMonitorService:
 
         return {
             "tag": resolved,
-            "rows": jsonable_encoder(response.head(int(params.get("top_n", 200))).to_dict(orient="records")) if not response.empty else [],
+            "rows": self._json_records(response, int(params.get("top_n", 200))) if not response.empty else [],
         }
