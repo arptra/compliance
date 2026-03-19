@@ -29,6 +29,16 @@ def feedback_summary(pattern_tag: str | None = None, reviewer: str | None = None
     return services["feedback"].summary(locals())
 
 
+@router.post("/feedback/reset")
+def reset_feedback(row_id: str, pattern_tag: str | None = None, services=Depends(get_service_container)):
+    return services["feedback"].delete_feedback(row_id=row_id, pattern_tag=pattern_tag)
+
+
+@router.post("/feedback/reset-all")
+def reset_feedback_all(pattern_tag: str | None = None, reviewer: str | None = None, services=Depends(get_service_container)):
+    return services["feedback"].delete_feedback_for_scope(pattern_tag=pattern_tag, reviewer=reviewer)
+
+
 @router.post("/pattern-monitor/calibrator/train", response_model=CalibratorVersionResponse)
 def train_calibrator(payload: CalibratorTrainRequest, services=Depends(get_service_container)):
     params = payload.model_dump()

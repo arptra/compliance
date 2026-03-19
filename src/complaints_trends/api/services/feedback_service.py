@@ -133,3 +133,27 @@ class FeedbackService:
             "by_cluster": [],
             "by_score_bucket": [],
         }
+
+    def delete_feedback(self, row_id: str, pattern_tag: str | None = None) -> dict[str, Any]:
+        with self.db.connect() as conn:
+            if pattern_tag:
+                cur = conn.execute("DELETE FROM analyst_feedback WHERE row_id = ? AND pattern_tag = ?", (row_id, pattern_tag))
+            else:
+                cur = conn.execute("DELETE FROM analyst_feedback WHERE row_id = ?", (row_id,))
+        return {"deleted": int(cur.rowcount)}
+
+    def delete_feedback_for_scope(self, pattern_tag: str | None = None, reviewer: str | None = None) -> dict[str, Any]:
+        where = []
+        args: list[Any] = []
+        if pattern_tag:
+            where.append("pattern_tag = ?")
+            args.append(pattern_tag)
+        if reviewer:
+            where.append("reviewer = ?")
+            args.append(reviewer)
+        query = "DELETE FROM analyst_feedback"
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        with self.db.connect() as conn:
+            cur = conn.execute(query, args)
+        return {"deleted": int(cur.rowcount)}

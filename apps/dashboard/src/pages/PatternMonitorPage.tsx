@@ -66,6 +66,8 @@ export default function PatternMonitorPage() {
   })
 
   const saveFeedback = useMutation({ mutationFn: (payload: Record<string, unknown>) => apiPost('/api/feedback', payload), onSuccess: () => qc.invalidateQueries({ queryKey: ['feedback-summary'] }) })
+  const resetFeedbackOne = useMutation({ mutationFn: (payload: { row_id: string, pattern_tag: string }) => apiPost(`/api/feedback/reset?row_id=${encodeURIComponent(payload.row_id)}&pattern_tag=${encodeURIComponent(payload.pattern_tag)}`, {}), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['feedback-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
+  const resetFeedbackAll = useMutation({ mutationFn: () => apiPost(`/api/feedback/reset-all?pattern_tag=${encodeURIComponent(patternTag)}`, {}), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['feedback-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
   const trainCalibrator = useMutation({ mutationFn: () => apiPost('/api/pattern-monitor/calibrator/train', { pattern_tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, activate_if_better: true }), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
   const activateVersion = useMutation({ mutationFn: (v: string) => apiPost(`/api/pattern-monitor/calibrator/${v}/activate`, {}), onSuccess: () => { qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
 
@@ -86,6 +88,7 @@ export default function PatternMonitorPage() {
         <label><input type='checkbox' checked={reviewMode} onChange={(e) => setReviewMode(e.target.checked)} /> Review mode</label>
         <button onClick={() => runMonitor.mutate()} disabled={runMonitor.isPending}>Запустить pattern-monitor</button>
         <button onClick={() => trainCalibrator.mutate()} disabled={trainCalibrator.isPending}>Train calibrator</button>
+        {reviewMode && <button onClick={() => resetFeedbackAll.mutate()} disabled={resetFeedbackAll.isPending}>Сбросить все review</button>}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
@@ -104,7 +107,7 @@ export default function PatternMonitorPage() {
     <div className='card' style={{ marginTop: 12 }}>
       <h3>Найденные аномальные жалобы</h3>
       {!alertsQ.isLoading && <table className='table'>
-        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th></>}</tr></thead>
+        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {(alertsQ.data?.rows ?? []).map((r, i) => {
             const dialog = String(r.row_dialog ?? r.dialog_text ?? '')
@@ -114,7 +117,7 @@ export default function PatternMonitorPage() {
             return <tr key={String(r.row_id ?? i)}>
               <td>{i + 1}</td><td>{String(r.date ?? '')}</td><td>{String(r.category ?? 'UNKNOWN')}</td><td>{String(r.subcategory ?? 'UNKNOWN')}</td><td>{String(r.pattern_like_score ?? r.row_score ?? '')}</td><td>{String(r.rerank_score ?? r.calibrated_score ?? '')}</td>
               <td><button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>{preview || '—'}</button></td>
-              {reviewMode && <><td><ReviewVerdictControl value={String(r.feedback_verdict ?? '')} onChange={(v) => onVerdict(r, v, reasonValue, commentValue)} /></td><td><ReviewReasonSelect value={reasonValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), v, commentValue)} /></td><td><ReviewCommentDialog value={commentValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), reasonValue, v)} /></td></>}
+              {reviewMode && <><td><ReviewVerdictControl value={String(r.feedback_verdict ?? '')} onChange={(v) => onVerdict(r, v, reasonValue, commentValue)} /></td><td><ReviewReasonSelect value={reasonValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), v, commentValue)} /></td><td><ReviewCommentDialog value={commentValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), reasonValue, v)} /></td><td><button onClick={() => resetFeedbackOne.mutate({ row_id: String(r.row_id ?? ''), pattern_tag: patternTag })}>Сбросить</button></td></>}
             </tr>
           })}
         </tbody>

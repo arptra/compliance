@@ -35,3 +35,16 @@ def test_feedback_single_create_and_summary(tmp_path: Path):
     assert s.status_code == 200
     assert s.json()['reviewed_rows'] == 1
     assert s.json()['precision_reviewed'] == 1.0
+    reset_one = client.post('/api/feedback/reset', params={'row_id': row_id, 'pattern_tag': 'latest'})
+    assert reset_one.status_code == 200
+    assert reset_one.json()['deleted'] == 1
+
+
+def test_feedback_reset_all(tmp_path: Path):
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    alerts = client.get('/api/pattern-monitor/alerts', params={'pattern_tag': 'latest'}).json()['rows']
+    row_id = alerts[0]['row_id']
+    client.post('/api/feedback', json={'row_id': row_id, 'pattern_tag': 'latest', 'verdict': 'true', 'category': 'A'})
+    reset_all = client.post('/api/feedback/reset-all', params={'pattern_tag': 'latest'})
+    assert reset_all.status_code == 200
+    assert reset_all.json()['deleted'] == 1
