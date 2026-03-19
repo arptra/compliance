@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+from fastapi.encoders import jsonable_encoder
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 from .data_loader import DataLoader
@@ -221,17 +222,24 @@ class PatternMonitorService:
                 scored = scored.sort_values(sort_col, ascending=False)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
-        return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"), scoring_mode_requested=requested_mode, scoring_mode_effective=effective_mode, reranker_available=reranker_available, active_calibrator_version=(active_version.get("version_id") if active_version else None))
+        rows = scored.head(int(params.get("top_n", 200))).to_dict(orient="records")
+        return AlertRowResponse(
+            rows=jsonable_encoder(rows),
+            scoring_mode_requested=requested_mode,
+            scoring_mode_effective=effective_mode,
+            reranker_available=reranker_available,
+            active_calibrator_version=(active_version.get("version_id") if active_version else None),
+        )
 
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
-        return DailyPressureResponse(rows=data.to_dict(orient="records"))
+        return DailyPressureResponse(rows=jsonable_encoder(data.to_dict(orient="records")))
 
     def state(self, tag: str, params: dict) -> OverallStateResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_state(resolved), params)
-        return OverallStateResponse(rows=data.to_dict(orient="records"))
+        return OverallStateResponse(rows=jsonable_encoder(data.to_dict(orient="records")))
 
     def examples(self, tag: str, params: dict) -> dict:
         resolved = self._resolved_tag(tag)
@@ -259,5 +267,5 @@ class PatternMonitorService:
 
         return {
             "tag": resolved,
-            "rows": response.head(int(params.get("top_n", 200))).to_dict(orient="records") if not response.empty else [],
+            "rows": jsonable_encoder(response.head(int(params.get("top_n", 200))).to_dict(orient="records")) if not response.empty else [],
         }
