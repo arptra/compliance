@@ -9,8 +9,11 @@ from .data_loader import DataLoader
 
 
 class PatternMonitorService:
-    def __init__(self, loader: DataLoader) -> None:
+    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None) -> None:
         self.loader = loader
+        self.feedback_service = feedback_service
+        self.calibrator_service = calibrator_service
+        self.registry_service = registry_service
 
     def _resolved_tag(self, tag: str) -> str:
         return self.loader.resolve_tag("pattern_monitor", tag)
@@ -193,7 +196,28 @@ class PatternMonitorService:
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
         if not scored.empty:
             scored = scored[self._alert_mask(scored)]
-        return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"))
+
+        requested_mode = params.get("scoring_mode") or "base"
+        effective_mode = "base"
+        reranker_available = False
+        if self.calibrator_service is not None and not scored.empty:
+            pipeline = self.calibrator_service.scoring_pipeline()
+            scored, effective_mode, reranker_available = pipeline.score_rows(scored, requested_mode=requested_mode)
+
+        if not scored.empty:
+            if self.feedback_service is not None:
+                scored = scored.copy()
+                if "row_id" not in scored.columns:
+                    scored["row_id"] = [self.feedback_service.build_row_id(r) for r in scored.to_dict(orient="records")]
+                fb_rows = self.feedback_service.list_feedback({"pattern_tag": resolved, "limit": 100000}) if self.feedback_service else []
+                verdict_by_row = {r["row_id"]: r["verdict"] for r in fb_rows}
+                scored["feedback_verdict"] = scored["row_id"].map(verdict_by_row)
+            sort_col = "rerank_score" if effective_mode == "reranked" and "rerank_score" in scored.columns else ("calibrated_score" if effective_mode == "calibrated" and "calibrated_score" in scored.columns else ("pattern_like_score" if "pattern_like_score" in scored.columns else "row_score"))
+            if sort_col in scored.columns:
+                scored = scored.sort_values(sort_col, ascending=False)
+
+        active_version = self.registry_service.get_active() if self.registry_service else None
+        return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"), scoring_mode_requested=requested_mode, scoring_mode_effective=effective_mode, reranker_available=reranker_available, active_calibrator_version=(active_version.get("version_id") if active_version else None))
 
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
         resolved = self._resolved_tag(tag)

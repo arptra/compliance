@@ -1407,3 +1407,45 @@ High-level расчет (диапазон `0..1`):
 Пока job в `uploaded|queued|running`, file-scoped Pattern Monitor блокируется с причиной `preparation_not_finished`.
 После `succeeded` UI автоматически может открыть `/pattern-monitor` с preset-фильтрами `uploadId` и `date range`.
 
+
+## Analyst feedback loop (Pattern Monitor second layer)
+
+Pattern Monitor now keeps architecture in **three layers**:
+
+1. **Base candidate generator**: existing pattern-fit/pattern-monitor artifacts generate candidate rows.
+2. **Analyst feedback layer**: analysts can label each row as `true`, `false`, `uncertain` and optionally add reason/comment.
+3. **Optional calibrator/reranker layer**: logistic-regression model trains on analyst labels and reranks existing candidates to improve precision.
+
+### Storage
+
+Feedback and model registry are stored in a dedicated SQLite DB:
+
+- `data/interim/feedback.db` (or `<pattern_monitoring.interim_dir>/feedback.db`)
+- tables: `analyst_feedback`, `reranker_model_versions`, `review_sessions`
+
+### API overview
+
+- `POST /api/feedback`
+- `POST /api/feedback/bulk`
+- `GET /api/feedback`
+- `GET /api/feedback/summary`
+- `POST /api/pattern-monitor/calibrator/train`
+- `GET /api/pattern-monitor/calibrator/versions`
+- `POST /api/pattern-monitor/calibrator/{version_id}/activate`
+- `POST /api/pattern-monitor/calibrator/{version_id}/deactivate`
+
+Pattern monitor alerts endpoint supports scoring mode:
+
+- `GET /api/pattern-monitor/alerts?scoring_mode=base|calibrated|reranked`
+
+If no active reranker exists, API safely falls back to `base` mode and reports effective mode in response.
+
+### UI flow
+
+On `/pattern-monitor` page:
+
+- switch between scoring modes (Base / Calibrated / Reranked)
+- toggle review mode
+- label rows inline
+- view reviewed quality summary and model precision cards
+- train calibrator and activate model versions
