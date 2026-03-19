@@ -84,6 +84,24 @@ class PatternMonitorService:
         return str(value)
 
     @staticmethod
+    def _with_row_dialog(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        out = df.copy()
+        fallback_sources = ("raw_dialog", "dialog_text", "client_first_message", "text_original")
+        fallback_col = next((c for c in fallback_sources if c in out.columns), None)
+        if "row_dialog" not in out.columns and fallback_col is None:
+            out["row_dialog"] = ""
+            return out
+        if "row_dialog" not in out.columns:
+            out["row_dialog"] = out[fallback_col] if fallback_col else ""
+        else:
+            row_dialog = out["row_dialog"].fillna("").astype(str).str.strip()
+            fallback = out[fallback_col].fillna("").astype(str) if fallback_col else ""
+            out["row_dialog"] = row_dialog.where(row_dialog != "", fallback)
+        return out
+
+    @staticmethod
     def _alert_mask(df: pd.DataFrame) -> pd.Series:
         if "is_pattern_alert" in df.columns:
             return df["is_pattern_alert"] == True
@@ -256,6 +274,7 @@ class PatternMonitorService:
             sort_col = "rerank_score" if effective_mode == "reranked" and "rerank_score" in scored.columns else ("calibrated_score" if effective_mode == "calibrated" and "calibrated_score" in scored.columns else ("pattern_like_score" if "pattern_like_score" in scored.columns else "row_score"))
             if sort_col in scored.columns:
                 scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
         rows = self._json_records(scored, int(params.get("top_n", 200)))

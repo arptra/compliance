@@ -122,3 +122,25 @@ def test_pattern_monitor_alerts_handles_unknown_object_types(tmp_path: Path):
     assert r.status_code == 200
     rows = r.json()["rows"]
     assert len(rows) == 1
+
+
+def test_pattern_monitor_alerts_populates_row_dialog_from_fallback_fields(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": ["2025-01-01 15:30:00"],
+            "category": ["A"],
+            "subcategory": ["SUB_A"],
+            "pattern_like_score": [0.91],
+            "is_pattern_alert": [True],
+            "client_first_message": ["client message fallback"],
+            "row_dialog": [None],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["row_dialog"] == "client message fallback"
