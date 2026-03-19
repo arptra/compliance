@@ -25,9 +25,13 @@ class PatternMonitorService:
         if "date" in out.columns:
             out["date"] = pd.to_datetime(out["date"], errors="coerce")
             if params.get("date_from"):
-                out = out[out["date"] >= pd.to_datetime(params["date_from"])]
+                out = out[out["date"] >= pd.to_datetime(params["date_from"], errors="coerce")]
             if params.get("date_to"):
-                out = out[out["date"] <= pd.to_datetime(params["date_to"])]
+                date_to = pd.to_datetime(params["date_to"], errors="coerce")
+                # If UI sends plain date (YYYY-MM-DD), make the upper bound inclusive for the full day.
+                if pd.notna(date_to) and "T" not in str(params["date_to"]) and " " not in str(params["date_to"]):
+                    date_to = date_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                out = out[out["date"] <= date_to]
         if params.get("category") and "category" in out.columns:
             out = out[out["category"].isin(params["category"])]
         if params.get("min_score") is not None:
