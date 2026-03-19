@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, time
 
+import numpy as np
 import pandas as pd
-from fastapi.encoders import jsonable_encoder
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 from .data_loader import DataLoader
@@ -50,9 +51,37 @@ class PatternMonitorService:
     @staticmethod
     def _json_records(df: pd.DataFrame, limit: int | None = None) -> list[dict]:
         out = df.head(limit) if limit is not None else df
-        # Normalize pandas/numpy null markers (NaN/NaT) to plain None first.
-        out = out.astype(object).where(pd.notnull(out), None)
-        return jsonable_encoder(out.to_dict(orient="records"))
+        records = out.to_dict(orient="records")
+        return [PatternMonitorService._to_json_safe(r) for r in records]
+
+    @staticmethod
+    def _to_json_safe(value):
+        if value is None:
+            return None
+        if value is pd.NaT:
+            return None
+        if isinstance(value, float) and np.isnan(value):
+            return None
+        if isinstance(value, np.generic):
+            return PatternMonitorService._to_json_safe(value.item())
+        if isinstance(value, (pd.Timestamp, datetime, date, time)):
+            return value.isoformat()
+        if isinstance(value, pd.Timedelta):
+            return str(value)
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, dict):
+            return {str(k): PatternMonitorService._to_json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [PatternMonitorService._to_json_safe(v) for v in value]
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
 
     @staticmethod
     def _alert_mask(df: pd.DataFrame) -> pd.Series:

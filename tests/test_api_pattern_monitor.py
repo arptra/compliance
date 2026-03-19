@@ -101,3 +101,24 @@ def test_pattern_monitor_alerts_handles_nat_and_nan_serialization(tmp_path: Path
     assert r.status_code == 200
     rows = r.json()["rows"]
     assert len(rows) == 2
+
+
+def test_pattern_monitor_alerts_handles_unknown_object_types(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": ["2025-01-01 15:30:00"],
+            "category": ["A"],
+            "subcategory": ["SUB_A"],
+            "pattern_like_score": [0.91],
+            "is_pattern_alert": [True],
+            "embedding": [__import__("numpy").array([0.1, 0.2])],
+            "row_dialog": ["full dialog a"],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
