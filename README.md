@@ -1449,3 +1449,45 @@ On `/pattern-monitor` page:
 - label rows inline
 - view reviewed quality summary and model precision cards
 - train calibrator and activate model versions
+
+## Docker Compose quick start (one-command VM run)
+
+You can run API + Dashboard in one command and bind an external parquet file from the host.
+
+### Files added
+
+- `docker-compose.yml`
+- `docker/Dockerfile.api`
+- `docker/Dockerfile.dashboard`
+- `scripts/docker_up_rebuild.sh`
+- `scripts/docker_down_wipe.sh`
+
+### Start / rebuild (removes old containers first)
+
+```bash
+./scripts/docker_up_rebuild.sh /absolute/or/relative/path/to/all_prepared.parquet
+```
+
+What this does:
+- resolves your host parquet path and bind-mounts it into API container
+- creates missing runtime folders (`data/interim`, `reports`, `exports`, `models`)
+- runs `docker compose up -d --build`
+
+Endpoints:
+- API: `http://localhost:8000`
+- Dashboard: `http://localhost:4173`
+
+### Stop and wipe everything
+
+```bash
+./scripts/docker_down_wipe.sh /absolute/or/relative/path/to/all_prepared.parquet
+```
+
+What this does:
+- `docker compose down --volumes --remove-orphans`
+- removes generated runtime files in `data/interim`, `reports`, `exports`, `models`
+- removes the bound parquet file path you passed
+
+### External parquet behavior
+
+The API runtime config is generated on container start and points `prepare.output_parquet` to the mounted host parquet path, so all new writes go to that host file.

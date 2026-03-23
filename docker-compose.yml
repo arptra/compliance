@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: complaints-api
+    environment:
+      CONFIG_TEMPLATE: /app/configs/project.yaml
+      PREPARE_OUTPUT_PARQUET: /data/external/all_prepared.parquet
+      INTERIM_DIR: /app/data/interim
+      REPORTS_DIR: /app/reports
+      EXPORTS_DIR: /app/exports
+      MODELS_DIR: /app/models
+      API_PORT: 8000
+    volumes:
+      - ${HOST_PARQUET_PATH:-./data/processed/all_prepared.parquet}:/data/external/all_prepared.parquet
+      - ./data/interim:/app/data/interim
+      - ./reports:/app/reports
+      - ./exports:/app/exports
+      - ./models:/app/models
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    container_name: complaints-dashboard
+    ports:
+      - "4173:4173"
+    depends_on:
+      - api
+    restart: unless-stopped
