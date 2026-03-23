@@ -1452,7 +1452,7 @@ On `/pattern-monitor` page:
 
 ## Docker Compose quick start (one-command VM run)
 
-You can run API + Dashboard in one command and bind an external parquet file from the host.
+You can run API + Dashboard in one command and bind your **entire local `data/` folder** from the host.
 
 ### Files added
 
@@ -1465,13 +1465,22 @@ You can run API + Dashboard in one command and bind an external parquet file fro
 ### Start / rebuild (removes old containers first)
 
 ```bash
-./scripts/docker_up_rebuild.sh /absolute/or/relative/path/to/all_prepared.parquet
+./scripts/docker_up_rebuild.sh /absolute/or/relative/path/to/data processed/all_prepared.parquet
 ```
 
 What this does:
-- resolves your host parquet path and bind-mounts it into API container
-- creates missing runtime folders (`data/interim`, `reports`, `exports`, `models`)
+- bind-mounts host `data/` into container `/app/data`
+- uses parquet path relative to data root (default `processed/all_prepared.parquet`)
+- creates missing runtime folders (`data`, `reports`, `exports`, `models`)
 - runs `docker compose up -d --build`
+
+Mounted local paths used by app:
+- `./data -> /app/data` (prepared parquet, interim artifacts, uploads/raw/processed)
+- `./configs -> /app/configs` (project config)
+- `./certs -> /app/certs` (TLS/mTLS certs if used)
+- `./reports -> /app/reports`
+- `./exports -> /app/exports`
+- `./models -> /app/models`
 
 Endpoints:
 - API: `http://localhost:8000`
@@ -1480,14 +1489,14 @@ Endpoints:
 ### Stop and wipe everything
 
 ```bash
-./scripts/docker_down_wipe.sh /absolute/or/relative/path/to/all_prepared.parquet
+./scripts/docker_down_wipe.sh /absolute/or/relative/path/to/data processed/all_prepared.parquet
 ```
 
 What this does:
 - `docker compose down --volumes --remove-orphans`
-- removes generated runtime files in `data/interim`, `reports`, `exports`, `models`
-- removes the bound parquet file path you passed
+- removes generated runtime files in mounted data folders (`interim`, `processed`, `raw`, `uploads`) plus `reports`, `exports`, `models`
+- removes parquet file resolved as `<data_dir>/<parquet_relative_path>`
 
 ### External parquet behavior
 
-The API runtime config is generated on container start and points `prepare.output_parquet` to the mounted host parquet path, so all new writes go to that host file.
+The API runtime config is generated on container start and points `prepare.output_parquet` to `"/app/data/<parquet_relative_path>"`, so all new writes go back to your mounted host `data/` folder.

@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PARQUET_PATH_INPUT="${1:-${HOST_PARQUET_PATH:-./data/processed/all_prepared.parquet}}"
-PARQUET_PATH="$(python - <<'PY' "$PARQUET_PATH_INPUT"
+DATA_DIR_INPUT="${1:-${HOST_DATA_DIR:-./data}}"
+PARQUET_REL="${2:-${HOST_PARQUET_REL:-processed/all_prepared.parquet}}"
+DATA_DIR="$(python - <<'PY' "$DATA_DIR_INPUT"
 import os,sys
 print(os.path.abspath(sys.argv[1]))
 PY
 )"
+PARQUET_PATH="$DATA_DIR/$PARQUET_REL"
 
-mkdir -p "$(dirname "$PARQUET_PATH")" ./data/interim ./reports ./exports ./models
+mkdir -p "$DATA_DIR" "$(dirname "$PARQUET_PATH")" ./reports ./exports ./models
 [ -f "$PARQUET_PATH" ] || touch "$PARQUET_PATH"
 
-export HOST_PARQUET_PATH="$PARQUET_PATH"
+export HOST_DATA_DIR="$DATA_DIR"
+export HOST_PARQUET_REL="$PARQUET_REL"
 
-echo "Using parquet file: $HOST_PARQUET_PATH"
+echo "Using data dir: $HOST_DATA_DIR"
+echo "Using parquet relative path: $HOST_PARQUET_REL"
+echo "Resolved parquet file: $PARQUET_PATH"
 
 docker compose down --remove-orphans || true
 docker compose up -d --build
