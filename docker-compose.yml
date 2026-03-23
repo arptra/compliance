@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.api
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-dl-cdn.alpinelinux.org}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
     container_name: complaints-api
     environment:
       CONFIG_TEMPLATE: /app/configs/project.yaml
@@ -30,7 +34,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile.dashboard
       args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-dl-cdn.alpinelinux.org}
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
     container_name: complaints-dashboard
     ports:
       - "4173:4173"

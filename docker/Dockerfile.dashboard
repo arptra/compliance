@@ -2,11 +2,16 @@ FROM node:20-alpine
 
 WORKDIR /app/apps/dashboard
 
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
 ARG VITE_API_BASE_URL=http://localhost:8000
+ARG NPM_REGISTRY=
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
+RUN sed -i "s|https://dl-cdn.alpinelinux.org|https://${ALPINE_MIRROR}|g" /etc/apk/repositories
+
 COPY apps/dashboard/package*.json ./
-RUN npm ci
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+    && npm ci
 
 COPY apps/dashboard ./
 

@@ -1500,3 +1500,22 @@ What this does:
 ### External parquet behavior
 
 The API runtime config is generated on container start and points `prepare.output_parquet` to `"/app/data/<parquet_relative_path>"`, so all new writes go back to your mounted host `data/` folder.
+
+### Custom download mirrors / registries
+
+If you need corporate mirrors, you can override build-time sources via environment variables before `docker compose up`:
+
+- `ALPINE_MIRROR` (default: `dl-cdn.alpinelinux.org`)
+- `PIP_INDEX_URL`
+- `PIP_TRUSTED_HOST`
+- `NPM_REGISTRY`
+
+Example:
+
+```bash
+export ALPINE_MIRROR=my.alpine.mirror.local
+export PIP_INDEX_URL=https://my.pypi.mirror/simple
+export PIP_TRUSTED_HOST=my.pypi.mirror
+export NPM_REGISTRY=https://my.npm.mirror/
+./scripts/docker_up_rebuild.sh ./data processed/all_prepared.parquet
+```
