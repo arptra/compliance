@@ -39,7 +39,7 @@ def summary(pattern_tag: str = "latest", date_from: str | None = None, date_to: 
 
 
 @router.get("/alerts", response_model=AlertRowResponse)
-def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, top_n: int = 200, services=Depends(get_service_container)):
+def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, scoring_mode: str = "base", top_n: int = 200, services=Depends(get_service_container)):
     params = _params(**locals())
     params, allowed, _ = _apply_upload_preset(services, params)
     if not allowed:

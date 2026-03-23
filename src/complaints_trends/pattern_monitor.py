@@ -46,15 +46,17 @@ def run_pattern_monitor(
     cfg: ProjectConfig,
     tag: str,
     label_source: str,
+    fit_tag: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     month: str | None = None,
     force_materialize: bool = False,
 ) -> tuple[Path, Path, Path]:
     pm = cfg.analysis.pattern_monitoring
-    fit_paths = PatternFitPaths(tag=tag, interim_dir=pm.interim_dir, exports_dir=pm.exports_dir, reports_dir=pm.reports_dir)
+    resolved_fit_tag = fit_tag or tag
+    fit_paths = PatternFitPaths(tag=resolved_fit_tag, interim_dir=pm.interim_dir, exports_dir=pm.exports_dir, reports_dir=pm.reports_dir)
     if not fit_paths.fit_bundle.exists():
-        raise FileNotFoundError(f"fit bundle not found: {fit_paths.fit_bundle}")
+        raise FileNotFoundError(f"fit bundle not found: {fit_paths.fit_bundle} (fit_tag={resolved_fit_tag}, tag={tag})")
     fit_bundle = joblib.load(fit_paths.fit_bundle)
 
     out = PatternMonitorPaths(tag=tag, interim_dir=pm.interim_dir, exports_dir=pm.exports_dir, reports_dir=pm.reports_dir)

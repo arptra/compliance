@@ -57,3 +57,90 @@ def test_pattern_monitor_latest_tag_resolves(tmp_path: Path):
     r = client.get("/api/pattern-monitor/summary", params={"pattern_tag": "latest"})
     assert r.status_code == 200
     assert r.json()["tag"] == "latest"
+
+
+def test_pattern_monitor_alerts_single_day_filter_inclusive(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": ["2025-01-01 15:30:00", "2025-01-02 10:00:00"],
+            "category": ["A", "B"],
+            "subcategory": ["SUB_A", "SUB_B"],
+            "pattern_like_score": [0.91, 0.20],
+            "is_pattern_alert": [True, True],
+            "row_dialog": ["full dialog a", "full dialog b"],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get(
+        "/api/pattern-monitor/alerts",
+        params={"pattern_tag": "latest", "date_from": "2025-01-01", "date_to": "2025-01-01"},
+    )
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["category"] == "A"
+
+
+def test_pattern_monitor_alerts_handles_nat_and_nan_serialization(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": [None, "2025-01-02 10:00:00"],
+            "category": ["A", "B"],
+            "subcategory": ["SUB_A", "SUB_B"],
+            "pattern_like_score": [0.91, 0.20],
+            "is_pattern_alert": [True, True],
+            "row_dialog": ["full dialog a", "full dialog b"],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 2
+
+
+def test_pattern_monitor_alerts_handles_unknown_object_types(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": ["2025-01-01 15:30:00"],
+            "category": ["A"],
+            "subcategory": ["SUB_A"],
+            "pattern_like_score": [0.91],
+            "is_pattern_alert": [True],
+            "embedding": [__import__("numpy").array([0.1, 0.2])],
+            "row_dialog": ["full dialog a"],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+
+
+def test_pattern_monitor_alerts_populates_row_dialog_from_fallback_fields(tmp_path: Path):
+    cfg = _setup(tmp_path)
+    d = tmp_path / "pattern_monitor_latest"
+    pd.DataFrame(
+        {
+            "date": ["2025-01-01 15:30:00"],
+            "category": ["A"],
+            "subcategory": ["SUB_A"],
+            "pattern_like_score": [0.91],
+            "is_pattern_alert": [True],
+            "client_first_message": ["client message fallback"],
+            "row_dialog": [None],
+        }
+    ).to_parquet(d / "scored_rows.parquet", index=False)
+    client = TestClient(create_app(str(cfg)))
+    r = client.get("/api/pattern-monitor/alerts", params={"pattern_tag": "latest"})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["row_dialog"] == "client message fallback"

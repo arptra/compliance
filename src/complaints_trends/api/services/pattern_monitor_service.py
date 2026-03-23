@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, time
 
+import numpy as np
 import pandas as pd
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
@@ -9,8 +11,11 @@ from .data_loader import DataLoader
 
 
 class PatternMonitorService:
-    def __init__(self, loader: DataLoader) -> None:
+    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None) -> None:
         self.loader = loader
+        self.feedback_service = feedback_service
+        self.calibrator_service = calibrator_service
+        self.registry_service = registry_service
 
     def _resolved_tag(self, tag: str) -> str:
         return self.loader.resolve_tag("pattern_monitor", tag)
@@ -22,9 +27,13 @@ class PatternMonitorService:
         if "date" in out.columns:
             out["date"] = pd.to_datetime(out["date"], errors="coerce")
             if params.get("date_from"):
-                out = out[out["date"] >= pd.to_datetime(params["date_from"])]
+                out = out[out["date"] >= pd.to_datetime(params["date_from"], errors="coerce")]
             if params.get("date_to"):
-                out = out[out["date"] <= pd.to_datetime(params["date_to"])]
+                date_to = pd.to_datetime(params["date_to"], errors="coerce")
+                # If UI sends plain date (YYYY-MM-DD), make the upper bound inclusive for the full day.
+                if pd.notna(date_to) and "T" not in str(params["date_to"]) and " " not in str(params["date_to"]):
+                    date_to = date_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                out = out[out["date"] <= date_to]
         if params.get("category") and "category" in out.columns:
             out = out[out["category"].isin(params["category"])]
         if params.get("min_score") is not None:
@@ -38,6 +47,59 @@ class PatternMonitorService:
         if col in df.columns:
             return df[col]
         return pd.Series([default] * len(df), index=df.index)
+
+    @staticmethod
+    def _json_records(df: pd.DataFrame, limit: int | None = None) -> list[dict]:
+        out = df.head(limit) if limit is not None else df
+        records = out.to_dict(orient="records")
+        return [PatternMonitorService._to_json_safe(r) for r in records]
+
+    @staticmethod
+    def _to_json_safe(value):
+        if value is None:
+            return None
+        if value is pd.NaT:
+            return None
+        if isinstance(value, float) and np.isnan(value):
+            return None
+        if isinstance(value, np.generic):
+            return PatternMonitorService._to_json_safe(value.item())
+        if isinstance(value, (pd.Timestamp, datetime, date, time)):
+            return value.isoformat()
+        if isinstance(value, pd.Timedelta):
+            return str(value)
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, dict):
+            return {str(k): PatternMonitorService._to_json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [PatternMonitorService._to_json_safe(v) for v in value]
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return str(value)
+
+    @staticmethod
+    def _with_row_dialog(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        out = df.copy()
+        fallback_sources = ("raw_dialog", "dialog_text", "client_first_message", "text_original")
+        fallback_col = next((c for c in fallback_sources if c in out.columns), None)
+        if "row_dialog" not in out.columns and fallback_col is None:
+            out["row_dialog"] = ""
+            return out
+        if "row_dialog" not in out.columns:
+            out["row_dialog"] = out[fallback_col] if fallback_col else ""
+        else:
+            row_dialog = out["row_dialog"].fillna("").astype(str).str.strip()
+            fallback = out[fallback_col].fillna("").astype(str) if fallback_col else ""
+            out["row_dialog"] = row_dialog.where(row_dialog != "", fallback)
+        return out
 
     @staticmethod
     def _alert_mask(df: pd.DataFrame) -> pd.Series:
@@ -193,17 +255,46 @@ class PatternMonitorService:
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
         if not scored.empty:
             scored = scored[self._alert_mask(scored)]
-        return AlertRowResponse(rows=scored.head(int(params.get("top_n", 200))).to_dict(orient="records"))
+
+        requested_mode = params.get("scoring_mode") or "base"
+        effective_mode = "base"
+        reranker_available = False
+        if self.calibrator_service is not None and not scored.empty:
+            pipeline = self.calibrator_service.scoring_pipeline()
+            scored, effective_mode, reranker_available = pipeline.score_rows(scored, requested_mode=requested_mode)
+
+        if not scored.empty:
+            if self.feedback_service is not None:
+                scored = scored.copy()
+                if "row_id" not in scored.columns:
+                    scored["row_id"] = [self.feedback_service.build_row_id(r) for r in scored.to_dict(orient="records")]
+                fb_rows = self.feedback_service.list_feedback({"pattern_tag": resolved, "limit": 100000}) if self.feedback_service else []
+                verdict_by_row = {r["row_id"]: r["verdict"] for r in fb_rows}
+                scored["feedback_verdict"] = scored["row_id"].map(verdict_by_row)
+            sort_col = "rerank_score" if effective_mode == "reranked" and "rerank_score" in scored.columns else ("calibrated_score" if effective_mode == "calibrated" and "calibrated_score" in scored.columns else ("pattern_like_score" if "pattern_like_score" in scored.columns else "row_score"))
+            if sort_col in scored.columns:
+                scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
+
+        active_version = self.registry_service.get_active() if self.registry_service else None
+        rows = self._json_records(scored, int(params.get("top_n", 200)))
+        return AlertRowResponse(
+            rows=rows,
+            scoring_mode_requested=requested_mode,
+            scoring_mode_effective=effective_mode,
+            reranker_available=reranker_available,
+            active_calibrator_version=(active_version.get("version_id") if active_version else None),
+        )
 
     def pressure(self, tag: str, params: dict) -> DailyPressureResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_pressure(resolved), params)
-        return DailyPressureResponse(rows=data.to_dict(orient="records"))
+        return DailyPressureResponse(rows=self._json_records(data))
 
     def state(self, tag: str, params: dict) -> OverallStateResponse:
         resolved = self._resolved_tag(tag)
         data = self._filter(self.loader.load_pattern_monitor_state(resolved), params)
-        return OverallStateResponse(rows=data.to_dict(orient="records"))
+        return OverallStateResponse(rows=self._json_records(data))
 
     def examples(self, tag: str, params: dict) -> dict:
         resolved = self._resolved_tag(tag)
@@ -231,5 +322,5 @@ class PatternMonitorService:
 
         return {
             "tag": resolved,
-            "rows": response.head(int(params.get("top_n", 200))).to_dict(orient="records") if not response.empty else [],
+            "rows": self._json_records(response, int(params.get("top_n", 200))) if not response.empty else [],
         }

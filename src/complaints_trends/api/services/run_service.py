@@ -57,6 +57,7 @@ class RunService:
                 self.cfg,
                 tag=p.get("tag", "latest"),
                 label_source=p.get("label_source") or self.cfg.analysis.pattern_monitoring.label_source,
+                fit_tag=p.get("fit_tag"),
                 date_from=p.get("date_from"),
                 date_to=p.get("date_to"),
                 month=p.get("month"),

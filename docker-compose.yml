@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-dl-cdn.alpinelinux.org}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    container_name: complaints-api
+    environment:
+      CONFIG_TEMPLATE: /app/configs/project.yaml
+      PREPARE_OUTPUT_PARQUET: /app/data/${HOST_PARQUET_REL:-processed/all_prepared.parquet}
+      INTERIM_DIR: /app/data/interim
+      REPORTS_DIR: /app/reports
+      EXPORTS_DIR: /app/exports
+      MODELS_DIR: /app/models
+      API_PORT: 8000
+    volumes:
+      - ${HOST_DATA_DIR:-./data}:/app/data
+      - ./configs:/app/configs:ro
+      - ./certs:/app/certs:ro
+      - ./reports:/app/reports
+      - ./exports:/app/exports
+      - ./models:/app/models
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+      args:
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-dl-cdn.alpinelinux.org}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+    container_name: complaints-dashboard
+    ports:
+      - "4173:4173"
+    depends_on:
+      - api
+    restart: unless-stopped

@@ -1,0 +1,32 @@
+FROM python:3.12.12-alpine3.23
+
+WORKDIR /app
+
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+ARG PIP_INDEX_URL=
+ARG PIP_TRUSTED_HOST=
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN sed -i "s|https://dl-cdn.alpinelinux.org|https://${ALPINE_MIRROR}|g" /etc/apk/repositories
+
+RUN apk add --no-cache \
+    bash \
+    build-base \
+    gfortran \
+    musl-dev \
+    openblas-dev \
+    lapack-dev \
+    libstdc++
+
+COPY requirements.txt /app/requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ]; then pip config set global.index-url "$PIP_INDEX_URL"; fi \
+    && if [ -n "$PIP_TRUSTED_HOST" ]; then pip config set global.trusted-host "$PIP_TRUSTED_HOST"; fi \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+RUN chmod +x /app/scripts/api-entrypoint.sh
+
+EXPOSE 8000
+CMD ["/app/scripts/api-entrypoint.sh"]

@@ -1407,3 +1407,115 @@ High-level расчет (диапазон `0..1`):
 Пока job в `uploaded|queued|running`, file-scoped Pattern Monitor блокируется с причиной `preparation_not_finished`.
 После `succeeded` UI автоматически может открыть `/pattern-monitor` с preset-фильтрами `uploadId` и `date range`.
 
+
+## Analyst feedback loop (Pattern Monitor second layer)
+
+Pattern Monitor now keeps architecture in **three layers**:
+
+1. **Base candidate generator**: existing pattern-fit/pattern-monitor artifacts generate candidate rows.
+2. **Analyst feedback layer**: analysts can label each row as `true`, `false`, `uncertain` and optionally add reason/comment.
+3. **Optional calibrator/reranker layer**: logistic-regression model trains on analyst labels and reranks existing candidates to improve precision.
+
+### Storage
+
+Feedback and model registry are stored in a dedicated SQLite DB:
+
+- `data/interim/feedback.db` (or `<pattern_monitoring.interim_dir>/feedback.db`)
+- tables: `analyst_feedback`, `reranker_model_versions`, `review_sessions`
+
+### API overview
+
+- `POST /api/feedback`
+- `POST /api/feedback/bulk`
+- `GET /api/feedback`
+- `GET /api/feedback/summary`
+- `POST /api/pattern-monitor/calibrator/train`
+- `GET /api/pattern-monitor/calibrator/versions`
+- `POST /api/pattern-monitor/calibrator/{version_id}/activate`
+- `POST /api/pattern-monitor/calibrator/{version_id}/deactivate`
+
+Pattern monitor alerts endpoint supports scoring mode:
+
+- `GET /api/pattern-monitor/alerts?scoring_mode=base|calibrated|reranked`
+
+If no active reranker exists, API safely falls back to `base` mode and reports effective mode in response.
+
+### UI flow
+
+On `/pattern-monitor` page:
+
+- switch between scoring modes (Base / Calibrated / Reranked)
+- toggle review mode
+- label rows inline
+- view reviewed quality summary and model precision cards
+- train calibrator and activate model versions
+
+## Docker Compose quick start (one-command VM run)
+
+You can run API + Dashboard in one command and bind your **entire local `data/` folder** from the host.
+
+### Files added
+
+- `docker-compose.yml`
+- `docker/Dockerfile.api`
+- `docker/Dockerfile.dashboard`
+- `scripts/docker_up_rebuild.sh`
+- `scripts/docker_down_wipe.sh`
+
+### Start / rebuild (removes old containers first)
+
+```bash
+./scripts/docker_up_rebuild.sh /absolute/or/relative/path/to/data processed/all_prepared.parquet
+```
+
+What this does:
+- bind-mounts host `data/` into container `/app/data`
+- uses parquet path relative to data root (default `processed/all_prepared.parquet`)
+- creates missing runtime folders (`data`, `reports`, `exports`, `models`)
+- runs `docker compose up -d --build`
+
+Mounted local paths used by app:
+- `./data -> /app/data` (prepared parquet, interim artifacts, uploads/raw/processed)
+- `./configs -> /app/configs` (project config)
+- `./certs -> /app/certs` (TLS/mTLS certs if used)
+- `./reports -> /app/reports`
+- `./exports -> /app/exports`
+- `./models -> /app/models`
+
+Endpoints:
+- API: `http://localhost:8000`
+- Dashboard: `http://localhost:4173`
+
+### Stop and wipe everything
+
+```bash
+./scripts/docker_down_wipe.sh /absolute/or/relative/path/to/data processed/all_prepared.parquet
+```
+
+What this does:
+- `docker compose down --volumes --remove-orphans`
+- removes generated runtime files in mounted data folders (`interim`, `processed`, `raw`, `uploads`) plus `reports`, `exports`, `models`
+- removes parquet file resolved as `<data_dir>/<parquet_relative_path>`
+
+### External parquet behavior
+
+The API runtime config is generated on container start and points `prepare.output_parquet` to `"/app/data/<parquet_relative_path>"`, so all new writes go back to your mounted host `data/` folder.
+
+### Custom download mirrors / registries
+
+If you need corporate mirrors, you can override build-time sources via environment variables before `docker compose up`:
+
+- `ALPINE_MIRROR` (default: `dl-cdn.alpinelinux.org`)
+- `PIP_INDEX_URL`
+- `PIP_TRUSTED_HOST`
+- `NPM_REGISTRY`
+
+Example:
+
+```bash
+export ALPINE_MIRROR=my.alpine.mirror.local
+export PIP_INDEX_URL=https://my.pypi.mirror/simple
+export PIP_TRUSTED_HOST=my.pypi.mirror
+export NPM_REGISTRY=https://my.npm.mirror/
+./scripts/docker_up_rebuild.sh ./data processed/all_prepared.parquet
+```

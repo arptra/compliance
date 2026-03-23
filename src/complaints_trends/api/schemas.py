@@ -140,6 +140,10 @@ class PatternMonitorSummaryResponse(BaseModel):
 
 class AlertRowResponse(BaseModel):
     rows: list[dict[str, Any]]
+    scoring_mode_requested: Literal["base", "calibrated", "reranked"] = "base"
+    scoring_mode_effective: Literal["base", "calibrated", "reranked"] = "base"
+    reranker_available: bool = False
+    active_calibrator_version: str | None = None
 
 
 class DailyPressureResponse(BaseModel):
@@ -336,3 +340,64 @@ class RunResponse(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
     logs: list[str] = Field(default_factory=list)
     error: str | None = None
+
+
+class FeedbackCreate(BaseModel):
+    row_id: str
+    pattern_tag: str | None = None
+    verdict: Literal["true", "false", "uncertain"]
+    reviewer: str | None = None
+    review_date: str | None = None
+    reason_code: str | None = None
+    comment: str | None = None
+    base_score: float | None = None
+    rerank_score: float | None = None
+    category: str | None = None
+    subcategory: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    model_version: str | None = None
+
+
+class FeedbackBulkCreate(BaseModel):
+    rows: list[FeedbackCreate]
+
+
+class FeedbackItem(FeedbackCreate):
+    id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class FeedbackSummaryResponse(BaseModel):
+    reviewed_rows: int = 0
+    true_count: int = 0
+    false_count: int = 0
+    uncertain_count: int = 0
+    precision_reviewed: float | None = None
+    precision_at_50: float | None = None
+    precision_at_100: float | None = None
+    by_category: list[dict[str, Any]] = Field(default_factory=list)
+    by_cluster: list[dict[str, Any]] = Field(default_factory=list)
+    by_score_bucket: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CalibratorTrainRequest(BaseModel):
+    pattern_tag: str = "latest"
+    date_from: str | None = None
+    date_to: str | None = None
+    reviewer: str | None = None
+    algorithm: str | None = "logistic_regression"
+    activate_if_better: bool = True
+
+
+class CalibratorVersionResponse(BaseModel):
+    version_id: str
+    created_at: str
+    status: str
+    algorithm: str
+    metrics_json: dict[str, Any] | None = None
+    artifact_path: str | None = None
+    train_rows: int | None = None
+    active: int = 0
+    notes: str | None = None
