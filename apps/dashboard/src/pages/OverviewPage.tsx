@@ -1,8 +1,10 @@
 import { EChart } from '../components/EChart'
 import { useOverview } from '../hooks/useOverview'
+import { useTaxonomyLabels } from '../hooks/useTaxonomyLabels'
 
 export default function OverviewPage() {
   const q = useOverview()
+  const labels = useTaxonomyLabels()
   if (q.isLoading) return <div className='card'>Загрузка overview...</div>
   if (q.error) return <div className='card'>Ошибка: {(q.error as Error).message}</div>
   const data = q.data!
@@ -38,7 +40,7 @@ export default function OverviewPage() {
         option={{
           tooltip: { trigger: 'axis' },
           xAxis: { type: 'value' },
-          yAxis: { type: 'category', data: data.top_growth_categories.map((x) => x.category) },
+          yAxis: { type: 'category', data: data.top_growth_categories.map((x) => labels.categoryLabel(x.category)) },
           series: [{ type: 'bar', data: data.top_growth_categories.map((x) => x.delta_abs ?? 0) }]
         }}
         height={360}

@@ -58,6 +58,7 @@ def get_services(config_path: str) -> dict:
         "feedback_dataset": feedback_dataset,
         "quality": quality,
         "audit": audit,
+        "labels": labels,
         "model_registry": model_registry,
         "calibrator": calibrator,
         "report": ReportService(overview, monitor, loader),

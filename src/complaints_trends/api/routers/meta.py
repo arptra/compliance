@@ -72,3 +72,14 @@ def categories_meta(date_from: str | None = None, date_to: str | None = None, se
         df["category"] = df["complaint_category_llm"]
     cats = sorted(df.get("category", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
     return {"categories": cats}
+
+
+@router.get("/taxonomy-labels")
+def taxonomy_labels_meta(services=Depends(get_service_container)):
+    labels = services.get("labels")
+    if labels is None:
+        return {"category_labels": {}, "subcategory_labels": {}}
+    return {
+        "category_labels": labels.category_labels,
+        "subcategory_labels": labels.subcategory_labels,
+    }

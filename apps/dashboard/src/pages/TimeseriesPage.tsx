@@ -12,10 +12,12 @@ import { CategoryLinesChart } from '../components/charts/CategoryLinesChart'
 import { WeekdayHourHeatmap } from '../components/charts/WeekdayHourHeatmap'
 import { CalendarHeatmap } from '../components/charts/CalendarHeatmap'
 import { ContributionChart } from '../components/charts/ContributionChart'
+import { useTaxonomyLabels } from '../hooks/useTaxonomyLabels'
 
 type CategoryRow = { date: string; category: string; count: number; share: number }
 
 export default function TimeseriesPage() {
+  const labels = useTaxonomyLabels()
   const f = useFilters(useShallow((s) => ({
     date_from: s.date_from,
     date_to: s.date_to,
@@ -105,6 +107,18 @@ export default function TimeseriesPage() {
     return { categories, dates, countMatrix, shareMatrix }
   }, [rows])
 
+  const displayChartData = useMemo(() => {
+    const categories = chartData.categories.map((c) => labels.categoryLabel(c))
+    const countMatrix: Record<string, number[]> = {}
+    const shareMatrix: Record<string, number[]> = {}
+    chartData.categories.forEach((code, idx) => {
+      const label = categories[idx]
+      countMatrix[label] = chartData.countMatrix[code] ?? []
+      shareMatrix[label] = chartData.shareMatrix[code] ?? []
+    })
+    return { categories, dates: chartData.dates, countMatrix, shareMatrix }
+  }, [chartData, labels])
+
   if (overall.isLoading || byCategory.isLoading || heatmap.isLoading || compare.isLoading) return <div className='card'>Загрузка timeseries...</div>
   if (overall.error) return <div className='card'>Ошибка overall: {(overall.error as Error).message}</div>
 
@@ -134,10 +148,10 @@ export default function TimeseriesPage() {
 
     <div className='card' style={{ marginTop: 12 }}>
       <h3>Category structure over time</h3>
-      {chartData.dates.length === 0 ? <div>Нет данных по категориям</div> : categoryChartMode === 'stacked' ? <CategoryStackedArea dates={chartData.dates} categories={chartData.categories} matrix={chartData.countMatrix} /> : <CategoryLinesChart dates={chartData.dates} categories={chartData.categories} matrix={chartData.countMatrix} />}
+      {displayChartData.dates.length === 0 ? <div>Нет данных по категориям</div> : categoryChartMode === 'stacked' ? <CategoryStackedArea dates={displayChartData.dates} categories={displayChartData.categories} matrix={displayChartData.countMatrix} /> : <CategoryLinesChart dates={displayChartData.dates} categories={displayChartData.categories} matrix={displayChartData.countMatrix} />}
     </div>
 
-    <div className='card' style={{ marginTop: 12 }}><h3>100% shares by category</h3>{chartData.dates.length ? <CategoryShareArea dates={chartData.dates} categories={chartData.categories} matrix={chartData.shareMatrix} /> : <div>Нет данных</div>}</div>
+    <div className='card' style={{ marginTop: 12 }}><h3>100% shares by category</h3>{displayChartData.dates.length ? <CategoryShareArea dates={displayChartData.dates} categories={displayChartData.categories} matrix={displayChartData.shareMatrix} /> : <div>Нет данных</div>}</div>
 
     <div className='card' style={{ marginTop: 12 }}><h3>Weekday × hour heatmap</h3>{(heatmap.data?.weekday_hour ?? []).length ? <WeekdayHourHeatmap rows={heatmap.data.weekday_hour} /> : <div>Нет часовой детализации</div>}</div>
     <div className='card' style={{ marginTop: 12 }}><h3>Calendar heatmap</h3>{(heatmap.data?.calendar ?? []).length ? <CalendarHeatmap rows={heatmap.data.calendar} /> : <div>Нет календарных данных</div>}</div>
@@ -145,12 +159,12 @@ export default function TimeseriesPage() {
     <div className='card' style={{ marginTop: 12 }}>
       <h3>Compare to baseline</h3>
       <div>Actual: {(compare.data?.summary?.actual_total ?? 0).toFixed(0)} | Baseline: {(compare.data?.summary?.baseline_total ?? 0).toFixed(0)} | Δ: {(compare.data?.summary?.delta_abs ?? 0).toFixed(0)}</div>
-      <ContributionChart rows={(compare.data?.contributions ?? []).slice(0, 15)} />
+      <ContributionChart rows={(compare.data?.contributions ?? []).slice(0, 15).map((r: any) => ({ ...r, category: labels.categoryLabel(r.category) }))} />
       <table className='table' style={{ marginTop: 12 }}>
         <thead><tr><th>category</th><th>actual_count</th><th>expected_count</th><th>delta_abs</th><th>delta_pct</th><th>share</th><th>contribution_to_growth</th><th>anomaly_score</th></tr></thead>
         <tbody>
           {(compare.data?.contributions ?? []).map((r: any) => (
-            <tr key={r.category}><td>{r.category}</td><td>{r.actual_count.toFixed(0)}</td><td>{r.expected_count.toFixed(0)}</td><td>{r.delta_abs.toFixed(0)}</td><td>{r.delta_pct == null ? '—' : `${(r.delta_pct*100).toFixed(1)}%`}</td><td>{(r.share*100).toFixed(1)}%</td><td>{(r.contribution_to_growth*100).toFixed(1)}%</td><td>{r.anomaly_score.toFixed(2)}</td></tr>
+            <tr key={r.category}><td>{labels.categoryLabel(r.category)}</td><td>{r.actual_count.toFixed(0)}</td><td>{r.expected_count.toFixed(0)}</td><td>{r.delta_abs.toFixed(0)}</td><td>{r.delta_pct == null ? '—' : `${(r.delta_pct*100).toFixed(1)}%`}</td><td>{(r.share*100).toFixed(1)}%</td><td>{(r.contribution_to_growth*100).toFixed(1)}%</td><td>{r.anomaly_score.toFixed(2)}</td></tr>
           ))}
         </tbody>
       </table>
