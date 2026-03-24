@@ -5,6 +5,7 @@ from hashlib import sha1
 from typing import Any
 
 from .feedback_db import FeedbackDB
+from .model_quality_service import compute_precision_at_k, compute_precision_by_bucket, compute_precision_by_group
 
 
 class FeedbackService:
@@ -110,16 +111,29 @@ class FeedbackService:
         uncertain_count = sum(1 for r in reviewed if r["verdict"] == "uncertain")
         reviewed_rows = len(reviewed)
         precision = true_count / reviewed_rows if reviewed_rows else None
-
-        by_category: dict[str, dict[str, float | int | None]] = {}
-        for r in reviewed:
-            cat = r.get("category") or "UNKNOWN"
-            entry = by_category.setdefault(cat, {"reviewed": 0, "true": 0})
-            entry["reviewed"] += 1
-            entry["true"] += 1 if r["verdict"] == "true" else 0
-        for cat, entry in by_category.items():
-            entry["precision"] = (entry["true"] / entry["reviewed"]) if entry["reviewed"] else None
-            entry["category"] = cat
+        scoring_mode = str(params.get("scoring_mode") or "base")
+        score_column = "base_score" if scoring_mode == "base" else "rerank_score"
+        by_category = [
+            {
+                "category": item["name"],
+                "reviewed": item["reviewed_count"],
+                "true": item["true_count"],
+                "false": item["false_count"],
+                "precision": item["precision"],
+            }
+            for item in compute_precision_by_group(reviewed, key="category")
+        ]
+        by_cluster = [
+            {
+                "cluster": item["name"],
+                "reviewed": item["reviewed_count"],
+                "true": item["true_count"],
+                "false": item["false_count"],
+                "precision": item["precision"],
+            }
+            for item in compute_precision_by_group(reviewed, key="subcategory")
+        ]
+        by_score_bucket = compute_precision_by_bucket(reviewed, score_column=score_column)
 
         return {
             "reviewed_rows": reviewed_rows,
@@ -127,11 +141,11 @@ class FeedbackService:
             "false_count": false_count,
             "uncertain_count": uncertain_count,
             "precision_reviewed": precision,
-            "precision_at_50": precision,
-            "precision_at_100": precision,
-            "by_category": list(by_category.values()),
-            "by_cluster": [],
-            "by_score_bucket": [],
+            "precision_at_50": compute_precision_at_k(reviewed, 50, score_column=score_column),
+            "precision_at_100": compute_precision_at_k(reviewed, 100, score_column=score_column),
+            "by_category": by_category,
+            "by_cluster": by_cluster,
+            "by_score_bucket": by_score_bucket,
         }
 
     def delete_feedback(self, row_id: str, pattern_tag: str | None = None) -> dict[str, Any]:

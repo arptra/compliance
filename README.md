@@ -1519,3 +1519,52 @@ export PIP_TRUSTED_HOST=my.pypi.mirror
 export NPM_REGISTRY=https://my.npm.mirror/
 ./scripts/docker_up_rebuild.sh ./data processed/all_prepared.parquet
 ```
+
+## Review Dataset
+
+Новая вкладка `/review-dataset` показывает накопленный analyst feedback dataset из SQLite.
+
+- Хранилище: `data/interim/feedback.db`.
+- Основной API:
+  - `GET /api/feedback/dataset`
+  - `GET /api/feedback/{row_id}`
+  - `GET /api/feedback/export?output_format=csv|json`
+- Доступны фильтры по verdict/pattern_tag/reviewer/date/category/subcategory/model_version/reason_code, поиск `q`, пагинация, сортировка и экспорт.
+
+Это рабочий data-review экран: KPI, фильтры, таблица, детали строки и кнопка открытия в Pattern Monitor.
+
+## Model Quality
+
+Новая вкладка `/model-quality` показывает качество двухслойной схемы:
+
+- **Layer 1 (Base):** candidate generation.
+- **Layer 2 (Reranker):** prioritization of reviewed candidates.
+- **Goal:** improve precision@K without losing candidate coverage.
+
+Страница включает compare-метрики `base vs calibrated vs reranked`, реальные `precision@10/20/50/100`, разрезы по bucket/category/cluster и таблицу версий reranker.
+
+Артефакты второго слоя:
+
+- модели и сериализованные калибраторы: `models/rerankers/`
+- версии моделей в `feedback.db`: таблица `reranker_model_versions`
+
+## Unflagged Audit
+
+Для оценки hidden positives за пределами candidate generator добавлен random audit flow:
+
+- `POST /api/audit/unflagged/create`
+- `GET /api/audit/unflagged/samples`
+- `GET /api/audit/unflagged/{sample_id}`
+- `POST /api/audit/unflagged/{sample_id}/review`
+
+Новые таблицы в `feedback.db`:
+
+- `unflagged_audit_samples`
+- `unflagged_audit_rows`
+
+Оценка hidden positives считается как:
+
+- `p_hat = true_in_sample / reviewed_in_sample`
+- `estimated_hidden_positives = p_hat * source_pool_size`
+
+Это оценка по случайной выборке (не абсолютная истина).

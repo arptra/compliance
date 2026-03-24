@@ -6,6 +6,8 @@ import TimeseriesPage from '../pages/TimeseriesPage'
 import PreparationPage from '../pages/PreparationPage'
 import PatternFitPage from '../pages/PatternFitPage'
 import PatternMonitorPage from '../pages/PatternMonitorPage'
+import ReviewDatasetPage from '../pages/ReviewDatasetPage'
+import ModelQualityPage from '../pages/ModelQualityPage'
 import ReportsPage from '../pages/ReportsPage'
 import SettingsPage from '../pages/SettingsPage'
 
@@ -18,6 +20,8 @@ export const router = createBrowserRouter([
     { path: 'preparation', element: <PreparationPage /> },
     { path: 'pattern-fit', element: <PatternFitPage /> },
     { path: 'pattern-monitor', element: <PatternMonitorPage /> },
+    { path: 'review-dataset', element: <ReviewDatasetPage /> },
+    { path: 'model-quality', element: <ModelQualityPage /> },
     { path: 'reports', element: <ReportsPage /> },
     { path: 'settings', element: <SettingsPage /> }
   ] }

@@ -72,3 +72,32 @@ class FeedbackDB:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS unflagged_audit_samples (
+                    sample_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    pattern_tag TEXT NULL,
+                    date_from TEXT NULL,
+                    date_to TEXT NULL,
+                    sample_size INTEGER NOT NULL,
+                    source_pool_size INTEGER NOT NULL,
+                    query_meta_json TEXT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('created','reviewed','archived'))
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS unflagged_audit_rows (
+                    id INTEGER PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    row_id TEXT NOT NULL,
+                    review_verdict TEXT NULL CHECK (review_verdict IN ('true','false','uncertain')),
+                    reviewer TEXT NULL,
+                    reviewed_at TEXT NULL,
+                    comment TEXT NULL,
+                    FOREIGN KEY(sample_id) REFERENCES unflagged_audit_samples(sample_id)
+                )
+                """
+            )
