@@ -1578,3 +1578,25 @@ export NPM_REGISTRY=https://my.npm.mirror/
 - `estimated_hidden_positives = p_hat * source_pool_size`
 
 Это оценка по случайной выборке (не абсолютная истина).
+
+## Dashboard on VM / external host access
+
+Если dashboard запускается на VM и открывается с другого хоста:
+
+```bash
+cd apps/dashboard
+npm install
+npm run dev
+```
+
+Dev server уже зафиксирован на:
+
+- `0.0.0.0:5173` (host mode + strict port)
+
+Дополнительно для удаленного HMR можно задать:
+
+```bash
+export VITE_HMR_HOST=<public_vm_ip_or_dns>
+```
+
+Проверьте также firewall/security group: входящий TCP `5173` должен быть открыт.
