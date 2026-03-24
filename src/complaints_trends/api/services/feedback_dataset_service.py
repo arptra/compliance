@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from .feedback_db import FeedbackDB
+from .taxonomy_label_service import TaxonomyLabelService
 
 
 ALLOWED_SORT = {
@@ -25,8 +26,9 @@ ALLOWED_SORT = {
 
 
 class FeedbackDatasetService:
-    def __init__(self, db: FeedbackDB) -> None:
+    def __init__(self, db: FeedbackDB, labels: TaxonomyLabelService | None = None) -> None:
         self.db = db
+        self.labels = labels
 
     def _build_where(self, params: dict[str, Any]) -> tuple[list[str], list[Any]]:
         where: list[str] = []
@@ -42,9 +44,9 @@ class FeedbackDatasetService:
             where.append("review_date <= ?")
             args.append(params["date_to"])
         if params.get("q"):
-            where.append("(row_id LIKE ? OR comment LIKE ?)")
+            where.append("(row_id LIKE ? OR comment LIKE ? OR category_label_ru LIKE ? OR subcategory_label_ru LIKE ?)")
             q = f"%{params['q']}%"
-            args.extend([q, q])
+            args.extend([q, q, q, q])
         return where, args
 
     def list_feedback_dataset(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -65,7 +67,7 @@ class FeedbackDatasetService:
             total = conn.execute(f"SELECT COUNT(*) FROM analyst_feedback{where_sql}", args).fetchone()[0]
             rows = conn.execute(query, [*args, page_size, offset]).fetchall()
 
-        items = [dict(r) for r in rows]
+        items = [self.labels.enrich_row(dict(r)) if self.labels else dict(r) for r in rows]
         summary = self.get_feedback_dataset_summary(params)
         return {
             "items": items,
@@ -98,7 +100,7 @@ class FeedbackDatasetService:
     def get_feedback_item(self, row_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
             row = conn.execute("SELECT * FROM analyst_feedback WHERE row_id = ? ORDER BY updated_at DESC LIMIT 1", (row_id,)).fetchone()
-        return dict(row) if row else None
+        return self.labels.enrich_row(dict(row)) if (row and self.labels) else (dict(row) if row else None)
 
     def export_feedback_dataset(self, params: dict[str, Any], output_format: str) -> str:
         data = self.list_feedback_dataset({**params, "page": 1, "page_size": 100000})["items"]
@@ -112,7 +114,9 @@ class FeedbackDatasetService:
             "row_id",
             "pattern_tag",
             "category",
+            "category_label_ru",
             "subcategory",
+            "subcategory_label_ru",
             "base_score",
             "rerank_score",
             "verdict",

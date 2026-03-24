@@ -1533,6 +1533,16 @@ export NPM_REGISTRY=https://my.npm.mirror/
 
 Это рабочий data-review экран: KPI, фильтры, таблица, детали строки и кнопка открытия в Pattern Monitor.
 
+### Русские labels категорий/подкатегорий
+
+Источник русских названий: `files.categories_seed_path` (по умолчанию `configs/categories_seed.yaml`, поля `label_ru`).
+
+- В `analyst_feedback` хранятся и отдаются сразу обе пары полей:
+  - `category` / `category_label_ru`
+  - `subcategory` / `subcategory_label_ru`
+- При старте API выполняется backfill: если в существующих строках `*_label_ru` пустые, они дозаполняются из taxonomy mapping (или fallback в исходный код категории/подкатегории).
+- В API и UI используется `label_ru` (с fallback на код), чтобы на дашбордах отображались русские названия.
+
 ## Model Quality
 
 Новая вкладка `/model-quality` показывает качество двухслойной схемы:

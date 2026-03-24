@@ -15,7 +15,7 @@ export function ReviewDatasetTable({ rows, onSelect }: Props) {
       </thead>
       <tbody>
         {rows.map((r) => <tr key={`${r.row_id}-${r.pattern_tag ?? 'na'}`}>
-          <td>{r.review_date ?? ''}</td><td>{r.row_id}</td><td>{r.pattern_tag ?? ''}</td><td>{r.category ?? ''}</td><td>{r.subcategory ?? ''}</td><td>{r.base_score ?? ''}</td><td>{r.rerank_score ?? ''}</td><td>{r.verdict}</td><td>{r.reason_code ?? ''}</td><td>{r.reviewer ?? ''}</td><td>{r.model_version ?? ''}</td><td>{r.comment ?? ''}</td>
+          <td>{r.review_date ?? ''}</td><td>{r.row_id}</td><td>{r.pattern_tag ?? ''}</td><td>{r.category_label_ru ?? r.category ?? ''}</td><td>{r.subcategory_label_ru ?? r.subcategory ?? ''}</td><td>{r.base_score ?? ''}</td><td>{r.rerank_score ?? ''}</td><td>{r.verdict}</td><td>{r.reason_code ?? ''}</td><td>{r.reviewer ?? ''}</td><td>{r.model_version ?? ''}</td><td>{r.comment ?? ''}</td>
           <td><button onClick={() => onSelect(r)}>Details</button></td>
         </tr>)}
       </tbody>

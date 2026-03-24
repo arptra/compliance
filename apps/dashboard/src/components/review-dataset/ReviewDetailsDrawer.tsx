@@ -13,6 +13,8 @@ export function ReviewDetailsDrawer({ item, onClose }: Props) {
       <h3>Review details</h3>
       <p><b>row_id:</b> {item.row_id}</p>
       <p><b>pattern_tag:</b> {item.pattern_tag ?? '—'}</p>
+      <p><b>category:</b> {item.category_label_ru ?? item.category ?? '—'}</p>
+      <p><b>subcategory:</b> {item.subcategory_label_ru ?? item.subcategory ?? '—'}</p>
       <p><b>scores:</b> base={item.base_score ?? '—'} rerank={item.rerank_score ?? '—'}</p>
       <p><b>verdict:</b> {item.verdict}</p>
       <p><b>reason:</b> {item.reason_code ?? '—'}</p>

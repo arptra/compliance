@@ -27,7 +27,7 @@ def _setup(tmp_path: Path):
 
 def test_feedback_dataset_filters_and_export(tmp_path: Path):
     client = TestClient(create_app(str(_setup(tmp_path))))
-    client.post("/api/feedback", json={"row_id": "r1", "pattern_tag": "latest", "verdict": "true", "category": "A", "reviewer": "ann", "comment": "good"})
+    client.post("/api/feedback", json={"row_id": "r1", "pattern_tag": "latest", "verdict": "true", "category": "BILLING", "subcategory": "duplicate_charge", "reviewer": "ann", "comment": "good"})
     client.post("/api/feedback", json={"row_id": "r2", "pattern_tag": "latest", "verdict": "false", "category": "B", "reviewer": "bob", "comment": "bad"})
 
     resp = client.get("/api/feedback/dataset", params={"reviewer": "ann", "q": "good"})
@@ -35,6 +35,8 @@ def test_feedback_dataset_filters_and_export(tmp_path: Path):
     body = resp.json()
     assert body["total"] == 1
     assert body["items"][0]["row_id"] == "r1"
+    assert body["items"][0]["category_label_ru"] == "Платежи и списания"
+    assert body["items"][0]["subcategory_label_ru"] == "Двойное списание"
 
     export_resp = client.get("/api/feedback/export", params={"output_format": "json", "reviewer": "ann"})
     assert export_resp.status_code == 200

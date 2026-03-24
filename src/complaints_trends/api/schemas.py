@@ -353,7 +353,9 @@ class FeedbackCreate(BaseModel):
     base_score: float | None = None
     rerank_score: float | None = None
     category: str | None = None
+    category_label_ru: str | None = None
     subcategory: str | None = None
+    subcategory_label_ru: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     model_version: str | None = None
@@ -417,6 +419,7 @@ class ScoreBucketItem(BaseModel):
 
 class CategoryPrecisionItem(BaseModel):
     name: str
+    label_ru: str | None = None
     reviewed_count: int
     true_count: int
     false_count: int

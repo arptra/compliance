@@ -28,7 +28,9 @@ class FeedbackDB:
                     date_from TEXT NULL,
                     date_to TEXT NULL,
                     category TEXT NULL,
+                    category_label_ru TEXT NULL,
                     subcategory TEXT NULL,
+                    subcategory_label_ru TEXT NULL,
                     base_score REAL NULL,
                     rerank_score REAL NULL,
                     verdict TEXT NOT NULL CHECK (verdict IN ('true','false','uncertain')),
@@ -41,6 +43,11 @@ class FeedbackDB:
                 )
                 """
             )
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(analyst_feedback)").fetchall()}
+            if "category_label_ru" not in cols:
+                conn.execute("ALTER TABLE analyst_feedback ADD COLUMN category_label_ru TEXT NULL")
+            if "subcategory_label_ru" not in cols:
+                conn.execute("ALTER TABLE analyst_feedback ADD COLUMN subcategory_label_ru TEXT NULL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reranker_model_versions (

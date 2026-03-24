@@ -59,7 +59,9 @@ export type FeedbackDatasetItem = {
   base_score?: number | null
   rerank_score?: number | null
   category?: string | null
+  category_label_ru?: string | null
   subcategory?: string | null
+  subcategory_label_ru?: string | null
   date_from?: string | null
   date_to?: string | null
   model_version?: string | null
@@ -103,7 +105,7 @@ export type ReviewDatasetFiltersState = {
 
 export type PrecisionAtKItem = { k: number; precision: number | null }
 export type ScoreBucketItem = { bucket: string; reviewed_count: number; true_count: number; precision: number | null }
-export type GroupPrecisionItem = { name: string; reviewed_count: number; true_count: number; false_count: number; precision: number | null }
+export type GroupPrecisionItem = { name: string; label_ru?: string | null; reviewed_count: number; true_count: number; false_count: number; precision: number | null }
 export type ModelVersionMetricsItem = { version_id: string; train_rows: number | null; precision_reviewed: number | null; precision_at_50: number | null; precision_at_100: number | null; active: boolean }
 export type ModeMetrics = {
   mode: 'base' | 'calibrated' | 'reranked'

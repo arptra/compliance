@@ -8,14 +8,16 @@ import pandas as pd
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 from .data_loader import DataLoader
+from .taxonomy_label_service import TaxonomyLabelService
 
 
 class PatternMonitorService:
-    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None) -> None:
+    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None, labels: TaxonomyLabelService | None = None) -> None:
         self.loader = loader
         self.feedback_service = feedback_service
         self.calibrator_service = calibrator_service
         self.registry_service = registry_service
+        self.labels = labels
 
     def _resolved_tag(self, tag: str) -> str:
         return self.loader.resolve_tag("pattern_monitor", tag)
@@ -99,6 +101,26 @@ class PatternMonitorService:
             row_dialog = out["row_dialog"].fillna("").astype(str).str.strip()
             fallback = out[fallback_col].fillna("").astype(str) if fallback_col else ""
             out["row_dialog"] = row_dialog.where(row_dialog != "", fallback)
+        return out
+
+    def _with_ru_labels(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not self.labels or df.empty:
+            return df
+        out = df.copy()
+        if "category" in out.columns:
+            out["category_label_ru"] = out["category"].map(lambda v: self.labels.category_label_ru(None if pd.isna(v) else str(v)))
+        else:
+            out["category_label_ru"] = ""
+        if "subcategory" in out.columns:
+            out["subcategory_label_ru"] = out.apply(
+                lambda r: self.labels.subcategory_label_ru(
+                    None if pd.isna(r.get("category")) else str(r.get("category")),
+                    None if pd.isna(r.get("subcategory")) else str(r.get("subcategory")),
+                ),
+                axis=1,
+            )
+        else:
+            out["subcategory_label_ru"] = ""
         return out
 
     @staticmethod
@@ -275,6 +297,7 @@ class PatternMonitorService:
             if sort_col in scored.columns:
                 scored = scored.sort_values(sort_col, ascending=False)
             scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
         rows = self._json_records(scored, int(params.get("top_n", 200)))
@@ -319,6 +342,7 @@ class PatternMonitorService:
                     break
             if "row_dialog" not in response.columns:
                 response["row_dialog"] = self._series(scored, "row_dialog", "").astype(str)
+            response = self._with_ru_labels(response)
 
         return {
             "tag": resolved,
