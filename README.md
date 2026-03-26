@@ -2247,6 +2247,16 @@ Dev server уже зафиксирован на:
 
 - `0.0.0.0:5173` (host mode + strict port)
 
+API base для dashboard по умолчанию вычисляется как:
+- `<scheme>://<hostname>:8000`
+
+То есть если вы открываете UI по адресу `http://<VM_IP>:5173`, фронт автоматически будет ходить в `http://<VM_IP>:8000`.
+Если у вас API доступен по другому адресу (reverse proxy / другой порт / домен), задайте:
+
+```bash
+export VITE_API_BASE_URL=http://<api-host>:<api-port>
+```
+
 Дополнительно для удаленного HMR можно задать:
 
 ```bash
