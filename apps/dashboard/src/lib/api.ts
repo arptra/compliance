@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`
+const BASE = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:8000`
 
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)
