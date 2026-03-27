@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import joblib
 import pandas as pd
 
 from complaints_trends.config import ProjectConfig
@@ -114,3 +115,39 @@ def test_pattern_fit_builds_growth_and_clusters(tmp_path: Path):
     clusters = json.loads((Path(cfg.analysis.pattern_monitoring.interim_dir) / "pattern_fit_t1" / "cluster_profiles.json").read_text(encoding="utf-8"))
     login_entry = next(x for x in clusters if x["category"] == "login")
     assert len(login_entry["clusters"]) >= 1
+
+
+def test_pattern_fit_falls_back_to_pred_labels_when_llm_labels_missing(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    rows = []
+    for m in ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"]:
+        for i in range(20):
+            rows.append(
+                {
+                    "row_id": f"n-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-10 10:00:00",
+                    "client_first_message": "не работает кнопка входа",
+                    "is_complaint_pred": True,
+                    "category_pred": "login",
+                }
+            )
+    for m in ["2025-11", "2025-12"]:
+        for i in range(45):
+            rows.append(
+                {
+                    "row_id": f"e-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-11 10:00:00",
+                    "client_first_message": "после смс нельзя завершить вход",
+                    "is_complaint_pred": True,
+                    "category_pred": "login",
+                }
+            )
+    pd.DataFrame(rows).to_parquet(cfg.prepare.output_parquet, index=False)
+
+    _, fit_bundle_path, _ = run_pattern_fit(cfg, tag="t-fallback", normal_period="2025-01..2025-08", event_period="2025-11..2025-12", label_source="llm")
+
+    fit_bundle = joblib.load(fit_bundle_path)
+    assert fit_bundle["requested_label_source"] == "llm"
+    assert fit_bundle["label_source"] == "pred"
