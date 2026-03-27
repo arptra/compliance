@@ -20,6 +20,7 @@ def test_meta_prepare_preview_endpoint(tmp_path: Path):
             'client_first_message': ['ошибка входа', 'оплата не проходит', 'вопрос по тарифу'],
             'category': ['login', 'payment', 'other'],
             'event_time': ['2025-01-01 10:00:00', '2025-01-02 10:00:00', '2025-01-03 10:00:00'],
+            'meta_tags': [['a', 'b'], ['billing'], None],
         }
     )
     df.to_parquet(parquet_path, index=False)
@@ -38,3 +39,4 @@ def test_meta_prepare_preview_endpoint(tmp_path: Path):
     assert body['page_size'] == 2
     assert 'row_id' in body['columns']
     assert body['items'][0]['row_id'] == 'r2'
+    assert isinstance(body['items'][0]['meta_tags'], str) or body['items'][0]['meta_tags'] is None

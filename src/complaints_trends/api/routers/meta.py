@@ -112,6 +112,27 @@ def prepare_preview_meta(
                 out[col] = out[col].astype(str)
         return out.where(pd.notna(out), None)
 
+    def _json_value(v):
+        if v is None:
+            return None
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        if isinstance(v, (str, int, float, bool)):
+            return v
+        if hasattr(v, "item"):
+            try:
+                scalar = v.item()
+                if isinstance(scalar, (str, int, float, bool)) or scalar is None:
+                    return scalar
+            except Exception:
+                pass
+        if isinstance(v, (list, tuple, dict)):
+            return str(v)
+        return str(v)
+
     if not qv:
         total = int(pq_file.metadata.num_rows) if pq_file.metadata is not None else 0
         collected: list[pd.DataFrame] = []
@@ -161,11 +182,19 @@ def prepare_preview_meta(
 
     page_df = _normalize(page_df)
 
+    items = []
+    if not page_df.empty:
+        for _, row in page_df.iterrows():
+            rec = {}
+            for c in columns:
+                rec[c] = _json_value(row[c]) if c in row.index else None
+            items.append(rec)
+
     return {
-        "items": page_df.to_dict(orient="records"),
+        "items": items,
         "columns": columns,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
+        "total": int(total),
+        "page": int(page),
+        "page_size": int(page_size),
         "path": str(path),
     }
