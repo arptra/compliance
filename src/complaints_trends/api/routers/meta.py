@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Depends
+import pyarrow.parquet as pq
 
 from ..deps import get_service_container
 from ..schemas import AvailableTagsResponse, DatasetMeta, MetaConfigResponse, MetaDatasetsResponse
@@ -95,36 +96,76 @@ def prepare_preview_meta(
     page = max(1, int(page))
     page_size = max(1, min(int(page_size), 200))
 
-    loader = services["loader"]
-    df = loader.load_prepare()
-    if df.empty:
-        return {"items": [], "columns": [], "total": 0, "page": page, "page_size": page_size, "path": str(services["cfg"].prepare.output_parquet)}
+    path = Path(services["cfg"].prepare.output_parquet)
+    if not path.exists():
+        return {"items": [], "columns": [], "total": 0, "page": page, "page_size": page_size, "path": str(path)}
 
-    if q:
-        qv = q.strip().lower()
-        if qv:
-            text_cols = [c for c in ["row_id", "client_first_message", "dialog_text", "category", "subcategory", "complaint_category_llm", "complaint_subcategory_llm"] if c in df.columns]
-            if text_cols:
-                mask = pd.Series(False, index=df.index)
-                for col in text_cols:
-                    mask = mask | df[col].fillna("").astype(str).str.lower().str.contains(qv, regex=False)
-                df = df[mask]
-
-    total = int(len(df))
+    pq_file = pq.ParquetFile(path)
+    columns = [str(c) for c in pq_file.schema.names]
     start = (page - 1) * page_size
-    end = start + page_size
-    page_df = df.iloc[start:end].copy()
+    qv = (q or "").strip().lower()
 
-    for col in page_df.columns:
-        if pd.api.types.is_datetime64_any_dtype(page_df[col]):
-            page_df[col] = page_df[col].astype(str)
-    page_df = page_df.where(pd.notna(page_df), None)
+    def _normalize(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for col in out.columns:
+            if pd.api.types.is_datetime64_any_dtype(out[col]):
+                out[col] = out[col].astype(str)
+        return out.where(pd.notna(out), None)
+
+    if not qv:
+        total = int(pq_file.metadata.num_rows) if pq_file.metadata is not None else 0
+        collected: list[pd.DataFrame] = []
+        seen = 0
+        remaining = page_size
+        for batch in pq_file.iter_batches(batch_size=5000):
+            block = batch.to_pandas()
+            b_len = len(block)
+            if seen + b_len <= start:
+                seen += b_len
+                continue
+            offset = max(0, start - seen)
+            part = block.iloc[offset : offset + remaining]
+            if not part.empty:
+                collected.append(part)
+                remaining -= len(part)
+            seen += b_len
+            if remaining <= 0:
+                break
+        page_df = pd.concat(collected, ignore_index=True) if collected else pd.DataFrame(columns=columns)
+    else:
+        text_cols = [c for c in ["row_id", "client_first_message", "dialog_text", "category", "subcategory", "complaint_category_llm", "complaint_subcategory_llm"] if c in columns]
+        collected: list[pd.DataFrame] = []
+        matched = 0
+        for batch in pq_file.iter_batches(batch_size=5000):
+            block = batch.to_pandas()
+            if text_cols:
+                mask = pd.Series(False, index=block.index)
+                for col in text_cols:
+                    mask = mask | block[col].fillna("").astype(str).str.lower().str.contains(qv, regex=False)
+                block = block[mask]
+            else:
+                block = pd.DataFrame(columns=columns)
+            if block.empty:
+                continue
+            block_len = len(block)
+            if matched + block_len <= start:
+                matched += block_len
+                continue
+            offset = max(0, start - matched)
+            part = block.iloc[offset : offset + max(0, page_size - sum(len(x) for x in collected))]
+            if not part.empty:
+                collected.append(part)
+            matched += block_len
+        total = matched
+        page_df = pd.concat(collected, ignore_index=True) if collected else pd.DataFrame(columns=columns)
+
+    page_df = _normalize(page_df)
 
     return {
         "items": page_df.to_dict(orient="records"),
-        "columns": [str(c) for c in page_df.columns.tolist()],
+        "columns": columns,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "path": str(services["cfg"].prepare.output_parquet),
+        "path": str(path),
     }
