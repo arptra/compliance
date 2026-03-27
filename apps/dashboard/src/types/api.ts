@@ -151,3 +151,12 @@ export type UnflaggedAuditSample = {
   rows: UnflaggedAuditRow[]
   estimate?: UnflaggedAuditEstimate | null
 }
+
+export type PreparePreviewResponse = {
+  items: Record<string, unknown>[]
+  columns: string[]
+  total: number
+  page: number
+  page_size: number
+  path: string
+}

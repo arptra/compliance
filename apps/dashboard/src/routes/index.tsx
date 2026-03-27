@@ -8,6 +8,7 @@ import PatternFitPage from '../pages/PatternFitPage'
 import PatternMonitorPage from '../pages/PatternMonitorPage'
 import ReviewDatasetPage from '../pages/ReviewDatasetPage'
 import ModelQualityPage from '../pages/ModelQualityPage'
+import ParquetViewerPage from '../pages/ParquetViewerPage'
 import ReportsPage from '../pages/ReportsPage'
 import SettingsPage from '../pages/SettingsPage'
 
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
     { path: 'pattern-monitor', element: <PatternMonitorPage /> },
     { path: 'review-dataset', element: <ReviewDatasetPage /> },
     { path: 'model-quality', element: <ModelQualityPage /> },
+    { path: 'parquet-viewer', element: <ParquetViewerPage /> },
     { path: 'reports', element: <ReportsPage /> },
     { path: 'settings', element: <SettingsPage /> }
   ] }

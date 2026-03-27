@@ -83,3 +83,48 @@ def taxonomy_labels_meta(services=Depends(get_service_container)):
         "category_labels": labels.category_labels,
         "subcategory_labels": labels.subcategory_labels,
     }
+
+
+@router.get("/prepare-preview")
+def prepare_preview_meta(
+    page: int = 1,
+    page_size: int = 50,
+    q: str | None = None,
+    services=Depends(get_service_container),
+):
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 200))
+
+    loader = services["loader"]
+    df = loader.load_prepare()
+    if df.empty:
+        return {"items": [], "columns": [], "total": 0, "page": page, "page_size": page_size, "path": str(services["cfg"].prepare.output_parquet)}
+
+    if q:
+        qv = q.strip().lower()
+        if qv:
+            text_cols = [c for c in ["row_id", "client_first_message", "dialog_text", "category", "subcategory", "complaint_category_llm", "complaint_subcategory_llm"] if c in df.columns]
+            if text_cols:
+                mask = pd.Series(False, index=df.index)
+                for col in text_cols:
+                    mask = mask | df[col].fillna("").astype(str).str.lower().str.contains(qv, regex=False)
+                df = df[mask]
+
+    total = int(len(df))
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_df = df.iloc[start:end].copy()
+
+    for col in page_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(page_df[col]):
+            page_df[col] = page_df[col].astype(str)
+    page_df = page_df.where(pd.notna(page_df), None)
+
+    return {
+        "items": page_df.to_dict(orient="records"),
+        "columns": [str(c) for c in page_df.columns.tolist()],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "path": str(services["cfg"].prepare.output_parquet),
+    }
