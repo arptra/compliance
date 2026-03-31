@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
@@ -38,7 +38,15 @@ export default function PatternMonitorPage() {
   const sourceFilename = sp.get('sourceFilename') || undefined
   const autoDateFrom = sp.get('autoDateFrom') || undefined
   const autoDateTo = sp.get('autoDateTo') || undefined
-  const patternTag = f.pattern_tag || 'latest'
+  const autoPatternTag = sp.get('autoPatternTag') || undefined
+  const patternTag = uploadId ? (autoPatternTag || f.pattern_tag || 'latest') : (f.pattern_tag || 'latest')
+
+  useEffect(() => {
+    if (uploadId && autoPatternTag && f.pattern_tag !== autoPatternTag) {
+      f.set({ pattern_tag: autoPatternTag })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadId, autoPatternTag])
 
   const tagsQ = useQuery({ queryKey: ['meta-tags'], queryFn: () => apiGet<TagsResp>('/api/meta/tags') })
 
@@ -71,7 +79,7 @@ export default function PatternMonitorPage() {
   const trainCalibrator = useMutation({ mutationFn: () => apiPost('/api/pattern-monitor/calibrator/train', { pattern_tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, activate_if_better: true }), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
   const activateVersion = useMutation({ mutationFn: (v: string) => apiPost(`/api/pattern-monitor/calibrator/${v}/activate`, {}), onSuccess: () => { qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
 
-  const clearUploadFilter = () => { const next = new URLSearchParams(sp); ['uploadId','sourceFilename','autoDateFrom','autoDateTo'].forEach((k) => next.delete(k)); setSp(next); navigate(`/pattern-monitor${next.toString() ? `?${next.toString()}` : ''}`) }
+  const clearUploadFilter = () => { const next = new URLSearchParams(sp); ['uploadId','sourceFilename','autoDateFrom','autoDateTo','autoPatternTag'].forEach((k) => next.delete(k)); setSp(next); navigate(`/pattern-monitor${next.toString() ? `?${next.toString()}` : ''}`) }
 
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })

@@ -286,6 +286,7 @@ class PreparationJobSummary(BaseModel):
     output_prepared_parquet: str | None = None
     merged_into_main: bool = False
     available_for_pattern_monitor: bool = False
+    pattern_monitor_tag: str | None = None
 
 
 class PreparationUploadResponse(BaseModel):
@@ -319,6 +320,7 @@ class PatternMonitorPresetPayload(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
     upload_id: str
+    pattern_tag: str | None = None
     label_source: str = "llm"
     source_filename: str | None = None
 

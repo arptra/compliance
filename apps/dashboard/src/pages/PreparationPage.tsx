@@ -22,7 +22,7 @@ type RunResp = { upload_id: string; status: string; error_message?: string | nul
 type PresetResp = {
   allowed: boolean
   reason?: string | null
-  pattern_monitor_preset?: { date_from?: string | null; date_to?: string | null; upload_id: string; label_source: string; source_filename?: string | null } | null
+  pattern_monitor_preset?: { date_from?: string | null; date_to?: string | null; upload_id: string; pattern_tag?: string | null; label_source: string; source_filename?: string | null } | null
 }
 
 export default function PreparationPage() {
@@ -94,6 +94,7 @@ export default function PreparationPage() {
       q.set('uploadId', p.upload_id)
       if (p.date_from) q.set('autoDateFrom', p.date_from)
       if (p.date_to) q.set('autoDateTo', p.date_to)
+      if (p.pattern_tag) q.set('autoPatternTag', p.pattern_tag)
       if (p.source_filename) q.set('sourceFilename', p.source_filename)
       navigate(`/pattern-monitor?${q.toString()}`)
     },
@@ -128,7 +129,9 @@ export default function PreparationPage() {
             <td>{j.prepared_rows || j.rows_total || 0}</td>
             <td>{j.available_for_pattern_monitor ? 'yes' : 'no'}</td>
             <td>
-              <button onClick={(e) => { e.stopPropagation(); run.mutate(j.upload_id) }} disabled={run.isPending || j.status === 'running' || j.status === 'queued'}>Запустить разметку</button>{' '}
+              <button onClick={(e) => { e.stopPropagation(); run.mutate(j.upload_id) }} disabled={run.isPending || j.status === 'running' || j.status === 'queued'}>
+                {run.isPending && run.variables === j.upload_id ? 'Разметка...' : 'Запустить разметку'}
+              </button>{' '}
               <button onClick={(e) => { e.stopPropagation(); openInMonitor.mutate(j.upload_id) }} disabled={!j.available_for_pattern_monitor}>Открыть в Pattern Monitor</button>
             </td>
           </tr>)}

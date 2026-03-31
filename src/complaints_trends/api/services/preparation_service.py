@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from ...config import ProjectConfig
+from ...pattern_monitor import run_pattern_monitor
 from ...prepare_dataset import prepare_dataset
 from ..schemas import (
     PatternMonitorPresetPayload,
@@ -135,6 +136,20 @@ class PreparationService:
 
             merged_rows = self.merge_prepared_upload_into_main(df, upload_id)
             complaints_rows = int(df["is_complaint_llm"].fillna(False).sum()) if "is_complaint_llm" in df.columns else 0
+            pattern_tag = upload_id
+
+            monitor_error = None
+            try:
+                run_pattern_monitor(
+                    self.cfg,
+                    tag=pattern_tag,
+                    label_source="llm",
+                    fit_tag="latest",
+                    date_from=date_min,
+                    date_to=date_max,
+                )
+            except Exception as e:
+                monitor_error = f"pattern_monitor_autorun_failed: {e}"
 
             current = self.get_preparation_job(upload_id).model_dump() if self.get_preparation_job(upload_id) else current
             current.update(
@@ -148,11 +163,16 @@ class PreparationService:
                     "date_max": date_max,
                     "output_prepared_parquet": str(prepared_path),
                     "merged_into_main": True,
-                    "available_for_pattern_monitor": True,
+                    "available_for_pattern_monitor": monitor_error is None,
+                    "pattern_monitor_tag": pattern_tag if monitor_error is None else None,
+                    "error_message": monitor_error,
                 }
             )
             self._upsert_job(current)
-            logs_path.write_text(f"prepared_rows={len(df)}\nmerged_main_rows={merged_rows}\n", encoding="utf-8")
+            logs_text = f"prepared_rows={len(df)}\nmerged_main_rows={merged_rows}\npattern_monitor_tag={pattern_tag}\n"
+            if monitor_error:
+                logs_text += f"{monitor_error}\n"
+            logs_path.write_text(logs_text, encoding="utf-8")
             return PreparationRunResponse(upload_id=upload_id, status="succeeded")
         except Exception as e:
             current = self.get_preparation_job(upload_id).model_dump() if self.get_preparation_job(upload_id) else current
@@ -204,6 +224,7 @@ class PreparationService:
                 date_from=job.date_min,
                 date_to=job.date_max,
                 upload_id=upload_id,
+                pattern_tag=str(getattr(job, "pattern_monitor_tag", None) or upload_id),
                 label_source="llm",
                 source_filename=job.original_filename,
             ),
