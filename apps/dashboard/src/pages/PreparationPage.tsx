@@ -22,7 +22,7 @@ type RunResp = { upload_id: string; status: string; error_message?: string | nul
 type PresetResp = {
   allowed: boolean
   reason?: string | null
-  pattern_monitor_preset?: { date_from?: string | null; date_to?: string | null; upload_id: string; pattern_tag?: string | null; label_source: string; source_filename?: string | null } | null
+  pattern_monitor_preset?: { date_from?: string | null; date_to?: string | null; month?: string | null; upload_id: string; pattern_tag?: string | null; label_source: string; source_filename?: string | null } | null
 }
 
 export default function PreparationPage() {
@@ -94,8 +94,10 @@ export default function PreparationPage() {
       q.set('uploadId', p.upload_id)
       if (p.date_from) q.set('autoDateFrom', p.date_from)
       if (p.date_to) q.set('autoDateTo', p.date_to)
+      if (p.month) q.set('autoMonth', p.month)
       if (p.pattern_tag) q.set('autoPatternTag', p.pattern_tag)
       if (p.source_filename) q.set('sourceFilename', p.source_filename)
+      q.set('fromPreparation', '1')
       navigate(`/pattern-monitor?${q.toString()}`)
     },
   })

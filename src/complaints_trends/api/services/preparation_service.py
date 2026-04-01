@@ -217,15 +217,31 @@ class PreparationService:
             return PatternMonitorPresetResponse(allowed=False, reason="upload_not_found", pattern_monitor_preset=None)
         if job.status != "succeeded" or not job.available_for_pattern_monitor:
             return PatternMonitorPresetResponse(allowed=False, reason="preparation_not_finished", pattern_monitor_preset=None)
+        target_month = (job.date_max or job.date_min or "")[:7] or None
+        if target_month is None:
+            return PatternMonitorPresetResponse(allowed=False, reason="upload_month_not_detected", pattern_monitor_preset=None)
+        monitor_tag = "mig_2025_q4"
+        try:
+            run_pattern_monitor(
+                self.cfg,
+                tag=monitor_tag,
+                label_source="pred",
+                fit_tag="latest",
+                month=target_month,
+                force_materialize=True,
+            )
+        except Exception as e:
+            return PatternMonitorPresetResponse(allowed=False, reason=f"pattern_monitor_run_failed: {e}", pattern_monitor_preset=None)
         return PatternMonitorPresetResponse(
             allowed=True,
             reason=None,
             pattern_monitor_preset=PatternMonitorPresetPayload(
                 date_from=job.date_min,
                 date_to=job.date_max,
+                month=target_month,
                 upload_id=upload_id,
-                pattern_tag=str(getattr(job, "pattern_monitor_tag", None) or upload_id),
-                label_source="llm",
+                pattern_tag=monitor_tag,
+                label_source="pred",
                 source_filename=job.original_filename,
             ),
         )

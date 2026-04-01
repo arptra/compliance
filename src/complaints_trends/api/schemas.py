@@ -319,6 +319,7 @@ class PreparationPreviewResponse(BaseModel):
 class PatternMonitorPresetPayload(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
+    month: str | None = None
     upload_id: str
     pattern_tag: str | None = None
     label_source: str = "llm"

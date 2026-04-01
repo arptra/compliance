@@ -38,7 +38,9 @@ export default function PatternMonitorPage() {
   const sourceFilename = sp.get('sourceFilename') || undefined
   const autoDateFrom = sp.get('autoDateFrom') || undefined
   const autoDateTo = sp.get('autoDateTo') || undefined
+  const autoMonth = sp.get('autoMonth') || undefined
   const autoPatternTag = sp.get('autoPatternTag') || undefined
+  const fromPreparation = sp.get('fromPreparation') === '1'
   const patternTag = uploadId ? (autoPatternTag || f.pattern_tag || 'latest') : (f.pattern_tag || 'latest')
 
   useEffect(() => {
@@ -53,13 +55,15 @@ export default function PatternMonitorPage() {
   const qs = useMemo(() => {
     const q = new URLSearchParams()
     q.set('pattern_tag', patternTag)
-    q.set('date_from', f.date_from || autoDateFrom || '')
-    q.set('date_to', f.date_to || autoDateTo || '')
+    const dateFrom = fromPreparation ? autoDateFrom : (f.date_from || autoDateFrom)
+    const dateTo = fromPreparation ? autoDateTo : (f.date_to || autoDateTo)
+    q.set('date_from', dateFrom || '')
+    q.set('date_to', dateTo || '')
     q.set('scoring_mode', scoringMode)
     if (uploadId) q.set('upload_id', uploadId)
-    for (const c of f.categories) q.append('category', c)
+    if (!fromPreparation) for (const c of f.categories) q.append('category', c)
     return q.toString()
-  }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode])
+  }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode, fromPreparation])
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(`/api/pattern-monitor/summary?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -67,7 +71,9 @@ export default function PatternMonitorPage() {
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
 
   const runMonitor = useMutation({
-    mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
+    mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: fromPreparation
+      ? { tag: patternTag, month: autoMonth, label_source: 'pred', force_materialize: true, fit_tag: 'latest' }
+      : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
@@ -79,7 +85,7 @@ export default function PatternMonitorPage() {
   const trainCalibrator = useMutation({ mutationFn: () => apiPost('/api/pattern-monitor/calibrator/train', { pattern_tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, activate_if_better: true }), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
   const activateVersion = useMutation({ mutationFn: (v: string) => apiPost(`/api/pattern-monitor/calibrator/${v}/activate`, {}), onSuccess: () => { qc.invalidateQueries({ queryKey: ['calibrator-versions'] }); qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
 
-  const clearUploadFilter = () => { const next = new URLSearchParams(sp); ['uploadId','sourceFilename','autoDateFrom','autoDateTo','autoPatternTag'].forEach((k) => next.delete(k)); setSp(next); navigate(`/pattern-monitor${next.toString() ? `?${next.toString()}` : ''}`) }
+  const clearUploadFilter = () => { const next = new URLSearchParams(sp); ['uploadId','sourceFilename','autoDateFrom','autoDateTo','autoMonth','autoPatternTag','fromPreparation'].forEach((k) => next.delete(k)); setSp(next); navigate(`/pattern-monitor${next.toString() ? `?${next.toString()}` : ''}`) }
 
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
