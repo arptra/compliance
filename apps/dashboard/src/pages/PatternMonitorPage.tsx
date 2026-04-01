@@ -56,15 +56,15 @@ export default function PatternMonitorPage() {
   const qs = useMemo(() => {
     const q = new URLSearchParams()
     q.set('pattern_tag', patternTag)
-    const dateFrom = fromPreparation ? autoDateFrom : (f.date_from || autoDateFrom)
-    const dateTo = fromPreparation ? autoDateTo : (f.date_to || autoDateTo)
+    const dateFrom = f.date_from || autoDateFrom
+    const dateTo = f.date_to || autoDateTo
     q.set('date_from', dateFrom || '')
     q.set('date_to', dateTo || '')
     q.set('scoring_mode', scoringMode)
     if (uploadId) q.set('upload_id', uploadId)
-    if (!fromPreparation) for (const c of f.categories) q.append('category', c)
+    for (const c of f.categories) q.append('category', c)
     return q.toString()
-  }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode, fromPreparation])
+  }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode])
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(`/api/pattern-monitor/summary?${qs}`), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(`/api/pattern-monitor/alerts?${qs}&top_n=300`), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -73,7 +73,9 @@ export default function PatternMonitorPage() {
 
   const runMonitor = useMutation({
     mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: fromPreparation
-      ? { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest' }
+      ? ((f.date_from || autoDateFrom || f.date_to || autoDateTo)
+          ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest' }
+          : { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest' })
       : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
