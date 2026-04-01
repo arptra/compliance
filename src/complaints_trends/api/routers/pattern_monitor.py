@@ -81,3 +81,8 @@ def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to:
     out["allowed"] = True
     out["reason"] = None
     return out
+
+
+@router.get("/run-output", response_model=AlertRowResponse)
+def run_output(pattern_tag: str = "latest", top_n: int = 300, services=Depends(get_service_container)):
+    return services["pattern_monitor"].run_output_rows(pattern_tag, top_n=top_n)

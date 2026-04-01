@@ -71,6 +71,7 @@ export default function PatternMonitorPage() {
   const summaryUrl = `/api/pattern-monitor/summary?${qs}`
   const alertsUrl = `/api/pattern-monitor/alerts?${qs}&top_n=300`
   const examplesUrl = `/api/pattern-monitor/examples?${qs}&top_n=300`
+  const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}&top_n=300`
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -80,6 +81,13 @@ export default function PatternMonitorPage() {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     enabled: summaryQ.data?.allowed !== false && !alertsQ.isLoading && (alertsQ.data?.rows?.length ?? 0) === 0,
+  })
+  const runOutputQ = useQuery({
+    queryKey: ['pm-run-output', patternTag],
+    queryFn: () => apiGet<AlertsResp>(runOutputUrl),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    enabled: !alertsQ.isLoading && (alertsQ.data?.rows?.length ?? 0) === 0 && !examplesQ.isLoading && (examplesQ.data?.rows?.length ?? 0) === 0,
   })
   const feedbackSummaryQ = useQuery({ queryKey: ['feedback-summary', patternTag], queryFn: () => apiGet<FeedbackSummary>(`/api/feedback/summary?pattern_tag=${patternTag}`), staleTime: 10_000 })
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
@@ -125,7 +133,9 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const tableRows = (alertsQ.data?.rows?.length ?? 0) > 0 ? (alertsQ.data?.rows ?? []) : (examplesQ.data?.rows ?? [])
+  const tableRows = (alertsQ.data?.rows?.length ?? 0) > 0
+    ? (alertsQ.data?.rows ?? [])
+    : ((examplesQ.data?.rows?.length ?? 0) > 0 ? (examplesQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? []))
 
   return <div>
     {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.{presetError ? <div style={{ color: '#991b1b', marginTop: 6 }}>Preset warning: {presetError}</div> : null}<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
@@ -146,6 +156,7 @@ export default function PatternMonitorPage() {
         API: <code>{alertsUrl}</code>
         {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /examples</span> : null}
+        {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) === 0 && (runOutputQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /run-output</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>

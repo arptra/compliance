@@ -366,3 +366,14 @@ class PatternMonitorService:
             "tag": resolved,
             "rows": self._json_records(response, int(params.get("top_n", 200))) if not response.empty else [],
         }
+
+    def run_output_rows(self, tag: str, top_n: int = 300) -> AlertRowResponse:
+        resolved = self._resolved_tag(tag)
+        scored = self.loader.load_pattern_monitor_scored(resolved)
+        if not scored.empty:
+            sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
+            if sort_col:
+                scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
+        return AlertRowResponse(rows=self._json_records(scored, top_n))
