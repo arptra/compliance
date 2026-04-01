@@ -106,7 +106,7 @@ def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, 
         try:
             df = pd.read_excel(export_path, sheet_name=sheet)
             if not df.empty:
-                date_col = next((c for c in ("date", "event_time", "event_date", "created_at")) if c in df.columns, None)
+                date_col = next((c for c in ("date", "event_time", "event_date", "created_at") if c in df.columns), None)
                 if date_col:
                     parsed = pd.to_datetime(df[date_col], errors="coerce")
                     if date_from:
