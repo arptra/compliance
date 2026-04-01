@@ -67,7 +67,7 @@ export default function PatternMonitorPage() {
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
 
   const runMonitor = useMutation({
-    mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: patternTag } }),
+    mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },

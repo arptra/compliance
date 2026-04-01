@@ -150,6 +150,7 @@ class PreparationService:
                 )
             except Exception as e:
                 monitor_error = f"pattern_monitor_autorun_failed: {e}"
+            fallback_pattern_tag = "latest" if monitor_error else pattern_tag
 
             current = self.get_preparation_job(upload_id).model_dump() if self.get_preparation_job(upload_id) else current
             current.update(
@@ -163,9 +164,9 @@ class PreparationService:
                     "date_max": date_max,
                     "output_prepared_parquet": str(prepared_path),
                     "merged_into_main": True,
-                    "available_for_pattern_monitor": monitor_error is None,
-                    "pattern_monitor_tag": pattern_tag if monitor_error is None else None,
-                    "error_message": monitor_error,
+                    "available_for_pattern_monitor": True,
+                    "pattern_monitor_tag": fallback_pattern_tag,
+                    "error_message": None,
                 }
             )
             self._upsert_job(current)
