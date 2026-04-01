@@ -73,7 +73,7 @@ export default function PatternMonitorPage() {
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
 
   const runMonitor = useMutation({
-    mutationFn: (trigger: 'manual_click' | 'auto_filter_change') => {
+    mutationFn: (trigger: 'manual_click') => {
       const params = fromPreparation
         ? ((f.date_from || autoDateFrom || f.date_to || autoDateTo)
             ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories, trigger }
@@ -91,26 +91,16 @@ export default function PatternMonitorPage() {
     },
   })
 
-  const triggerRun = useCallback((trigger: 'manual_click' | 'auto_filter_change') => {
+  const triggerRun = useCallback((trigger: 'manual_click') => {
     if (!runMonitor.isPending) runMonitor.mutate(trigger)
   }, [runMonitor])
 
-  const autoRunKey = useMemo(() => JSON.stringify({
-    patternTag,
-    date_from: f.date_from || autoDateFrom || '',
-    date_to: f.date_to || autoDateTo || '',
-    categories: [...f.categories].sort(),
-    uploadId: uploadId || '',
-    fromPreparation,
-    autoMonth: autoMonth || '',
-  }), [patternTag, f.date_from, f.date_to, f.categories, autoDateFrom, autoDateTo, uploadId, fromPreparation, autoMonth])
-
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      triggerRun('auto_filter_change')
-    }, 350)
-    return () => window.clearTimeout(t)
-  }, [autoRunKey, triggerRun])
+  const hasRunFilter = useMemo(() => {
+    const hasDateRange = Boolean((f.date_from || autoDateFrom) && (f.date_to || autoDateTo))
+    const hasCategories = f.categories.length > 0
+    const hasUploadContext = Boolean(uploadId)
+    return hasDateRange || hasCategories || hasUploadContext
+  }, [f.date_from, f.date_to, f.categories, autoDateFrom, autoDateTo, uploadId])
 
   const saveFeedback = useMutation({ mutationFn: (payload: Record<string, unknown>) => apiPost('/api/feedback', payload), onSuccess: () => qc.invalidateQueries({ queryKey: ['feedback-summary'] }) })
   const resetFeedbackOne = useMutation({ mutationFn: (payload: { row_id: string, pattern_tag: string }) => apiPost(`/api/feedback/reset?row_id=${encodeURIComponent(payload.row_id)}&pattern_tag=${encodeURIComponent(payload.pattern_tag)}`, {}), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['feedback-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
@@ -133,10 +123,11 @@ export default function PatternMonitorPage() {
         <select value={patternTag} onChange={(e) => f.set({ pattern_tag: e.target.value })}><option value='latest'>latest</option>{(tagsQ.data?.pattern_monitor_tags ?? []).map((t) => <option key={t} value={t}>{t}</option>)}{(tagsQ.data?.pattern_fit_tags ?? []).map((t) => <option key={`fit-${t}`} value={t}>{t} (fit)</option>)}</select>
         <ScoringModeSwitch value={scoringMode} disabledModes={alertsQ.data?.reranker_available ? [] : ['calibrated', 'reranked']} onChange={setScoringMode} />
         <label><input type='checkbox' checked={reviewMode} onChange={(e) => setReviewMode(e.target.checked)} /> Review mode</label>
-        <button onClick={() => triggerRun('manual_click')} disabled={runMonitor.isPending}>Запустить pattern-monitor</button>
+        <button onClick={() => triggerRun('manual_click')} disabled={runMonitor.isPending || !hasRunFilter}>Старт pattern-monitor</button>
         <button onClick={() => trainCalibrator.mutate()} disabled={trainCalibrator.isPending}>Train calibrator</button>
         {reviewMode && <button onClick={() => resetFeedbackAll.mutate()} disabled={resetFeedbackAll.isPending}>Сбросить все review</button>}
       </div>
+      {!hasRunFilter && <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Сначала выставьте фильтр (даты и/или категории), затем нажмите «Старт pattern-monitor».</div>}
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Run status: {runMonitor.isPending ? 'running…' : lastRunInfo}</div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
