@@ -97,7 +97,7 @@ def run_output_by_path(path: str, top_n: int | None = None, services=Depends(get
 
 
 @router.get("/top-alerts-excel", response_model=AlertRowResponse)
-def top_alerts_excel(pattern_tag: str = "latest", top_n: int | None = None, services=Depends(get_service_container)):
+def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, category: list[str] = Query(default_factory=list), top_n: int | None = None, services=Depends(get_service_container)):
     resolved = services["loader"].resolve_tag("pattern_monitor", pattern_tag)
     export_path = Path(services["cfg"].analysis.pattern_monitoring.exports_dir) / f"pattern_monitor_{resolved}.xlsx"
     if not export_path.exists():
@@ -105,6 +105,19 @@ def top_alerts_excel(pattern_tag: str = "latest", top_n: int | None = None, serv
     for sheet in ("top_alerts", "alert_examples"):
         try:
             df = pd.read_excel(export_path, sheet_name=sheet)
+            if not df.empty:
+                date_col = "date" if "date" in df.columns else ("event_time" if "event_time" in df.columns else None)
+                if date_col:
+                    parsed = pd.to_datetime(df[date_col], errors="coerce")
+                    if date_from:
+                        df = df[parsed >= pd.to_datetime(date_from, errors="coerce")]
+                    if date_to:
+                        dt_to = pd.to_datetime(date_to, errors="coerce")
+                        if pd.notna(dt_to) and "T" not in str(date_to) and " " not in str(date_to):
+                            dt_to = dt_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                        df = df[parsed <= dt_to]
+                if category and "category" in df.columns:
+                    df = df[df["category"].astype(str).isin([str(c) for c in category])]
             rows = services["pattern_monitor"]._json_records(df, top_n)
             return AlertRowResponse(rows=rows)
         except Exception:

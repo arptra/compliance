@@ -75,7 +75,7 @@ export default function PatternMonitorPage() {
   const examplesUrl = `/api/pattern-monitor/examples?${qs}`
   const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}`
   const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}` : ''
-  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?pattern_tag=${encodeURIComponent(patternTag)}`
+  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?${qs}`
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -101,7 +101,7 @@ export default function PatternMonitorPage() {
     enabled: Boolean(lastRunScoredPath),
   })
   const topAlertsExcelQ = useQuery({
-    queryKey: ['pm-top-alerts-excel', patternTag],
+    queryKey: ['pm-top-alerts-excel', qs],
     queryFn: () => apiGet<AlertsResp>(topAlertsExcelUrl),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
