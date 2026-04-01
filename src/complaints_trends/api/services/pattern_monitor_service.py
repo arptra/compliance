@@ -38,8 +38,11 @@ class PatternMonitorService:
                 out = out[out["date"] <= date_to]
         if params.get("category") and "category" in out.columns:
             out = out[out["category"].isin(params["category"])]
-        if params.get("upload_id") and "source_upload_id" in out.columns:
-            out = out[out["source_upload_id"].astype(str) == str(params["upload_id"])]
+        if params.get("upload_id"):
+            if "source_upload_id" in out.columns:
+                out = out[out["source_upload_id"].astype(str) == str(params["upload_id"])]
+            else:
+                return out.iloc[0:0].copy()
         if params.get("min_score") is not None:
             score_col = "row_score" if "row_score" in out.columns else ("score" if "score" in out.columns else None)
             if score_col:

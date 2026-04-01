@@ -123,7 +123,7 @@ export default function PatternMonitorPage() {
             const reasonValue = String(r.reason_code ?? '')
             const commentValue = String(r.comment ?? '')
             return <tr key={String(r.row_id ?? i)}>
-              <td>{i + 1}</td><td>{String(r.date ?? '')}</td><td>{String(r.category_label_ru ?? r.category ?? 'UNKNOWN')}</td><td>{String(r.subcategory_label_ru ?? r.subcategory ?? 'UNKNOWN')}</td><td>{String(r.pattern_like_score ?? r.row_score ?? '')}</td><td>{String(r.rerank_score ?? r.calibrated_score ?? '')}</td>
+              <td>{i + 1}</td><td>{String(r.event_time ?? r.date ?? '')}</td><td>{String(r.category_label_ru ?? r.category ?? 'UNKNOWN')}</td><td>{String(r.subcategory_label_ru ?? r.subcategory ?? 'UNKNOWN')}</td><td>{String(r.pattern_like_score ?? r.row_score ?? '')}</td><td>{String(r.rerank_score ?? r.calibrated_score ?? '')}</td>
               <td><button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>{preview || '—'}</button></td>
               {reviewMode && <><td><ReviewVerdictControl value={String(r.feedback_verdict ?? '')} onChange={(v) => onVerdict(r, v, reasonValue, commentValue)} /></td><td><ReviewReasonSelect value={reasonValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), v, commentValue)} /></td><td><ReviewCommentDialog value={commentValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), reasonValue, v)} /></td><td><button onClick={() => resetFeedbackOne.mutate({ row_id: String(r.row_id ?? ''), pattern_tag: patternTag })}>Сбросить</button></td></>}
             </tr>
