@@ -48,7 +48,7 @@ def summary(pattern_tag: str = "latest", date_from: str | None = None, date_to: 
 
 
 @router.get("/alerts", response_model=AlertRowResponse)
-def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, scoring_mode: str = "base", top_n: int = 200, services=Depends(get_service_container)):
+def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, scoring_mode: str = "base", top_n: int | None = None, services=Depends(get_service_container)):
     params = _params(**locals())
     params, allowed, _ = _apply_upload_preset(services, params)
     if not allowed:
@@ -75,7 +75,7 @@ def state(pattern_tag: str = "latest", date_from: str | None = None, date_to: st
 
 
 @router.get("/examples")
-def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, top_n: int = 50, services=Depends(get_service_container)):
+def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, top_n: int | None = None, services=Depends(get_service_container)):
     params = _params(**locals())
     params, allowed, reason = _apply_upload_preset(services, params)
     if not allowed:
@@ -87,17 +87,17 @@ def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to:
 
 
 @router.get("/run-output", response_model=AlertRowResponse)
-def run_output(pattern_tag: str = "latest", top_n: int = 300, services=Depends(get_service_container)):
+def run_output(pattern_tag: str = "latest", top_n: int | None = None, services=Depends(get_service_container)):
     return services["pattern_monitor"].run_output_rows(pattern_tag, top_n=top_n)
 
 
 @router.get("/run-output-by-path", response_model=AlertRowResponse)
-def run_output_by_path(path: str, top_n: int = 300, services=Depends(get_service_container)):
+def run_output_by_path(path: str, top_n: int | None = None, services=Depends(get_service_container)):
     return services["pattern_monitor"].run_output_rows_by_path(path, top_n=top_n)
 
 
 @router.get("/top-alerts-excel", response_model=AlertRowResponse)
-def top_alerts_excel(pattern_tag: str = "latest", top_n: int = 300, services=Depends(get_service_container)):
+def top_alerts_excel(pattern_tag: str = "latest", top_n: int | None = None, services=Depends(get_service_container)):
     resolved = services["loader"].resolve_tag("pattern_monitor", pattern_tag)
     export_path = Path(services["cfg"].analysis.pattern_monitoring.exports_dir) / f"pattern_monitor_{resolved}.xlsx"
     if not export_path.exists():

@@ -71,11 +71,11 @@ export default function PatternMonitorPage() {
   }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode])
 
   const summaryUrl = `/api/pattern-monitor/summary?${qs}`
-  const alertsUrl = `/api/pattern-monitor/alerts?${qs}&top_n=300`
-  const examplesUrl = `/api/pattern-monitor/examples?${qs}&top_n=300`
-  const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}&top_n=300`
-  const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}&top_n=300` : ''
-  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?pattern_tag=${encodeURIComponent(patternTag)}&top_n=500`
+  const alertsUrl = `/api/pattern-monitor/alerts?${qs}`
+  const examplesUrl = `/api/pattern-monitor/examples?${qs}`
+  const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}`
+  const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}` : ''
+  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?pattern_tag=${encodeURIComponent(patternTag)}`
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })

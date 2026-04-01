@@ -319,7 +319,9 @@ class PatternMonitorService:
             scored = self._with_ru_labels(scored)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
-        rows = self._json_records(scored, int(params.get("top_n", 200)))
+        top_n_raw = params.get("top_n")
+        limit = int(top_n_raw) if top_n_raw not in (None, "", 0, "0") else None
+        rows = self._json_records(scored, limit)
         return AlertRowResponse(
             rows=rows,
             scoring_mode_requested=requested_mode,
@@ -365,10 +367,10 @@ class PatternMonitorService:
 
         return {
             "tag": resolved,
-            "rows": self._json_records(response, int(params.get("top_n", 200))) if not response.empty else [],
+            "rows": self._json_records(response, int(params["top_n"]) if params.get("top_n") not in (None, "", 0, "0") else None) if not response.empty else [],
         }
 
-    def run_output_rows(self, tag: str, top_n: int = 300) -> AlertRowResponse:
+    def run_output_rows(self, tag: str, top_n: int | None = None) -> AlertRowResponse:
         resolved = self._resolved_tag(tag)
         scored = self.loader.load_pattern_monitor_scored(resolved)
         if not scored.empty:
@@ -383,7 +385,7 @@ class PatternMonitorService:
             scored = self._with_ru_labels(scored)
         return AlertRowResponse(rows=self._json_records(scored, top_n))
 
-    def run_output_rows_by_path(self, path: str, top_n: int = 300) -> AlertRowResponse:
+    def run_output_rows_by_path(self, path: str, top_n: int | None = None) -> AlertRowResponse:
         p = Path(path)
         if not p.exists() or p.suffix != ".parquet":
             return AlertRowResponse(rows=[])
