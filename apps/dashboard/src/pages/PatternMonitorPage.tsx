@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
@@ -31,6 +31,7 @@ export default function PatternMonitorPage() {
   const [dialogPreview, setDialogPreview] = useState<string | null>(null)
   const [reviewMode, setReviewMode] = useState(false)
   const [scoringMode, setScoringMode] = useState<'base'|'calibrated'|'reranked'>('base')
+  const [lastRunInfo, setLastRunInfo] = useState<string>('not_started')
   const [sp, setSp] = useSearchParams()
   const navigate = useNavigate()
 
@@ -72,15 +73,27 @@ export default function PatternMonitorPage() {
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
 
   const runMonitor = useMutation({
-    mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: fromPreparation
-      ? ((f.date_from || autoDateFrom || f.date_to || autoDateTo)
-          ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories }
-          : { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories })
-      : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest', categories: f.categories } }),
+    mutationFn: (trigger: 'manual_click' | 'auto_filter_change') => {
+      const params = fromPreparation
+        ? ((f.date_from || autoDateFrom || f.date_to || autoDateTo)
+            ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories, trigger }
+            : { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories, trigger })
+        : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest', categories: f.categories, trigger }
+      console.info('[PatternMonitorPage] run pattern-monitor', params)
+      return apiPost<RunResp>('/api/runs/pattern-monitor', { params })
+    },
     onSuccess: async () => {
+      setLastRunInfo(`success @ ${new Date().toISOString()}`)
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
+    onError: (e) => {
+      setLastRunInfo(`error @ ${new Date().toISOString()} :: ${String(e)}`)
+    },
   })
+
+  const triggerRun = useCallback((trigger: 'manual_click' | 'auto_filter_change') => {
+    if (!runMonitor.isPending) runMonitor.mutate(trigger)
+  }, [runMonitor])
 
   const autoRunKey = useMemo(() => JSON.stringify({
     patternTag,
@@ -94,11 +107,10 @@ export default function PatternMonitorPage() {
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      if (!runMonitor.isPending) runMonitor.mutate()
+      triggerRun('auto_filter_change')
     }, 350)
     return () => window.clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRunKey])
+  }, [autoRunKey, triggerRun])
 
   const saveFeedback = useMutation({ mutationFn: (payload: Record<string, unknown>) => apiPost('/api/feedback', payload), onSuccess: () => qc.invalidateQueries({ queryKey: ['feedback-summary'] }) })
   const resetFeedbackOne = useMutation({ mutationFn: (payload: { row_id: string, pattern_tag: string }) => apiPost(`/api/feedback/reset?row_id=${encodeURIComponent(payload.row_id)}&pattern_tag=${encodeURIComponent(payload.pattern_tag)}`, {}), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['feedback-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
@@ -121,10 +133,11 @@ export default function PatternMonitorPage() {
         <select value={patternTag} onChange={(e) => f.set({ pattern_tag: e.target.value })}><option value='latest'>latest</option>{(tagsQ.data?.pattern_monitor_tags ?? []).map((t) => <option key={t} value={t}>{t}</option>)}{(tagsQ.data?.pattern_fit_tags ?? []).map((t) => <option key={`fit-${t}`} value={t}>{t} (fit)</option>)}</select>
         <ScoringModeSwitch value={scoringMode} disabledModes={alertsQ.data?.reranker_available ? [] : ['calibrated', 'reranked']} onChange={setScoringMode} />
         <label><input type='checkbox' checked={reviewMode} onChange={(e) => setReviewMode(e.target.checked)} /> Review mode</label>
-        <button onClick={() => runMonitor.mutate()} disabled={runMonitor.isPending}>Запустить pattern-monitor</button>
+        <button onClick={() => triggerRun('manual_click')} disabled={runMonitor.isPending}>Запустить pattern-monitor</button>
         <button onClick={() => trainCalibrator.mutate()} disabled={trainCalibrator.isPending}>Train calibrator</button>
         {reviewMode && <button onClick={() => resetFeedbackAll.mutate()} disabled={resetFeedbackAll.isPending}>Сбросить все review</button>}
       </div>
+      <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Run status: {runMonitor.isPending ? 'running…' : lastRunInfo}</div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
 
