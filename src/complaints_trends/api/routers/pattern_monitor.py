@@ -18,7 +18,11 @@ def _apply_upload_preset(services: dict, params: dict) -> tuple[dict, bool, str 
         return params, True, None
     preset = services["preparation"].build_pattern_monitor_preset(upload_id)
     if not preset.allowed:
-        return params, False, preset.reason
+        # If upload preset is stale/invalid, fallback to regular monitor query
+        # instead of returning empty dashboard payloads.
+        params = dict(params)
+        params.pop("upload_id", None)
+        return params, True, f"upload_preset_ignored: {preset.reason}"
     pp = preset.pattern_monitor_preset
     if pp:
         params = dict(params)
@@ -35,6 +39,8 @@ def summary(pattern_tag: str = "latest", date_from: str | None = None, date_to: 
         return PatternMonitorSummaryResponse(tag=pattern_tag, allowed=False, reason=reason, upload_id=upload_id, summary=PatternMonitorSummaryPayload())
     result = services["pattern_monitor"].summary(pattern_tag, params)
     result.upload_id = upload_id
+    if reason:
+        result.reason = reason
     return result
 
 
