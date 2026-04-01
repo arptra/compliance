@@ -42,7 +42,10 @@ class PatternMonitorService:
             if "source_upload_id" in out.columns:
                 out = out[out["source_upload_id"].astype(str) == str(params["upload_id"])]
             else:
-                return out.iloc[0:0].copy()
+                # Some historical/scored artifacts do not carry source_upload_id.
+                # In that case do not hard-drop all rows, otherwise dashboard shows
+                # empty results while underlying pattern_monitor outputs contain data.
+                out = out
         if params.get("min_score") is not None:
             score_col = "row_score" if "row_score" in out.columns else ("score" if "score" in out.columns else None)
             if score_col:

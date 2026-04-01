@@ -34,3 +34,16 @@ def test_alerts_returns_scored_rows_when_no_alert_flags_present():
 
     assert len(resp.rows) == 2
     assert all(bool(r.get("no_alerts_in_selection")) for r in resp.rows)
+
+
+def test_alerts_does_not_drop_rows_when_upload_filter_column_missing():
+    scored = pd.DataFrame(
+        [
+            {"row_id": "r1", "date": "2025-12-01", "category": "login", "pattern_like_score": 0.9, "is_pattern_alert": True, "row_dialog": "a"},
+        ]
+    )
+    svc = PatternMonitorService(loader=_FakeLoader(scored))
+
+    resp = svc.alerts("latest", {"upload_id": "upload-123", "top_n": 50})
+
+    assert len(resp.rows) == 1
