@@ -102,24 +102,24 @@ def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, 
     export_path = Path(services["cfg"].analysis.pattern_monitoring.exports_dir) / f"pattern_monitor_{resolved}.xlsx"
     if not export_path.exists():
         return AlertRowResponse(rows=[])
-    for sheet in ("top_alerts", "alert_examples"):
-        try:
-            df = pd.read_excel(export_path, sheet_name=sheet)
-            if not df.empty:
-                date_col = next((c for c in ("date", "event_time", "event_date", "created_at") if c in df.columns), None)
-                if date_col:
-                    parsed = pd.to_datetime(df[date_col], errors="coerce")
-                    if date_from:
-                        df = df[parsed >= pd.to_datetime(date_from, errors="coerce")]
-                    if date_to:
-                        dt_to = pd.to_datetime(date_to, errors="coerce")
-                        if pd.notna(dt_to) and "T" not in str(date_to) and " " not in str(date_to):
-                            dt_to = dt_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-                        df = df[parsed <= dt_to]
-                if category and "category" in df.columns:
-                    df = df[df["category"].astype(str).isin([str(c) for c in category])]
-            rows = services["pattern_monitor"]._json_records(df, top_n)
-            return AlertRowResponse(rows=rows)
-        except Exception:
-            continue
-    return AlertRowResponse(rows=[])
+    try:
+        df = pd.read_excel(export_path, sheet_name="alert_examples")
+    except Exception:
+        return AlertRowResponse(rows=[])
+    if not df.empty:
+        if "is_pattern_alert" in df.columns:
+            df = df[df["is_pattern_alert"] == True]
+        date_col = next((c for c in ("date", "event_time", "event_date", "created_at") if c in df.columns), None)
+        if date_col:
+            parsed = pd.to_datetime(df[date_col], errors="coerce")
+            if date_from:
+                df = df[parsed >= pd.to_datetime(date_from, errors="coerce")]
+            if date_to:
+                dt_to = pd.to_datetime(date_to, errors="coerce")
+                if pd.notna(dt_to) and "T" not in str(date_to) and " " not in str(date_to):
+                    dt_to = dt_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                df = df[parsed <= dt_to]
+        if category and "category" in df.columns:
+            df = df[df["category"].astype(str).isin([str(c) for c in category])]
+    rows = services["pattern_monitor"]._json_records(df, top_n)
+    return AlertRowResponse(rows=rows)
