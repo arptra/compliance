@@ -61,3 +61,15 @@ def test_run_pattern_monitor_accepts_separate_fit_tag(tmp_path: Path):
     body = r.json()
     assert body["status"] == "success"
     assert "scored" in body["outputs"]
+
+
+def test_run_pattern_monitor_returns_500_on_failure(tmp_path: Path):
+    cfg_path = _setup(tmp_path)
+    client = TestClient(create_app(str(cfg_path)))
+    r = client.post(
+        "/api/runs/pattern-monitor",
+        json={"params": {"tag": "monitorB", "fit_tag": "missing_fit_bundle", "label_source": "llm", "date_from": "2025-03-01", "date_to": "2025-03-31"}},
+    )
+    assert r.status_code == 500
+    body = r.json()
+    assert "detail" in body
