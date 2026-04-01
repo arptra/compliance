@@ -74,6 +74,7 @@ export default function PatternMonitorPage() {
   const examplesUrl = `/api/pattern-monitor/examples?${qs}&top_n=300`
   const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}&top_n=300`
   const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}&top_n=300` : ''
+  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?pattern_tag=${encodeURIComponent(patternTag)}&top_n=500`
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -97,6 +98,12 @@ export default function PatternMonitorPage() {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     enabled: Boolean(lastRunScoredPath),
+  })
+  const topAlertsExcelQ = useQuery({
+    queryKey: ['pm-top-alerts-excel', patternTag],
+    queryFn: () => apiGet<AlertsResp>(topAlertsExcelUrl),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
   const feedbackSummaryQ = useQuery({ queryKey: ['feedback-summary', patternTag], queryFn: () => apiGet<FeedbackSummary>(`/api/feedback/summary?pattern_tag=${patternTag}`), staleTime: 10_000 })
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
@@ -143,11 +150,13 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const tableRows = (alertsQ.data?.rows?.length ?? 0) > 0
-    ? (alertsQ.data?.rows ?? [])
-    : ((examplesQ.data?.rows?.length ?? 0) > 0
-      ? (examplesQ.data?.rows ?? [])
-      : ((runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? [])))
+  const tableRows = (topAlertsExcelQ.data?.rows?.length ?? 0) > 0
+    ? (topAlertsExcelQ.data?.rows ?? [])
+    : ((alertsQ.data?.rows?.length ?? 0) > 0
+      ? (alertsQ.data?.rows ?? [])
+      : ((examplesQ.data?.rows?.length ?? 0) > 0
+        ? (examplesQ.data?.rows ?? [])
+        : ((runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? []))))
 
   return <div>
     {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.{presetError ? <div style={{ color: '#991b1b', marginTop: 6 }}>Preset warning: {presetError}</div> : null}<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
@@ -168,6 +177,7 @@ export default function PatternMonitorPage() {
         API: <code>{alertsUrl}</code>
         {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /examples</span> : null}
+        {(topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? <span> | source: /top-alerts-excel</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) === 0 && (runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /run-output-by-path</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) === 0 && (runOutputQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /run-output</span> : null}
       </div>

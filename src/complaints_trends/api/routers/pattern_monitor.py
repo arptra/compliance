@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
 from ..deps import get_service_container
@@ -91,3 +94,19 @@ def run_output(pattern_tag: str = "latest", top_n: int = 300, services=Depends(g
 @router.get("/run-output-by-path", response_model=AlertRowResponse)
 def run_output_by_path(path: str, top_n: int = 300, services=Depends(get_service_container)):
     return services["pattern_monitor"].run_output_rows_by_path(path, top_n=top_n)
+
+
+@router.get("/top-alerts-excel", response_model=AlertRowResponse)
+def top_alerts_excel(pattern_tag: str = "latest", top_n: int = 300, services=Depends(get_service_container)):
+    resolved = services["loader"].resolve_tag("pattern_monitor", pattern_tag)
+    export_path = Path(services["cfg"].analysis.pattern_monitoring.exports_dir) / f"pattern_monitor_{resolved}.xlsx"
+    if not export_path.exists():
+        return AlertRowResponse(rows=[])
+    for sheet in ("top_alerts", "alert_examples"):
+        try:
+            df = pd.read_excel(export_path, sheet_name=sheet)
+            rows = services["pattern_monitor"]._json_records(df, top_n)
+            return AlertRowResponse(rows=rows)
+        except Exception:
+            continue
+    return AlertRowResponse(rows=[])
