@@ -3,9 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-import os
-import subprocess
-import sys
+import shutil
 from typing import Any
 
 import pandas as pd
@@ -43,35 +41,15 @@ class PreparationService:
         prev = logs_path.read_text(encoding="utf-8") if logs_path.exists() else ""
         logs_path.write_text(prev + text, encoding="utf-8")
 
-    def _run_pattern_monitor_cli(self, upload_id: str, tag: str, month: str, label_source: str = "llm") -> tuple[bool, str | None]:
-        cmd = [
-            sys.executable,
-            "-m",
-            "complaints_trends.cli",
-            "pattern-monitor",
-            "--config",
-            "configs/project.yaml",
-            "--tag",
-            tag,
-            "--month",
-            month,
-            "--label-source",
-            label_source,
-            "--force-materialize",
-        ]
-        self._append_log(upload_id, f"\n[pattern-monitor-cli] {' '.join(cmd)}\n")
-        env = dict(os.environ)
-        root = self._repo_root()
-        src_path = str(root / "src")
-        env["PYTHONPATH"] = f"{src_path}:{env.get('PYTHONPATH', '')}" if env.get("PYTHONPATH") else src_path
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, env=env)
-        if proc.stdout:
-            self._append_log(upload_id, f"[stdout]\n{proc.stdout}\n")
-        if proc.stderr:
-            self._append_log(upload_id, f"[stderr]\n{proc.stderr}\n")
-        if proc.returncode != 0:
-            return False, f"pattern_monitor_cli_failed(code={proc.returncode})"
-        return True, None
+    def _cleanup_old_jobs(self, keep_upload_id: str) -> None:
+        rows = [r for r in self._load_registry() if str(r.get("upload_id")) == keep_upload_id]
+        self._save_registry(rows)
+        for p in self.base_dir.iterdir():
+            if not p.is_dir():
+                continue
+            if p.name == keep_upload_id:
+                continue
+            shutil.rmtree(p, ignore_errors=True)
 
     def _load_registry(self) -> list[dict[str, Any]]:
         if not self.registry_path.exists():
@@ -90,6 +68,7 @@ class PreparationService:
 
     def create_upload_job(self, filename: str, content: bytes) -> PreparationUploadResponse:
         upload_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        self._cleanup_old_jobs(upload_id)
         d = self.base_dir / upload_id
         d.mkdir(parents=True, exist_ok=True)
         ext = Path(filename).suffix or ".xlsx"
@@ -264,9 +243,29 @@ class PreparationService:
         if target_month is None:
             return PatternMonitorPresetResponse(allowed=False, reason="upload_month_not_detected", pattern_monitor_preset=None)
         monitor_tag = f"prep_{upload_id}"
-        ok, reason = self._run_pattern_monitor_cli(upload_id=upload_id, tag=monitor_tag, month=target_month, label_source="llm")
-        if not ok:
-            return PatternMonitorPresetResponse(allowed=False, reason=reason, pattern_monitor_preset=None)
+        try:
+            scored_path, state_path, report_path = run_pattern_monitor(
+                self.cfg,
+                tag=monitor_tag,
+                label_source="llm",
+                fit_tag="latest",
+                month=target_month,
+                force_materialize=True,
+            )
+            source_month_file = Path(self.cfg.analysis.pattern_monitoring.interim_dir) / f"month_{target_month}.parquet"
+            self._append_log(
+                upload_id,
+                (
+                    f"\n[pattern-monitor-internal] tag={monitor_tag} month={target_month} label_source=llm force_materialize=true\n"
+                    f"source_month_file={source_month_file}\n"
+                    f"scored_rows_file={scored_path}\n"
+                    f"state_file={state_path}\n"
+                    f"report_file={report_path}\n"
+                ),
+            )
+        except Exception as e:
+            self._append_log(upload_id, f"\n[pattern-monitor-internal-error] {e}\n")
+            return PatternMonitorPresetResponse(allowed=False, reason=f"pattern_monitor_run_failed: {e}", pattern_monitor_preset=None)
         return PatternMonitorPresetResponse(
             allowed=True,
             reason=None,
