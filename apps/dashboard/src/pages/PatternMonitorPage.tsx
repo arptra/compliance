@@ -34,6 +34,7 @@ export default function PatternMonitorPage() {
   const [scoringMode, setScoringMode] = useState<'base'|'calibrated'|'reranked'>('base')
   const [lastRunInfo, setLastRunInfo] = useState<string>('not_started')
   const [lastRunScoredPath, setLastRunScoredPath] = useState<string>('')
+  const [tableLimit, setTableLimit] = useState<'all' | 10 | 20 | 100>('all')
   const [sp, setSp] = useSearchParams()
   const navigate = useNavigate()
 
@@ -157,8 +158,21 @@ export default function PatternMonitorPage() {
       : ((examplesQ.data?.rows?.length ?? 0) > 0
         ? (examplesQ.data?.rows ?? [])
         : ((runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? []))))
+  const visibleRows = tableLimit === 'all' ? tableRows : tableRows.slice(0, tableLimit)
 
   return <div>
+    {runMonitor.isPending && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.45)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className='card' style={{ width: 420, textAlign: 'center' }}>
+          <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>Идет поиск аномальных жалоб…</div>
+          <div style={{ height: 8, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+            <div style={{ width: '40%', height: '100%', background: '#2563eb', animation: 'pmPulse 1.1s ease-in-out infinite' }} />
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>Пожалуйста подождите, обновляем Pattern Monitor</div>
+        </div>
+      </div>
+    )}
+    <style>{`@keyframes pmPulse {0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}`}</style>
     {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.{presetError ? <div style={{ color: '#991b1b', marginTop: 6 }}>Preset warning: {presetError}</div> : null}<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
 
     <div className='card'>
@@ -197,10 +211,19 @@ export default function PatternMonitorPage() {
 
     <div className='card' style={{ marginTop: 12 }}>
       <h3>Найденные аномальные жалобы</h3>
+      <div className='filters' style={{ marginBottom: 8 }}>
+        <label>Показывать строк:</label>
+        <select value={String(tableLimit)} onChange={(e) => setTableLimit(e.target.value === 'all' ? 'all' : Number(e.target.value) as 10 | 20 | 100)}>
+          <option value='all'>Все</option>
+          <option value='10'>10</option>
+          <option value='20'>20</option>
+          <option value='100'>100</option>
+        </select>
+      </div>
       {!alertsQ.isLoading && <table className='table'>
         <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
-          {tableRows.map((r, i) => {
+          {visibleRows.map((r, i) => {
             const dialog = String(r.row_dialog ?? r.dialog_text ?? '')
             const preview = dialog.length > 120 ? `${dialog.slice(0, 120)}…` : dialog
             const reasonValue = String(r.reason_code ?? '')
