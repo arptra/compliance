@@ -31,6 +31,14 @@ export default function PreparationPage() {
   const [file, setFile] = useState<File | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
+  const upsertLocalJob = (job: Job) => {
+    qc.setQueryData<JobsResp>(['prep-jobs'], (prev) => {
+      const rows = prev?.jobs ?? []
+      const rest = rows.filter((r) => r.upload_id !== job.upload_id)
+      return { jobs: [job, ...rest] }
+    })
+  }
+
   const jobsQ = useQuery({
     queryKey: ['prep-jobs'],
     queryFn: () => apiGet<JobsResp>('/api/preparation/jobs?limit=40'),
@@ -48,8 +56,18 @@ export default function PreparationPage() {
       return apiPostForm<UploadResp>('/api/preparation/upload', form)
     },
     onSuccess: async (d) => {
+      upsertLocalJob({
+        upload_id: d.upload_id,
+        original_filename: d.filename,
+        uploaded_at: d.uploaded_at,
+        status: 'uploaded',
+        rows_total: 0,
+        prepared_rows: 0,
+        available_for_pattern_monitor: false,
+      })
       setSelectedId(d.upload_id)
       await qc.invalidateQueries({ queryKey: ['prep-jobs'] })
+      await jobsQ.refetch()
     },
   })
 
@@ -67,6 +85,7 @@ export default function PreparationPage() {
     onSuccess: async (d) => {
       setSelectedId(d.upload_id)
       await qc.invalidateQueries({ queryKey: ['prep-jobs'] })
+      await jobsQ.refetch()
     },
   })
 
@@ -80,6 +99,7 @@ export default function PreparationPage() {
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['prep-jobs'] })
+      await jobsQ.refetch()
     },
   })
 
@@ -88,17 +108,20 @@ export default function PreparationPage() {
   const openInMonitor = useMutation({
     mutationFn: (upload_id: string) => apiPost<PresetResp>(`/api/preparation/jobs/${encodeURIComponent(upload_id)}/open-pattern-monitor`, {}),
     onSuccess: (d) => {
-      if (!d.allowed || !d.pattern_monitor_preset) return
-      const p = d.pattern_monitor_preset
       const q = new URLSearchParams()
-      q.set('uploadId', p.upload_id)
-      if (p.date_from) q.set('autoDateFrom', p.date_from)
-      if (p.date_to) q.set('autoDateTo', p.date_to)
-      if (p.month) q.set('autoMonth', p.month)
-      if (p.pattern_tag) q.set('autoPatternTag', p.pattern_tag)
-      if (p.source_filename) q.set('sourceFilename', p.source_filename)
+      const p = d.pattern_monitor_preset
+      if (p?.upload_id) q.set('uploadId', p.upload_id)
+      if (p?.date_from) q.set('autoDateFrom', p.date_from)
+      if (p?.date_to) q.set('autoDateTo', p.date_to)
+      if (p?.month) q.set('autoMonth', p.month)
+      if (p?.pattern_tag) q.set('autoPatternTag', p.pattern_tag)
+      if (p?.source_filename) q.set('sourceFilename', p.source_filename)
+      if (!d.allowed) q.set('presetError', d.reason ?? 'pattern_monitor_preset_failed')
       q.set('fromPreparation', '1')
       navigate(`/pattern-monitor?${q.toString()}`)
+    },
+    onError: () => {
+      navigate('/pattern-monitor?fromPreparation=1&presetError=open_pattern_monitor_failed')
     },
   })
 
@@ -134,7 +157,9 @@ export default function PreparationPage() {
               <button onClick={(e) => { e.stopPropagation(); run.mutate(j.upload_id) }} disabled={run.isPending || j.status === 'running' || j.status === 'queued'}>
                 {run.isPending && run.variables === j.upload_id ? 'Разметка...' : 'Запустить разметку'}
               </button>{' '}
-              <button onClick={(e) => { e.stopPropagation(); openInMonitor.mutate(j.upload_id) }} disabled={!j.available_for_pattern_monitor}>Открыть в Pattern Monitor</button>
+              <button onClick={(e) => { e.stopPropagation(); openInMonitor.mutate(j.upload_id) }} disabled={!j.available_for_pattern_monitor || openInMonitor.isPending}>
+                {openInMonitor.isPending ? 'Открываем...' : 'Открыть в Pattern Monitor'}
+              </button>
             </td>
           </tr>)}
         </tbody>

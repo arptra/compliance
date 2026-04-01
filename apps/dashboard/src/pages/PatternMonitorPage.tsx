@@ -41,6 +41,7 @@ export default function PatternMonitorPage() {
   const autoMonth = sp.get('autoMonth') || undefined
   const autoPatternTag = sp.get('autoPatternTag') || undefined
   const fromPreparation = sp.get('fromPreparation') === '1'
+  const presetError = sp.get('presetError') || undefined
   const patternTag = uploadId ? (autoPatternTag || f.pattern_tag || 'latest') : (f.pattern_tag || 'latest')
 
   useEffect(() => {
@@ -92,7 +93,7 @@ export default function PatternMonitorPage() {
   }
 
   return <div>
-    {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
+    {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.{presetError ? <div style={{ color: '#991b1b', marginTop: 6 }}>Preset warning: {presetError}</div> : null}<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
 
     <div className='card'>
       <h3>Pattern Monitor: модель и период</h3>
