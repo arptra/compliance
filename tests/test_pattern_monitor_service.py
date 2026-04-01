@@ -27,7 +27,7 @@ class _FakeLoader:
         return pd.DataFrame()
 
 
-def test_alerts_returns_scored_rows_when_no_alert_flags_present():
+def test_alerts_returns_empty_when_no_alert_flags_present():
     scored = pd.DataFrame(
         [
             {"row_id": "r1", "date": "2025-12-01", "category": "login", "pattern_like_score": 0.9, "is_pattern_alert": False, "row_dialog": "a"},
@@ -38,8 +38,7 @@ def test_alerts_returns_scored_rows_when_no_alert_flags_present():
 
     resp = svc.alerts("latest", {"top_n": 50})
 
-    assert len(resp.rows) == 2
-    assert all(bool(r.get("no_alerts_in_selection")) for r in resp.rows)
+    assert len(resp.rows) == 0
 
 
 def test_alerts_does_not_drop_rows_when_upload_filter_column_missing():

@@ -284,16 +284,9 @@ class PatternMonitorService:
     def alerts(self, tag: str, params: dict) -> AlertRowResponse:
         resolved = self._resolved_tag(tag)
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
-        had_alert_rows = False
         if not scored.empty:
             alert_mask = self._alert_mask(scored)
-            had_alert_rows = bool(alert_mask.any())
-            if had_alert_rows:
-                scored = scored[alert_mask]
-            else:
-                scored = scored.copy()
-                if "is_pattern_alert" not in scored.columns:
-                    scored["is_pattern_alert"] = False
+            scored = scored[alert_mask]
 
         requested_mode = params.get("scoring_mode") or "base"
         effective_mode = "base"
@@ -313,8 +306,6 @@ class PatternMonitorService:
             sort_col = "rerank_score" if effective_mode == "reranked" and "rerank_score" in scored.columns else ("calibrated_score" if effective_mode == "calibrated" and "calibrated_score" in scored.columns else ("pattern_like_score" if "pattern_like_score" in scored.columns else "row_score"))
             if sort_col in scored.columns:
                 scored = scored.sort_values(sort_col, ascending=False)
-            if not had_alert_rows:
-                scored["no_alerts_in_selection"] = True
             scored = self._with_row_dialog(scored)
             scored = self._with_ru_labels(scored)
 
@@ -374,9 +365,7 @@ class PatternMonitorService:
         resolved = self._resolved_tag(tag)
         scored = self.loader.load_pattern_monitor_scored(resolved)
         if not scored.empty:
-            mask = self._alert_mask(scored)
-            if bool(mask.any()):
-                scored = scored[mask]
+            scored = scored[self._alert_mask(scored)]
         if not scored.empty:
             sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
             if sort_col:
@@ -390,6 +379,8 @@ class PatternMonitorService:
         if not p.exists() or p.suffix != ".parquet":
             return AlertRowResponse(rows=[])
         scored = self.loader.read_parquet(p)
+        if not scored.empty:
+            scored = scored[self._alert_mask(scored)]
         if not scored.empty:
             sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
             if sort_col:
