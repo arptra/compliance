@@ -225,7 +225,7 @@ class PreparationService:
             run_pattern_monitor(
                 self.cfg,
                 tag=monitor_tag,
-                label_source="pred",
+                label_source="llm",
                 fit_tag="latest",
                 month=target_month,
                 force_materialize=True,
@@ -241,7 +241,7 @@ class PreparationService:
                 month=target_month,
                 upload_id=upload_id,
                 pattern_tag=monitor_tag,
-                label_source="pred",
+                label_source="llm",
                 source_filename=job.original_filename,
             ),
         )

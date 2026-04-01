@@ -72,7 +72,7 @@ export default function PatternMonitorPage() {
 
   const runMonitor = useMutation({
     mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: fromPreparation
-      ? { tag: patternTag, month: autoMonth, label_source: 'pred', force_materialize: true, fit_tag: 'latest' }
+      ? { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest' }
       : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
