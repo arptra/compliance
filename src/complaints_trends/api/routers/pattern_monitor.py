@@ -118,10 +118,6 @@ def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, 
                         df = df[parsed <= dt_to]
                 if category and "category" in df.columns:
                     df = df[df["category"].astype(str).isin([str(c) for c in category])]
-                if "is_pattern_alert" in df.columns:
-                    df = df[df["is_pattern_alert"] == True]
-                else:
-                    df = df.iloc[0:0].copy()
             rows = services["pattern_monitor"]._json_records(df, top_n)
             return AlertRowResponse(rows=rows)
         except Exception:
