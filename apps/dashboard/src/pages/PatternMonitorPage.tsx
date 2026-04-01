@@ -151,7 +151,7 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const tableRows = alertsQ.data?.rows ?? []
+  const tableRows = (topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? (topAlertsExcelQ.data?.rows ?? []) : (alertsQ.data?.rows ?? [])
   const visibleRows = tableLimit === 'all' ? tableRows : tableRows.slice(0, tableLimit)
 
   return <div>
@@ -184,7 +184,8 @@ export default function PatternMonitorPage() {
       <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
         API: <code>{alertsUrl}</code>
         {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
-        {(alertsQ.data?.rows?.length ?? 0) > 0 ? <span> | source: /alerts</span> : null}
+        {(topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? <span> | source: /top-alerts-excel</span> : null}
+        {(topAlertsExcelQ.data?.rows?.length ?? 0) === 0 && (alertsQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /alerts</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
@@ -211,7 +212,7 @@ export default function PatternMonitorPage() {
           <option value='100'>100</option>
         </select>
       </div>
-      {!alertsQ.isLoading && <table className='table'>
+      {!alertsQ.isLoading && !topAlertsExcelQ.isLoading && <table className='table'>
         <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {visibleRows.map((r, i) => {
