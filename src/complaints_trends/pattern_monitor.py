@@ -104,7 +104,46 @@ def run_pattern_monitor(
     if not pm.include_other_category:
         df = df[df["category"] != "OTHER"]
     if df.empty:
-        raise ValueError("No rows selected for pattern-monitor")
+        empty_scored = pd.DataFrame(columns=["row_id", "event_time", "date", "category", "subcategory", "is_pattern_alert", "pattern_like_score"])
+        empty_cat_daily = pd.DataFrame(columns=["date", "category", "category_pressure", "alert_rows", "total_rows"])
+        empty_overall = pd.DataFrame(columns=["date", "overall_pressure", "smoothed_state", "alert_rows", "total_rows"])
+
+        empty_scored.to_parquet(out.root / "scored_rows.parquet", index=False)
+        empty_cat_daily.to_parquet(out.root / "category_daily_pressure.parquet", index=False)
+        empty_overall.to_parquet(out.root / "overall_daily_state.parquet", index=False)
+
+        monitor_meta = {
+            "created_at": datetime.utcnow().isoformat(),
+            "tag": tag,
+            "label_source": label_source,
+            "date_from": date_from,
+            "date_to": date_to,
+            "month": month,
+            "rows": 0,
+            "no_rows_selected": True,
+        }
+        (out.root / "monitor_meta.json").write_text(json.dumps(monitor_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        with pd.ExcelWriter(out.export) as writer:
+            _to_excel_sheet_safe(empty_scored, writer, sheet_name="scored_rows", index=False)
+            _to_excel_sheet_safe(empty_cat_daily, writer, sheet_name="category_daily_pressure", index=False)
+            _to_excel_sheet_safe(empty_overall, writer, sheet_name="overall_daily_state", index=False)
+            _to_excel_sheet_safe(empty_scored, writer, sheet_name="alert_examples", index=False)
+
+        render_pattern_monitor_report(
+            out.report,
+            {
+                "tag": tag,
+                "label_source": label_source,
+                "date_from": date_from,
+                "date_to": date_to,
+                "month": month,
+                "alerts": [],
+                "category_pressure": [],
+                "state_rows": [],
+                "note": "No rows selected for pattern-monitor",
+            },
+        )
+        return out.root / "scored_rows.parquet", out.root / "overall_daily_state.parquet", out.report
 
     df["text_original"] = df.get(pm.text_field, df.get("client_first_message", "")).fillna("").astype(str)
     df["text_clean"] = build_text_clean(df, cfg, pm.text_field, pm.use_first_message_only, pm.strip_system_speakers)

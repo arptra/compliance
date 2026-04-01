@@ -192,3 +192,31 @@ def test_pattern_monitor_respects_categories_filter_in_export(tmp_path: Path):
     export_path = Path(cfg.analysis.pattern_monitoring.exports_dir) / "pattern_monitor_t4.xlsx"
     scored_xlsx = pd.read_excel(export_path, sheet_name="scored_rows")
     assert set(scored_xlsx["category"].dropna().astype(str).unique()) == {"login"}
+
+
+def test_pattern_monitor_handles_empty_selection_without_error(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    rows = [
+        {
+            "row_id": "r1",
+            "month": "2025-12",
+            "event_time": "2025-12-10 10:00:00",
+            "client_first_message": "не работает кнопка входа",
+            "is_complaint_llm": True,
+            "complaint_category_llm": "login",
+        }
+    ]
+    pd.DataFrame(rows).to_parquet(cfg.prepare.output_parquet, index=False)
+    run_pattern_fit(cfg, tag="t5", normal_period="2025-12..2025-12", event_period="2025-12..2025-12", label_source="llm")
+
+    scored_path, state_path, report_path = run_pattern_monitor(
+        cfg,
+        tag="t5",
+        label_source="llm",
+        date_from="2026-01-01",
+        date_to="2026-01-02",
+    )
+    assert scored_path.exists()
+    assert state_path.exists()
+    assert report_path.exists()
+    assert pd.read_parquet(scored_path).empty
