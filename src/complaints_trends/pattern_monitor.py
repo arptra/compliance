@@ -50,6 +50,7 @@ def run_pattern_monitor(
     date_from: str | None = None,
     date_to: str | None = None,
     month: str | None = None,
+    categories: list[str] | None = None,
     force_materialize: bool = False,
 ) -> tuple[Path, Path, Path]:
     pm = cfg.analysis.pattern_monitoring
@@ -94,6 +95,10 @@ def run_pattern_monitor(
     df = df.copy()
     df["is_complaint"] = is_complaint
     df["category"] = category
+    if categories:
+        selected = {str(c) for c in categories if str(c).strip()}
+        if selected:
+            df = df[df["category"].astype(str).isin(selected)]
     if pm.complaints_only:
         df = df[df["is_complaint"] == True]
     if not pm.include_other_category:

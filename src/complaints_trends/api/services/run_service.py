@@ -61,6 +61,7 @@ class RunService:
                 date_from=p.get("date_from"),
                 date_to=p.get("date_to"),
                 month=p.get("month"),
+                categories=p.get("categories"),
                 force_materialize=bool(p.get("force_materialize", False)),
             )
             return RunResponse(status="success", started_at=started, finished_at=datetime.now(timezone.utc), outputs={"scored": str(scored), "state": str(state), "report": str(report)}, logs=["pattern-monitor completed"])

@@ -123,3 +123,72 @@ def test_pattern_monitor_excel_export_sanitizes_illegal_chars(tmp_path: Path):
     scored_xlsx = pd.read_excel(export_path, sheet_name="scored_rows")
     bad_row = scored_xlsx[scored_xlsx["row_id"] == "t-illegal"].iloc[0]
     assert "" not in str(bad_row["text_original"])
+
+
+def test_pattern_monitor_respects_categories_filter_in_export(tmp_path: Path):
+    cfg = _cfg(tmp_path)
+    rows = []
+    for m in ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08"]:
+        for i in range(15):
+            rows.append(
+                {
+                    "row_id": f"base-login-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-10 10:00:00",
+                    "client_first_message": "не работает кнопка входа",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "login",
+                }
+            )
+            rows.append(
+                {
+                    "row_id": f"base-pay-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-11 10:00:00",
+                    "client_first_message": "не проходит платеж",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "payments",
+                }
+            )
+
+    for m in ["2025-11", "2025-12"]:
+        for i in range(20):
+            rows.append(
+                {
+                    "row_id": f"evt-login-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-12 12:00:00",
+                    "client_first_message": "после кода подтверждения кнопка входа не активна",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "login",
+                }
+            )
+            rows.append(
+                {
+                    "row_id": f"evt-pay-{m}-{i}",
+                    "month": m,
+                    "event_time": f"{m}-13 12:00:00",
+                    "client_first_message": "после подтверждения платеж не проходит",
+                    "is_complaint_llm": True,
+                    "complaint_category_llm": "payments",
+                }
+            )
+
+    pd.DataFrame(rows).to_parquet(cfg.prepare.output_parquet, index=False)
+    run_pattern_fit(cfg, tag="t4", normal_period="2025-01..2025-08", event_period="2025-11..2025-12", label_source="llm")
+    scored_path, _, _ = run_pattern_monitor(
+        cfg,
+        tag="t4",
+        label_source="llm",
+        date_from="2025-12-01",
+        date_to="2025-12-31",
+        categories=["login"],
+    )
+
+    scored = pd.read_parquet(scored_path)
+    assert not scored.empty
+    assert set(scored["category"].dropna().astype(str).unique()) == {"login"}
+
+    export_path = Path(cfg.analysis.pattern_monitoring.exports_dir) / "pattern_monitor_t4.xlsx"
+    scored_xlsx = pd.read_excel(export_path, sheet_name="scored_rows")
+    assert set(scored_xlsx["category"].dropna().astype(str).unique()) == {"login"}

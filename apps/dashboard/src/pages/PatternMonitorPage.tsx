@@ -74,13 +74,31 @@ export default function PatternMonitorPage() {
   const runMonitor = useMutation({
     mutationFn: () => apiPost<RunResp>('/api/runs/pattern-monitor', { params: fromPreparation
       ? ((f.date_from || autoDateFrom || f.date_to || autoDateTo)
-          ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest' }
-          : { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest' })
-      : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest' } }),
+          ? { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories }
+          : { tag: patternTag, month: autoMonth, label_source: 'llm', force_materialize: true, fit_tag: 'latest', categories: f.categories })
+      : { tag: patternTag, date_from: f.date_from || autoDateFrom, date_to: f.date_to || autoDateTo, fit_tag: 'latest', categories: f.categories } }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
   })
+
+  const autoRunKey = useMemo(() => JSON.stringify({
+    patternTag,
+    date_from: f.date_from || autoDateFrom || '',
+    date_to: f.date_to || autoDateTo || '',
+    categories: [...f.categories].sort(),
+    uploadId: uploadId || '',
+    fromPreparation,
+    autoMonth: autoMonth || '',
+  }), [patternTag, f.date_from, f.date_to, f.categories, autoDateFrom, autoDateTo, uploadId, fromPreparation, autoMonth])
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if (!runMonitor.isPending) runMonitor.mutate()
+    }, 350)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunKey])
 
   const saveFeedback = useMutation({ mutationFn: (payload: Record<string, unknown>) => apiPost('/api/feedback', payload), onSuccess: () => qc.invalidateQueries({ queryKey: ['feedback-summary'] }) })
   const resetFeedbackOne = useMutation({ mutationFn: (payload: { row_id: string, pattern_tag: string }) => apiPost(`/api/feedback/reset?row_id=${encodeURIComponent(payload.row_id)}&pattern_tag=${encodeURIComponent(payload.pattern_tag)}`, {}), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ['feedback-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }) } })
