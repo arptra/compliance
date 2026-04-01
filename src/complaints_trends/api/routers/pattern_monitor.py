@@ -86,3 +86,8 @@ def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to:
 @router.get("/run-output", response_model=AlertRowResponse)
 def run_output(pattern_tag: str = "latest", top_n: int = 300, services=Depends(get_service_container)):
     return services["pattern_monitor"].run_output_rows(pattern_tag, top_n=top_n)
+
+
+@router.get("/run-output-by-path", response_model=AlertRowResponse)
+def run_output_by_path(path: str, top_n: int = 300, services=Depends(get_service_container)):
+    return services["pattern_monitor"].run_output_rows_by_path(path, top_n=top_n)

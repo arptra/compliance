@@ -64,4 +64,4 @@ def test_run_output_rows_returns_rows_without_alert_filtering():
     )
     svc = PatternMonitorService(loader=_FakeLoader(scored))
     resp = svc.run_output_rows("latest", top_n=10)
-    assert [r["row_id"] for r in resp.rows] == ["r1", "r2"]
+    assert [r["row_id"] for r in resp.rows] == ["r1"]

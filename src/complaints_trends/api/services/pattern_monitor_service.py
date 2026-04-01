@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -370,6 +371,23 @@ class PatternMonitorService:
     def run_output_rows(self, tag: str, top_n: int = 300) -> AlertRowResponse:
         resolved = self._resolved_tag(tag)
         scored = self.loader.load_pattern_monitor_scored(resolved)
+        if not scored.empty:
+            mask = self._alert_mask(scored)
+            if bool(mask.any()):
+                scored = scored[mask]
+        if not scored.empty:
+            sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
+            if sort_col:
+                scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
+        return AlertRowResponse(rows=self._json_records(scored, top_n))
+
+    def run_output_rows_by_path(self, path: str, top_n: int = 300) -> AlertRowResponse:
+        p = Path(path)
+        if not p.exists() or p.suffix != ".parquet":
+            return AlertRowResponse(rows=[])
+        scored = self.loader.read_parquet(p)
         if not scored.empty:
             sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
             if sort_col:

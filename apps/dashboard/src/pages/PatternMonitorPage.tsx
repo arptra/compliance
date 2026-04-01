@@ -33,6 +33,7 @@ export default function PatternMonitorPage() {
   const [reviewMode, setReviewMode] = useState(false)
   const [scoringMode, setScoringMode] = useState<'base'|'calibrated'|'reranked'>('base')
   const [lastRunInfo, setLastRunInfo] = useState<string>('not_started')
+  const [lastRunScoredPath, setLastRunScoredPath] = useState<string>('')
   const [sp, setSp] = useSearchParams()
   const navigate = useNavigate()
 
@@ -72,6 +73,7 @@ export default function PatternMonitorPage() {
   const alertsUrl = `/api/pattern-monitor/alerts?${qs}&top_n=300`
   const examplesUrl = `/api/pattern-monitor/examples?${qs}&top_n=300`
   const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}&top_n=300`
+  const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}&top_n=300` : ''
 
   const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
   const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
@@ -89,6 +91,13 @@ export default function PatternMonitorPage() {
     refetchOnWindowFocus: false,
     enabled: !alertsQ.isLoading && (alertsQ.data?.rows?.length ?? 0) === 0 && !examplesQ.isLoading && (examplesQ.data?.rows?.length ?? 0) === 0,
   })
+  const runOutputByPathQ = useQuery({
+    queryKey: ['pm-run-output-path', lastRunScoredPath],
+    queryFn: () => apiGet<AlertsResp>(runOutputByPathUrl),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    enabled: Boolean(lastRunScoredPath),
+  })
   const feedbackSummaryQ = useQuery({ queryKey: ['feedback-summary', patternTag], queryFn: () => apiGet<FeedbackSummary>(`/api/feedback/summary?pattern_tag=${patternTag}`), staleTime: 10_000 })
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
 
@@ -102,8 +111,9 @@ export default function PatternMonitorPage() {
       console.info('[PatternMonitorPage] run pattern-monitor', params)
       return apiPost<RunResp>('/api/runs/pattern-monitor', { params })
     },
-    onSuccess: async () => {
+    onSuccess: async (resp) => {
       setLastRunInfo(`success @ ${new Date().toISOString()}`)
+      setLastRunScoredPath(String(resp.outputs?.scored ?? ''))
       await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
     onError: (e) => {
@@ -135,7 +145,9 @@ export default function PatternMonitorPage() {
   }
   const tableRows = (alertsQ.data?.rows?.length ?? 0) > 0
     ? (alertsQ.data?.rows ?? [])
-    : ((examplesQ.data?.rows?.length ?? 0) > 0 ? (examplesQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? []))
+    : ((examplesQ.data?.rows?.length ?? 0) > 0
+      ? (examplesQ.data?.rows ?? [])
+      : ((runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (runOutputQ.data?.rows ?? [])))
 
   return <div>
     {uploadId && <div className='card' style={{ marginBottom: 12 }}><b>Вы анализируете новый файл:</b> {sourceFilename ?? uploadId}. Диапазон дат: {(f.date_from || autoDateFrom || '—')} .. {(f.date_to || autoDateTo || '—')}.{presetError ? <div style={{ color: '#991b1b', marginTop: 6 }}>Preset warning: {presetError}</div> : null}<div style={{ marginTop: 8 }}><button onClick={clearUploadFilter}>Сбросить фильтр файла</button></div></div>}
@@ -156,6 +168,7 @@ export default function PatternMonitorPage() {
         API: <code>{alertsUrl}</code>
         {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /examples</span> : null}
+        {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) === 0 && (runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /run-output-by-path</span> : null}
         {(alertsQ.data?.rows?.length ?? 0) === 0 && (examplesQ.data?.rows?.length ?? 0) === 0 && (runOutputQ.data?.rows?.length ?? 0) > 0 ? <span> | fallback: /run-output</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
