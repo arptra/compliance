@@ -32,6 +32,7 @@ export default function PatternMonitorPage() {
   const [scoringMode, setScoringMode] = useState<'base'|'calibrated'|'reranked'>('base')
   const [lastRunInfo, setLastRunInfo] = useState<string>('not_started')
   const [lastRunScoredPath, setLastRunScoredPath] = useState<string>('')
+  const [hasStartedMonitor, setHasStartedMonitor] = useState(false)
   const [tableLimit, setTableLimit] = useState<'all' | 10 | 20 | 100>('all')
   const [sp, setSp] = useSearchParams()
   const navigate = useNavigate()
@@ -76,14 +77,14 @@ export default function PatternMonitorPage() {
     queryFn: () => apiGet<AlertsResp>(alertsUrl),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
-    enabled: Boolean(lastRunScoredPath),
+    enabled: hasStartedMonitor,
   })
   const runOutputByPathQ = useQuery({
     queryKey: ['pm-run-output-path', lastRunScoredPath],
     queryFn: () => apiGet<AlertsResp>(runOutputByPathUrl),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
-    enabled: Boolean(lastRunScoredPath),
+    enabled: hasStartedMonitor && Boolean(lastRunScoredPath),
   })
   const feedbackSummaryQ = useQuery({ queryKey: ['feedback-summary', patternTag], queryFn: () => apiGet<FeedbackSummary>(`/api/feedback/summary?pattern_tag=${patternTag}`), staleTime: 10_000 })
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
@@ -111,6 +112,7 @@ export default function PatternMonitorPage() {
   })
 
   const triggerRun = useCallback((trigger: 'manual_click') => {
+    setHasStartedMonitor(true)
     if (!runMonitor.isPending) runMonitor.mutate(trigger)
   }, [runMonitor])
 
@@ -132,10 +134,12 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const alertRows = (runOutputByPathQ.data?.rows ?? []).filter((row) => {
-    const raw = row.is_pattern_alert ?? row.is_pattern_allert
+  const rawRows = (runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (alertsQ.data?.rows ?? [])
+  const alertRows = rawRows.filter((row) => {
+    const raw = row.is_pattern_alert ?? row.is_pattern_allert ?? row.is_alert
+    if (raw === undefined || raw === null || raw === '') return true
     if (typeof raw === 'boolean') return raw
-    return ['true', '1', 'yes', 'y', 't'].includes(String(raw ?? '').trim().toLowerCase())
+    return ['true', '1', 'yes', 'y', 't'].includes(String(raw).trim().toLowerCase())
   })
   const visibleRows = tableLimit === 'all' ? alertRows : alertRows.slice(0, tableLimit)
 
@@ -169,6 +173,7 @@ export default function PatternMonitorPage() {
       <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
         API: <code>{lastRunScoredPath ? runOutputByPathUrl : '/api/runs/pattern-monitor → /api/pattern-monitor/run-output-by-path'}</code>
         {runOutputByPathQ.error ? <span style={{ color: '#991b1b' }}> | data error: {String(runOutputByPathQ.error)}</span> : null}
+        {!lastRunScoredPath && hasStartedMonitor ? <span> | fallback: /api/pattern-monitor/alerts</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
@@ -195,7 +200,8 @@ export default function PatternMonitorPage() {
           <option value='100'>100</option>
         </select>
       </div>
-      {!runOutputByPathQ.isLoading && <table className='table'>
+      {!hasStartedMonitor && <div style={{ fontSize: 12, opacity: 0.8 }}>Нажмите «Старт pattern-monitor», чтобы загрузить таблицу.</div>}
+      {hasStartedMonitor && !runOutputByPathQ.isLoading && !alertsQ.isLoading && <table className='table'>
         <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {visibleRows.map((r, i) => {
