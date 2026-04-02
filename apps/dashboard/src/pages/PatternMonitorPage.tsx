@@ -133,8 +133,10 @@ export default function PatternMonitorPage() {
   const triggerRun = useCallback((trigger: 'manual_click') => {
     setHasStartedMonitor(true)
     setLastRunSignature(runSignature)
+    setLastRunScoredPath('')
+    qc.removeQueries({ queryKey: ['pm-run-output-path'] })
     if (!runMonitor.isPending) runMonitor.mutate(trigger)
-  }, [runMonitor, runSignature])
+  }, [runMonitor, runSignature, qc])
 
   const hasRunFilter = useMemo(() => {
     const hasDateRange = Boolean((f.date_from || autoDateFrom) && (f.date_to || autoDateTo))
