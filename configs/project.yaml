@@ -57,6 +57,7 @@ prepare:
   pilot_limit: 5000
   date_from: null
   date_to: null
+  service_columns: []  # e.g. ["request_id", "ticket_id", "case_id"]
   output_parquet: "data/processed/all_prepared.parquet"
   pilot_parquet: "data/processed/pilot_prepared.parquet"
   pilot_review_xlsx: "exports/pilot_review.xlsx"

@@ -367,12 +367,16 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         df = df.head(limit).copy()
 
     dialog_fields = _get_dialog_fields(cfg, df)
-    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, "event_time", "month", "source_file", "row_id"]))
+    service_columns = [str(c) for c in (cfg.prepare.service_columns or []) if str(c).strip()]
+    for col in service_columns:
+        if col not in df.columns:
+            df[col] = ""
+    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, *service_columns, "event_time", "month", "source_file", "row_id"]))
     df = df[[c for c in keep if c in df.columns]].copy()
 
     # Normalize heterogeneous Excel object columns to string early to avoid ArrowTypeError
     # on parquet export (e.g. mixed int/str in one source column).
-    text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields]) if c in df.columns]
+    text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, *service_columns]) if c in df.columns]
     for c in text_like_cols:
         df[c] = df[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
 

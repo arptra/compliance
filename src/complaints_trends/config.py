@@ -78,6 +78,7 @@ class PrepareConfig(AppBaseModel):
     pilot_limit: int = 5000
     date_from: str | None = None
     date_to: str | None = None
+    service_columns: list[str] = Field(default_factory=list)
     output_parquet: str
     pilot_parquet: str
     pilot_review_xlsx: str

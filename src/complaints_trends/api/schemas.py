@@ -29,6 +29,7 @@ class MetaConfigResponse(BaseModel):
     prepare_output_parquet: str
     reports_dir: str
     interim_dir: str
+    prepare_service_columns: list[str] = Field(default_factory=list)
 
 
 class MetaDatasetsResponse(BaseModel):

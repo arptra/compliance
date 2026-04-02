@@ -19,6 +19,7 @@ def config_meta(services=Depends(get_service_container)):
         prepare_output_parquet=cfg.prepare.output_parquet,
         reports_dir=cfg.analysis.reports_dir,
         interim_dir=cfg.analysis.pattern_monitoring.interim_dir,
+        prepare_service_columns=list(cfg.prepare.service_columns or []),
     )
 
 

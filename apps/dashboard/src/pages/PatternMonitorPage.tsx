@@ -17,6 +17,7 @@ type AlertsResp = { rows: Array<Record<string, unknown>>; scoring_mode_requested
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 type FeedbackSummary = Record<string, number | string | null>
 type VersionRow = { version_id: string; status: string; created_at: string; train_rows?: number; metrics_json?: Record<string, unknown> | null; active: number }
+type MetaConfigResp = { prepare_service_columns?: string[] }
 
 export default function PatternMonitorPage() {
   const f = useFilters(useShallow((s) => ({
@@ -54,8 +55,17 @@ export default function PatternMonitorPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadId, autoPatternTag])
+  useEffect(() => {
+    if (!uploadId) return
+    const patch: { date_from?: string; date_to?: string } = {}
+    if (autoDateFrom && f.date_from !== autoDateFrom) patch.date_from = autoDateFrom
+    if (autoDateTo && f.date_to !== autoDateTo) patch.date_to = autoDateTo
+    if (Object.keys(patch).length) f.set(patch)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadId, autoDateFrom, autoDateTo])
 
   const tagsQ = useQuery({ queryKey: ['meta-tags'], queryFn: () => apiGet<TagsResp>('/api/meta/tags') })
+  const metaConfigQ = useQuery({ queryKey: ['meta-config'], queryFn: () => apiGet<MetaConfigResp>('/api/meta/config'), staleTime: 60_000, refetchOnWindowFocus: false })
 
   const qs = useMemo(() => {
     const q = new URLSearchParams()
@@ -164,6 +174,7 @@ export default function PatternMonitorPage() {
     return ['true', '1', 'yes', 'y', 't'].includes(String(raw).trim().toLowerCase())
   })
   const visibleRows = tableLimit === 'all' ? alertRows : alertRows.slice(0, tableLimit)
+  const serviceColumns = metaConfigQ.data?.prepare_service_columns ?? []
 
   return <div>
     {runMonitor.isPending && (
@@ -224,7 +235,7 @@ export default function PatternMonitorPage() {
       {!hasStartedMonitor && <div style={{ fontSize: 12, opacity: 0.8 }}>Нажмите «Старт pattern-monitor», чтобы загрузить таблицу.</div>}
       {hasStartedMonitor && !lastRunScoredPath && !runMonitor.isPending && <div style={{ fontSize: 12, color: '#991b1b' }}>Нет пути к результату запуска (outputs.scored). Перезапустите монитор.</div>}
       {hasStartedMonitor && !runOutputByPathQ.isLoading && <table className='table'>
-        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
+        <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{serviceColumns.map((col) => <th key={`svc-head-${col}`}>{col}</th>)}{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {visibleRows.map((r, i) => {
             const dialog = String(r.row_dialog ?? r.dialog_text ?? '')
@@ -234,6 +245,7 @@ export default function PatternMonitorPage() {
             return <tr key={String(r.row_id ?? i)}>
               <td>{i + 1}</td><td>{String(r.event_time ?? r.date ?? '')}</td><td>{String(r.category_label_ru ?? r.category ?? 'UNKNOWN')}</td><td>{String(r.subcategory_label_ru ?? r.subcategory ?? 'UNKNOWN')}</td><td>{String(r.pattern_like_score ?? r.row_score ?? '')}</td><td>{String(r.rerank_score ?? r.calibrated_score ?? '')}</td>
               <td><button onClick={() => setDialogPreview(dialog)} style={{ border: 'none', background: 'transparent', color: '#1d4ed8', cursor: 'pointer', textAlign: 'left' }}>{preview || '—'}</button></td>
+              {serviceColumns.map((col) => <td key={`svc-${String(r.row_id ?? i)}-${col}`}>{String(r[col] ?? '')}</td>)}
               {reviewMode && <><td><ReviewVerdictControl value={String(r.feedback_verdict ?? '')} onChange={(v) => onVerdict(r, v, reasonValue, commentValue)} /></td><td><ReviewReasonSelect value={reasonValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), v, commentValue)} /></td><td><ReviewCommentDialog value={commentValue} onChange={(v) => onVerdict(r, (String(r.feedback_verdict ?? 'uncertain') as 'true'|'false'|'uncertain'), reasonValue, v)} /></td><td><button onClick={() => resetFeedbackOne.mutate({ row_id: String(r.row_id ?? ''), pattern_tag: patternTag })}>Сбросить</button></td></>}
             </tr>
           })}
