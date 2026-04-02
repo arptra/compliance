@@ -13,9 +13,7 @@ import { ScoringModeSwitch } from '../components/pattern-monitor/ScoringModeSwit
 import { ModelVersionBadge } from '../components/pattern-monitor/ModelVersionBadge'
 
 type TagsResp = { pattern_fit_tags: string[]; pattern_monitor_tags: string[] }
-type SummaryResp = { tag: string; allowed?: boolean; reason?: string | null; upload_id?: string | null; summary: Record<string, number | string | null> }
 type AlertsResp = { rows: Array<Record<string, unknown>>; scoring_mode_requested: 'base'|'calibrated'|'reranked'; scoring_mode_effective: 'base'|'calibrated'|'reranked'; reranker_available: boolean; active_calibrator_version?: string | null }
-type ExamplesResp = { rows: Array<Record<string, unknown>>; allowed?: boolean; reason?: string | null }
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 type FeedbackSummary = Record<string, number | string | null>
 type VersionRow = { version_id: string; status: string; created_at: string; train_rows?: number; metrics_json?: Record<string, unknown> | null; active: number }
@@ -70,28 +68,15 @@ export default function PatternMonitorPage() {
     return q.toString()
   }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode])
 
-  const summaryUrl = `/api/pattern-monitor/summary?${qs}`
   const alertsUrl = `/api/pattern-monitor/alerts?${qs}`
-  const examplesUrl = `/api/pattern-monitor/examples?${qs}`
-  const runOutputUrl = `/api/pattern-monitor/run-output?pattern_tag=${encodeURIComponent(patternTag)}`
   const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}` : ''
-  const topAlertsExcelUrl = `/api/pattern-monitor/top-alerts-excel?${qs}`
 
-  const summaryQ = useQuery({ queryKey: ['pm-summary', qs], queryFn: () => apiGet<SummaryResp>(summaryUrl), staleTime: 30_000, refetchOnWindowFocus: false })
-  const alertsQ = useQuery({ queryKey: ['pm-alerts', qs], queryFn: () => apiGet<AlertsResp>(alertsUrl), staleTime: 30_000, refetchOnWindowFocus: false, enabled: summaryQ.data?.allowed !== false })
-  const examplesQ = useQuery({
-    queryKey: ['pm-examples', qs],
-    queryFn: () => apiGet<ExamplesResp>(examplesUrl),
+  const alertsQ = useQuery({
+    queryKey: ['pm-alerts', qs],
+    queryFn: () => apiGet<AlertsResp>(alertsUrl),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
-    enabled: summaryQ.data?.allowed !== false && !alertsQ.isLoading && (alertsQ.data?.rows?.length ?? 0) === 0,
-  })
-  const runOutputQ = useQuery({
-    queryKey: ['pm-run-output', patternTag],
-    queryFn: () => apiGet<AlertsResp>(runOutputUrl),
-    staleTime: 30_000,
-    refetchOnWindowFocus: false,
-    enabled: !alertsQ.isLoading && (alertsQ.data?.rows?.length ?? 0) === 0 && !examplesQ.isLoading && (examplesQ.data?.rows?.length ?? 0) === 0,
+    enabled: Boolean(lastRunScoredPath),
   })
   const runOutputByPathQ = useQuery({
     queryKey: ['pm-run-output-path', lastRunScoredPath],
@@ -99,12 +84,6 @@ export default function PatternMonitorPage() {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     enabled: Boolean(lastRunScoredPath),
-  })
-  const topAlertsExcelQ = useQuery({
-    queryKey: ['pm-top-alerts-excel', topAlertsExcelUrl],
-    queryFn: () => apiGet<AlertsResp>(topAlertsExcelUrl),
-    staleTime: 0,
-    refetchOnWindowFocus: false,
   })
   const feedbackSummaryQ = useQuery({ queryKey: ['feedback-summary', patternTag], queryFn: () => apiGet<FeedbackSummary>(`/api/feedback/summary?pattern_tag=${patternTag}`), staleTime: 10_000 })
   const versionsQ = useQuery({ queryKey: ['calibrator-versions'], queryFn: () => apiGet<VersionRow[]>('/api/pattern-monitor/calibrator/versions') })
@@ -122,10 +101,7 @@ export default function PatternMonitorPage() {
     onSuccess: async (resp) => {
       setLastRunInfo(`success @ ${new Date().toISOString()}`)
       setLastRunScoredPath(String(resp.outputs?.scored ?? ''))
-      await qc.invalidateQueries({ queryKey: ['pm-summary'] })
       await qc.invalidateQueries({ queryKey: ['pm-alerts'] })
-      await qc.invalidateQueries({ queryKey: ['pm-top-alerts-excel'] })
-      await qc.invalidateQueries({ queryKey: ['pm-run-output'] })
       await qc.invalidateQueries({ queryKey: ['pm-run-output-path'] })
       await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
@@ -156,13 +132,12 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const alertRowsFallback = (alertsQ.data?.rows ?? []).filter((row) => {
-    const raw = row.is_pattern_alert
+  const alertRows = (runOutputByPathQ.data?.rows ?? []).filter((row) => {
+    const raw = row.is_pattern_alert ?? row.is_pattern_allert
     if (typeof raw === 'boolean') return raw
     return ['true', '1', 'yes', 'y', 't'].includes(String(raw ?? '').trim().toLowerCase())
   })
-  const tableRows = (topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? (topAlertsExcelQ.data?.rows ?? []) : alertRowsFallback
-  const visibleRows = tableLimit === 'all' ? tableRows : tableRows.slice(0, tableLimit)
+  const visibleRows = tableLimit === 'all' ? alertRows : alertRows.slice(0, tableLimit)
 
   return <div>
     {runMonitor.isPending && (
@@ -192,10 +167,8 @@ export default function PatternMonitorPage() {
       {!hasRunFilter && <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Сначала выставьте фильтр (даты и/или категории), затем нажмите «Старт pattern-monitor».</div>}
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>Run status: {runMonitor.isPending ? 'running…' : lastRunInfo}</div>
       <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
-        API: <code>{alertsUrl}</code>
-        {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
-        {(topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? <span> | source: /top-alerts-excel</span> : null}
-        {(topAlertsExcelQ.data?.rows?.length ?? 0) === 0 && alertRowsFallback.length > 0 ? <span> | fallback: /alerts (is_pattern_alert=true)</span> : null}
+        API: <code>{lastRunScoredPath ? runOutputByPathUrl : '/api/runs/pattern-monitor → /api/pattern-monitor/run-output-by-path'}</code>
+        {runOutputByPathQ.error ? <span style={{ color: '#991b1b' }}> | data error: {String(runOutputByPathQ.error)}</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
@@ -222,7 +195,7 @@ export default function PatternMonitorPage() {
           <option value='100'>100</option>
         </select>
       </div>
-      {!alertsQ.isLoading && !topAlertsExcelQ.isLoading && <table className='table'>
+      {!runOutputByPathQ.isLoading && <table className='table'>
         <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {visibleRows.map((r, i) => {
