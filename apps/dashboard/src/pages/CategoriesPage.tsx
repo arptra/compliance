@@ -4,6 +4,7 @@ import { EChart } from '../components/EChart'
 import { apiGet } from '../lib/api'
 import { useFilters } from '../state/filters'
 import { useShallow } from 'zustand/react/shallow'
+import { useTaxonomyLabels } from '../hooks/useTaxonomyLabels'
 
 type Row = {
   category: string
@@ -17,6 +18,7 @@ type Row = {
 type SubRow = { subcategory: string; count: number; share?: number }
 
 export default function CategoriesPage() {
+  const labels = useTaxonomyLabels()
   const f = useFilters(useShallow((s) => ({
     date_from: s.date_from,
     date_to: s.date_to,
@@ -79,7 +81,7 @@ export default function CategoriesPage() {
       <EChart option={{
         tooltip: { trigger: 'axis' },
         xAxis: { type: 'value' },
-        yAxis: { type: 'category', data: topRows.map((r) => r.category) },
+        yAxis: { type: 'category', data: topRows.map((r) => labels.categoryLabel(r.category)) },
         series: [{ name: 'count', type: 'bar', data: topRows.map((r) => r.count) }],
       }} height={420} />
     </div>
@@ -89,7 +91,7 @@ export default function CategoriesPage() {
       <EChart option={{
         tooltip: { trigger: 'axis' },
         xAxis: { type: 'value' },
-        yAxis: { type: 'category', data: growthRows.map((r) => r.category) },
+        yAxis: { type: 'category', data: growthRows.map((r) => labels.categoryLabel(r.category)) },
         series: [{ name: 'delta_abs', type: 'bar', data: growthRows.map((r) => r.delta_abs ?? 0) }],
       }} height={360} />
     </div>
@@ -101,7 +103,7 @@ export default function CategoriesPage() {
       <tbody>
         {rows.map((r) => (
           <tr key={r.category} onClick={() => setSelected(r.category)} style={{ cursor: 'pointer', background: selectedCategory === r.category ? '#eef2ff' : 'white' }}>
-            <td>{r.category}</td>
+            <td>{labels.categoryLabel(r.category)}</td>
             <td>{r.count.toFixed(0)}</td>
             <td>{(r.baseline_count ?? 0).toFixed(0)}</td>
             <td>{(r.delta_abs ?? 0).toFixed(0)}</td>
@@ -113,13 +115,13 @@ export default function CategoriesPage() {
     </table>
 
     <div className='card' style={{ marginTop: 12 }}>
-      <h3>Подкатегории: {selectedCategory || '—'}</h3>
+      <h3>Подкатегории: {labels.categoryLabel(selectedCategory) || '—'}</h3>
       {subQ.isLoading && <div>Загрузка подкатегорий...</div>}
       {subQ.error && <div>Ошибка подкатегорий: {(subQ.error as Error).message}</div>}
       {!!subQ.data && <EChart option={{
         tooltip: { trigger: 'axis' },
         xAxis: { type: 'value' },
-        yAxis: { type: 'category', data: subQ.data.subcategories.map((s) => s.subcategory) },
+        yAxis: { type: 'category', data: subQ.data.subcategories.map((s) => labels.subcategoryLabel(selectedCategory, s.subcategory)) },
         series: [{ type: 'bar', data: subQ.data.subcategories.map((s) => s.count) }],
       }} height={360} />}
     </div>

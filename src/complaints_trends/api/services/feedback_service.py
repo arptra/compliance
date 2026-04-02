@@ -5,11 +5,34 @@ from hashlib import sha1
 from typing import Any
 
 from .feedback_db import FeedbackDB
+from .model_quality_service import compute_precision_at_k, compute_precision_by_bucket, compute_precision_by_group
+from .taxonomy_label_service import TaxonomyLabelService
 
 
 class FeedbackService:
-    def __init__(self, db: FeedbackDB) -> None:
+    def __init__(self, db: FeedbackDB, labels: TaxonomyLabelService | None = None) -> None:
         self.db = db
+        self.labels = labels
+        self._backfill_ru_labels()
+
+    def _backfill_ru_labels(self) -> None:
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, category, subcategory
+                FROM analyst_feedback
+                WHERE category_label_ru IS NULL OR subcategory_label_ru IS NULL
+                """
+            ).fetchall()
+            for row in rows:
+                category = row["category"]
+                subcategory = row["subcategory"]
+                category_label = self.labels.category_label_ru(category) if self.labels else category
+                subcategory_label = self.labels.subcategory_label_ru(category, subcategory) if self.labels else subcategory
+                conn.execute(
+                    "UPDATE analyst_feedback SET category_label_ru=?, subcategory_label_ru=? WHERE id=?",
+                    (category_label, subcategory_label, row["id"]),
+                )
 
     @staticmethod
     def build_row_id(row: dict[str, Any]) -> str:
@@ -35,7 +58,9 @@ class FeedbackService:
             "date_from": item.get("date_from"),
             "date_to": item.get("date_to"),
             "category": item.get("category"),
+            "category_label_ru": self.labels.category_label_ru(item.get("category")) if self.labels else item.get("category"),
             "subcategory": item.get("subcategory"),
+            "subcategory_label_ru": self.labels.subcategory_label_ru(item.get("category"), item.get("subcategory")) if self.labels else item.get("subcategory"),
             "base_score": item.get("base_score"),
             "rerank_score": item.get("rerank_score"),
             "verdict": item["verdict"],
@@ -50,10 +75,10 @@ class FeedbackService:
                 """
                 INSERT INTO analyst_feedback (
                     row_id, pattern_tag, review_date, reviewer, date_from, date_to, category, subcategory,
-                    base_score, rerank_score, verdict, reason_code, comment, model_version, created_at, updated_at
+                    category_label_ru, subcategory_label_ru, base_score, rerank_score, verdict, reason_code, comment, model_version, created_at, updated_at
                 ) VALUES (
                     :row_id, :pattern_tag, :review_date, :reviewer, :date_from, :date_to, :category, :subcategory,
-                    :base_score, :rerank_score, :verdict, :reason_code, :comment, :model_version, :created_at, :updated_at
+                    :category_label_ru, :subcategory_label_ru, :base_score, :rerank_score, :verdict, :reason_code, :comment, :model_version, :created_at, :updated_at
                 )
                 ON CONFLICT(row_id, pattern_tag)
                 DO UPDATE SET
@@ -62,7 +87,9 @@ class FeedbackService:
                     date_from=excluded.date_from,
                     date_to=excluded.date_to,
                     category=excluded.category,
+                    category_label_ru=excluded.category_label_ru,
                     subcategory=excluded.subcategory,
+                    subcategory_label_ru=excluded.subcategory_label_ru,
                     base_score=excluded.base_score,
                     rerank_score=excluded.rerank_score,
                     verdict=excluded.verdict,
@@ -100,7 +127,7 @@ class FeedbackService:
         query += f" LIMIT {int(params.get('limit') or 1000)}"
         with self.db.connect() as conn:
             rows = conn.execute(query, args).fetchall()
-        return [dict(r) for r in rows]
+        return [self.labels.enrich_row(dict(r)) if self.labels else dict(r) for r in rows]
 
     def summary(self, params: dict[str, Any]) -> dict[str, Any]:
         rows = self.list_feedback({**params, "limit": params.get("limit") or 100000})
@@ -110,16 +137,31 @@ class FeedbackService:
         uncertain_count = sum(1 for r in reviewed if r["verdict"] == "uncertain")
         reviewed_rows = len(reviewed)
         precision = true_count / reviewed_rows if reviewed_rows else None
-
-        by_category: dict[str, dict[str, float | int | None]] = {}
-        for r in reviewed:
-            cat = r.get("category") or "UNKNOWN"
-            entry = by_category.setdefault(cat, {"reviewed": 0, "true": 0})
-            entry["reviewed"] += 1
-            entry["true"] += 1 if r["verdict"] == "true" else 0
-        for cat, entry in by_category.items():
-            entry["precision"] = (entry["true"] / entry["reviewed"]) if entry["reviewed"] else None
-            entry["category"] = cat
+        scoring_mode = str(params.get("scoring_mode") or "base")
+        score_column = "base_score" if scoring_mode == "base" else "rerank_score"
+        by_category = [
+            {
+                "category": item["name"],
+                "category_label_ru": self.labels.category_label_ru(item["name"]) if self.labels else item["name"],
+                "reviewed": item["reviewed_count"],
+                "true": item["true_count"],
+                "false": item["false_count"],
+                "precision": item["precision"],
+            }
+            for item in compute_precision_by_group(reviewed, key="category")
+        ]
+        by_cluster = [
+            {
+                "cluster": item["name"],
+                "cluster_label_ru": item["name"],
+                "reviewed": item["reviewed_count"],
+                "true": item["true_count"],
+                "false": item["false_count"],
+                "precision": item["precision"],
+            }
+            for item in compute_precision_by_group(reviewed, key="subcategory")
+        ]
+        by_score_bucket = compute_precision_by_bucket(reviewed, score_column=score_column)
 
         return {
             "reviewed_rows": reviewed_rows,
@@ -127,11 +169,11 @@ class FeedbackService:
             "false_count": false_count,
             "uncertain_count": uncertain_count,
             "precision_reviewed": precision,
-            "precision_at_50": precision,
-            "precision_at_100": precision,
-            "by_category": list(by_category.values()),
-            "by_cluster": [],
-            "by_score_bucket": [],
+            "precision_at_50": compute_precision_at_k(reviewed, 50, score_column=score_column),
+            "precision_at_100": compute_precision_at_k(reviewed, 100, score_column=score_column),
+            "by_category": by_category,
+            "by_cluster": by_cluster,
+            "by_score_bucket": by_score_bucket,
         }
 
     def delete_feedback(self, row_id: str, pattern_tag: str | None = None) -> dict[str, Any]:

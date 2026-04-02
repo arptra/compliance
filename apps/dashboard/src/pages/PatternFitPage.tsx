@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet, apiPost } from '../lib/api'
 import { useFilters } from '../state/filters'
 import { useShallow } from 'zustand/react/shallow'
+import { useTaxonomyLabels } from '../hooks/useTaxonomyLabels'
 
 type TagsResp = { pattern_fit_tags: string[] }
 type FitSummary = { tag: string; categories: string[]; growth_summary: Array<Record<string, unknown>> }
@@ -11,6 +12,7 @@ type CategoryRows = { tag: string; category: string; rows: Array<Record<string, 
 type RunResp = { status: string; outputs?: Record<string, string>; error?: string }
 
 export default function PatternFitPage() {
+  const labels = useTaxonomyLabels()
   const f = useFilters(useShallow((s) => ({ pattern_tag: s.pattern_tag, set: s.set })))
   const qc = useQueryClient()
   const [normalFrom, setNormalFrom] = useState('')
@@ -72,14 +74,14 @@ export default function PatternFitPage() {
       {!summaryQ.isLoading && <table className='table'>
         <thead><tr><th>Category</th><th>Δ</th></tr></thead>
         <tbody>
-          {growthRows.map((r, i) => <tr key={i}><td>{String(r.category ?? r.complaint_category_llm ?? 'UNKNOWN')}</td><td>{String(r.delta ?? r.delta_abs ?? '')}</td></tr>)}
+          {growthRows.map((r, i) => <tr key={i}><td>{labels.categoryLabel(String(r.category ?? r.complaint_category_llm ?? 'UNKNOWN'))}</td><td>{String(r.delta ?? r.delta_abs ?? '')}</td></tr>)}
         </tbody>
       </table>}
     </div>
 
     <div className='card' style={{ marginTop: 12 }}>
-      <h3>Жалобы по выбранной категории ({effectiveCategory || '—'})</h3>
-      <select value={effectiveCategory} onChange={(e) => setSelectedCategory(e.target.value)}><option value=''>auto</option>{(summaryQ.data?.categories ?? []).map((c) => <option key={c} value={c}>{c}</option>)}</select>
+      <h3>Жалобы по выбранной категории ({labels.categoryLabel(effectiveCategory) || '—'})</h3>
+      <select value={effectiveCategory} onChange={(e) => setSelectedCategory(e.target.value)}><option value=''>auto</option>{(summaryQ.data?.categories ?? []).map((c) => <option key={c} value={c}>{labels.categoryLabel(c)}</option>)}</select>
       {rowsQ.isLoading && <div>Загрузка...</div>}
       {rowsQ.error && <div>Ошибка: {(rowsQ.error as Error).message}</div>}
       {!rowsQ.isLoading && <table className='table'>
@@ -89,7 +91,7 @@ export default function PatternFitPage() {
             <tr key={i}>
               <td>{i + 1}</td>
               <td>{String(r.date ?? r.event_time ?? '')}</td>
-              <td>{String(r.category ?? r.complaint_category_llm ?? '')}</td>
+              <td>{labels.categoryLabel(String(r.category ?? r.complaint_category_llm ?? ''))}</td>
               <td>{String(r.client_first_message ?? r.dialog_text ?? r.text ?? '')}</td>
             </tr>
           ))}

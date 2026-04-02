@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 
 from ...config import ProjectConfig
 from ...infer_month import infer_month
@@ -10,10 +12,13 @@ from ...pattern_monitor import run_pattern_monitor
 from ...viz.report import build_visual_report
 from ..schemas import RunRequest, RunResponse
 
+logger = logging.getLogger(__name__)
+
 
 class RunService:
     def __init__(self, cfg: ProjectConfig) -> None:
         self.cfg = cfg
+        self._pattern_monitor_lock = Lock()
 
     def run_viz_build(self, req: RunRequest) -> RunResponse:
         started = datetime.now(timezone.utc)
@@ -52,6 +57,25 @@ class RunService:
     def run_pattern_monitor(self, req: RunRequest) -> RunResponse:
         started = datetime.now(timezone.utc)
         p = req.params
+        if not self._pattern_monitor_lock.acquire(blocking=False):
+            logger.warning("pattern-monitor run skipped: another run is already in progress")
+            return RunResponse(
+                status="busy",
+                started_at=started,
+                finished_at=datetime.now(timezone.utc),
+                outputs={},
+                logs=["pattern-monitor run skipped: in progress"],
+                error="pattern-monitor run already in progress",
+            )
+        logger.info(
+            "pattern-monitor run requested: trigger=%s tag=%s date_from=%s date_to=%s month=%s categories=%s",
+            p.get("trigger"),
+            p.get("tag", "latest"),
+            p.get("date_from"),
+            p.get("date_to"),
+            p.get("month"),
+            p.get("categories"),
+        )
         try:
             scored, state, report = run_pattern_monitor(
                 self.cfg,
@@ -61,11 +85,16 @@ class RunService:
                 date_from=p.get("date_from"),
                 date_to=p.get("date_to"),
                 month=p.get("month"),
+                categories=p.get("categories"),
                 force_materialize=bool(p.get("force_materialize", False)),
             )
+            logger.info("pattern-monitor run finished: status=success scored=%s state=%s report=%s", scored, state, report)
             return RunResponse(status="success", started_at=started, finished_at=datetime.now(timezone.utc), outputs={"scored": str(scored), "state": str(state), "report": str(report)}, logs=["pattern-monitor completed"])
         except Exception as e:
+            logger.exception("pattern-monitor run failed")
             return RunResponse(status="error", started_at=started, finished_at=datetime.now(timezone.utc), outputs={}, logs=[], error=str(e))
+        finally:
+            self._pattern_monitor_lock.release()
 
     def run_infer_month(self, req: RunRequest) -> RunResponse:
         started = datetime.now(timezone.utc)

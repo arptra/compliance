@@ -6,7 +6,7 @@ import { apiGet } from '../lib/api'
 
 const items = [
   ['/overview', 'Overview'], ['/categories', 'Categories'], ['/timeseries', 'Timeseries'],
-  ['/preparation', 'Preparation'], ['/pattern-fit', 'Pattern Fit'], ['/pattern-monitor', 'Pattern Monitor'], ['/reports', 'Reports'], ['/settings', 'Settings']
+  ['/preparation', 'Preparation'], ['/pattern-fit', 'Pattern Fit'], ['/pattern-monitor', 'Pattern Monitor'], ['/review-dataset', 'Review Dataset'], ['/model-quality', 'Model Quality'], ['/parquet-viewer', 'Parquet Viewer'], ['/reports', 'Reports'], ['/settings', 'Settings']
 ]
 
 function StartupLoader() {

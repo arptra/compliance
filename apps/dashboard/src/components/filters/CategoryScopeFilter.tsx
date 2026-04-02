@@ -1,3 +1,5 @@
+import { useTaxonomyLabels } from '../../hooks/useTaxonomyLabels'
+
 export type CategoryScopeValue = {
   categoryMode: 'top' | 'custom' | 'all'
   topN: number
@@ -12,6 +14,7 @@ type Props = {
 }
 
 export function CategoryScopeFilter({ availableCategories, value, onChange }: Props) {
+  const labels = useTaxonomyLabels()
   return <div className='category-scope'>
     <div>
       <button onClick={() => onChange({ categoryMode: 'top' })} style={{ fontWeight: value.categoryMode === 'top' ? 700 : 400 }}>Top N</button>
@@ -29,7 +32,7 @@ export function CategoryScopeFilter({ availableCategories, value, onChange }: Pr
 
     {value.categoryMode === 'custom' && (
       <select multiple value={value.categories} onChange={(e) => onChange({ categories: Array.from(e.target.selectedOptions).map((o) => o.value) })}>
-        {availableCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+        {availableCategories.map((c) => <option key={c} value={c}>{labels.categoryLabel(c)}</option>)}
       </select>
     )}
 

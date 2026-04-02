@@ -28,6 +28,12 @@ export function FilterBar() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   })
+  const datasetsQ = useQuery({
+    queryKey: ['meta-datasets'],
+    queryFn: () => apiGet<{ min_date?: string | null; max_date?: string | null }>('/api/meta/datasets'),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
 
   useEffect(() => {
     const q = new URLSearchParams(loc.search)
@@ -60,6 +66,17 @@ export function FilterBar() {
     }
   }, [f.date_from, f.date_to, f.categoryMode, f.topN, f.categories, f.includeOther, loc.pathname])
 
+  useEffect(() => {
+    const hasUrlDates = new URLSearchParams(loc.search).has('date_from') || new URLSearchParams(loc.search).has('date_to')
+    if (hasUrlDates || f.date_from || f.date_to) return
+    const minDate = datasetsQ.data?.min_date
+    const maxDate = datasetsQ.data?.max_date
+    if (minDate && maxDate) {
+      f.set({ date_from: minDate, date_to: maxDate })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetsQ.data?.min_date, datasetsQ.data?.max_date])
+
   const available = catsQ.data?.categories ?? []
 
   return <div className="filters">
@@ -82,6 +99,11 @@ export function FilterBar() {
       value={{ categoryMode: f.categoryMode, topN: f.topN, categories: f.categories, includeOther: f.includeOther }}
       onChange={(patch) => f.set(patch as any)}
     />
-    <button onClick={f.reset}>Reset filters</button>
+    <button onClick={() => {
+      f.reset()
+      const minDate = datasetsQ.data?.min_date
+      const maxDate = datasetsQ.data?.max_date
+      if (minDate && maxDate) f.set({ date_from: minDate, date_to: maxDate })
+    }}>Reset filters</button>
   </div>
 }

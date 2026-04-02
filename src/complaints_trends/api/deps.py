@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import Request
 
 from ..config import load_config
+from ..taxonomy import load_taxonomy
 from .services.categories_service import CategoriesService
 from .services.data_loader import DataLoader
 from .services.overview_service import OverviewService
@@ -13,9 +14,13 @@ from .services.pattern_fit_service import PatternFitService
 from .services.pattern_monitor_service import PatternMonitorService
 from .services.feedback_db import FeedbackDB
 from .services.feedback_service import FeedbackService
+from .services.feedback_dataset_service import FeedbackDatasetService
 from .services.feature_build_service import FeatureBuildService
 from .services.model_registry_service import ModelRegistryService
 from .services.calibrator_service import CalibratorService
+from .services.quality_service import QualityService
+from .services.audit_service import AuditService
+from .services.taxonomy_label_service import TaxonomyLabelService
 from .services.report_service import ReportService
 from .services.preparation_service import PreparationService
 from .services.run_service import RunService
@@ -30,13 +35,18 @@ def get_loader(config_path: str) -> DataLoader:
 def get_services(config_path: str) -> dict:
     cfg = load_config(config_path)
     loader = get_loader(config_path)
+    taxonomy = load_taxonomy(cfg.files.categories_seed_path)
+    labels = TaxonomyLabelService(taxonomy.get("category_labels", {}), taxonomy.get("subcategory_labels", {}))
     overview = OverviewService(loader)
     feedback_db = FeedbackDB(Path(cfg.analysis.pattern_monitoring.interim_dir) / "feedback.db")
-    feedback = FeedbackService(feedback_db)
+    feedback = FeedbackService(feedback_db, labels=labels)
+    feedback_dataset = FeedbackDatasetService(feedback_db, labels=labels)
     model_registry = ModelRegistryService(feedback_db)
     feature_builder = FeatureBuildService()
     calibrator = CalibratorService(Path(cfg.training.model_dir) / "rerankers", feedback, model_registry, feature_builder)
-    monitor = PatternMonitorService(loader, feedback_service=feedback, calibrator_service=calibrator, registry_service=model_registry)
+    monitor = PatternMonitorService(loader, feedback_service=feedback, calibrator_service=calibrator, registry_service=model_registry, labels=labels)
+    quality = QualityService(feedback, model_registry, labels=labels)
+    audit = AuditService(feedback_db, loader, feedback)
     return {
         "cfg": cfg,
         "loader": loader,
@@ -45,6 +55,10 @@ def get_services(config_path: str) -> dict:
         "pattern_fit": PatternFitService(loader),
         "pattern_monitor": monitor,
         "feedback": feedback,
+        "feedback_dataset": feedback_dataset,
+        "quality": quality,
+        "audit": audit,
+        "labels": labels,
         "model_registry": model_registry,
         "calibrator": calibrator,
         "report": ReportService(overview, monitor, loader),

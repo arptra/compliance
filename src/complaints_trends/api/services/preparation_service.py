@@ -3,11 +3,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 from typing import Any
 
 import pandas as pd
 
 from ...config import ProjectConfig
+from ...pattern_monitor import run_pattern_monitor
 from ...prepare_dataset import prepare_dataset
 from ..schemas import (
     PatternMonitorPresetPayload,
@@ -29,6 +31,26 @@ class PreparationService:
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
 
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[4]
+
+    def _append_log(self, upload_id: str, text: str) -> None:
+        d = self.base_dir / upload_id
+        d.mkdir(parents=True, exist_ok=True)
+        logs_path = d / "logs.txt"
+        prev = logs_path.read_text(encoding="utf-8") if logs_path.exists() else ""
+        logs_path.write_text(prev + text, encoding="utf-8")
+
+    def _cleanup_old_jobs(self, keep_upload_id: str) -> None:
+        rows = [r for r in self._load_registry() if str(r.get("upload_id")) == keep_upload_id]
+        self._save_registry(rows)
+        for p in self.base_dir.iterdir():
+            if not p.is_dir():
+                continue
+            if p.name == keep_upload_id:
+                continue
+            shutil.rmtree(p, ignore_errors=True)
+
     def _load_registry(self) -> list[dict[str, Any]]:
         if not self.registry_path.exists():
             return []
@@ -46,6 +68,7 @@ class PreparationService:
 
     def create_upload_job(self, filename: str, content: bytes) -> PreparationUploadResponse:
         upload_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        self._cleanup_old_jobs(upload_id)
         d = self.base_dir / upload_id
         d.mkdir(parents=True, exist_ok=True)
         ext = Path(filename).suffix or ".xlsx"
@@ -135,6 +158,20 @@ class PreparationService:
 
             merged_rows = self.merge_prepared_upload_into_main(df, upload_id)
             complaints_rows = int(df["is_complaint_llm"].fillna(False).sum()) if "is_complaint_llm" in df.columns else 0
+            pattern_tag = upload_id
+
+            monitor_error = None
+            try:
+                run_pattern_monitor(
+                    self.cfg,
+                    tag=pattern_tag,
+                    label_source="llm",
+                    fit_tag="latest",
+                    date_from=date_min,
+                    date_to=date_max,
+                )
+            except Exception as e:
+                monitor_error = f"pattern_monitor_autorun_failed: {e}"
 
             current = self.get_preparation_job(upload_id).model_dump() if self.get_preparation_job(upload_id) else current
             current.update(
@@ -149,10 +186,15 @@ class PreparationService:
                     "output_prepared_parquet": str(prepared_path),
                     "merged_into_main": True,
                     "available_for_pattern_monitor": True,
+                    "pattern_monitor_tag": pattern_tag,
+                    "error_message": None,
                 }
             )
             self._upsert_job(current)
-            logs_path.write_text(f"prepared_rows={len(df)}\nmerged_main_rows={merged_rows}\n", encoding="utf-8")
+            logs_text = f"prepared_rows={len(df)}\nmerged_main_rows={merged_rows}\npattern_monitor_tag={pattern_tag}\n"
+            if monitor_error:
+                logs_text += f"{monitor_error}\n"
+            logs_path.write_text(logs_text, encoding="utf-8")
             return PreparationRunResponse(upload_id=upload_id, status="succeeded")
         except Exception as e:
             current = self.get_preparation_job(upload_id).model_dump() if self.get_preparation_job(upload_id) else current
@@ -197,13 +239,42 @@ class PreparationService:
             return PatternMonitorPresetResponse(allowed=False, reason="upload_not_found", pattern_monitor_preset=None)
         if job.status != "succeeded" or not job.available_for_pattern_monitor:
             return PatternMonitorPresetResponse(allowed=False, reason="preparation_not_finished", pattern_monitor_preset=None)
+        target_month = (job.date_max or job.date_min or "")[:7] or None
+        if target_month is None:
+            return PatternMonitorPresetResponse(allowed=False, reason="upload_month_not_detected", pattern_monitor_preset=None)
+        monitor_tag = f"prep_{upload_id}"
+        try:
+            scored_path, state_path, report_path = run_pattern_monitor(
+                self.cfg,
+                tag=monitor_tag,
+                label_source="llm",
+                fit_tag="latest",
+                month=target_month,
+                force_materialize=True,
+            )
+            source_month_file = Path(self.cfg.analysis.pattern_monitoring.interim_dir) / f"month_{target_month}.parquet"
+            self._append_log(
+                upload_id,
+                (
+                    f"\n[pattern-monitor-internal] tag={monitor_tag} month={target_month} label_source=llm force_materialize=true\n"
+                    f"source_month_file={source_month_file}\n"
+                    f"scored_rows_file={scored_path}\n"
+                    f"state_file={state_path}\n"
+                    f"report_file={report_path}\n"
+                ),
+            )
+        except Exception as e:
+            self._append_log(upload_id, f"\n[pattern-monitor-internal-error] {e}\n")
+            return PatternMonitorPresetResponse(allowed=False, reason=f"pattern_monitor_run_failed: {e}", pattern_monitor_preset=None)
         return PatternMonitorPresetResponse(
             allowed=True,
             reason=None,
             pattern_monitor_preset=PatternMonitorPresetPayload(
                 date_from=job.date_min,
                 date_to=job.date_max,
+                month=target_month,
                 upload_id=upload_id,
+                pattern_tag=monitor_tag,
                 label_source="llm",
                 source_filename=job.original_filename,
             ),

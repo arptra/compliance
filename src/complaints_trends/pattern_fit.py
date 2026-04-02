@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,49 @@ from .pattern_common import (
 )
 from .pattern_paths import PatternFitPaths
 
+logger = logging.getLogger(__name__)
+
+
+def _pick_effective_label_source(df: pd.DataFrame, requested_source: str, complaints_only: bool, include_other_category: bool) -> str:
+    def _signal(source: str) -> tuple[int, int]:
+        is_complaint, category = get_label_columns(df, source)
+        complaint_rows = int(is_complaint.sum())
+        non_other_rows = int((category.fillna("OTHER").astype(str) != "OTHER").sum())
+        return complaint_rows, non_other_rows
+
+    requested_complaints, requested_non_other = _signal(requested_source)
+    if not complaints_only and include_other_category:
+        return requested_source
+
+    has_requested_signal = True
+    if complaints_only and requested_complaints == 0:
+        has_requested_signal = False
+    if not include_other_category and requested_non_other == 0:
+        has_requested_signal = False
+    if has_requested_signal:
+        return requested_source
+
+    fallback_source = "pred" if requested_source == "llm" else "llm"
+    fallback_complaints, fallback_non_other = _signal(fallback_source)
+    has_fallback_signal = True
+    if complaints_only and fallback_complaints == 0:
+        has_fallback_signal = False
+    if not include_other_category and fallback_non_other == 0:
+        has_fallback_signal = False
+
+    if has_fallback_signal:
+        logger.warning(
+            "pattern-fit: requested label_source=%s has no usable rows (complaints=%s, non_other=%s); fallback to %s (complaints=%s, non_other=%s)",
+            requested_source,
+            requested_complaints,
+            requested_non_other,
+            fallback_source,
+            fallback_complaints,
+            fallback_non_other,
+        )
+        return fallback_source
+    return requested_source
+
 
 def run_pattern_fit(cfg: ProjectConfig, tag: str, normal_period: str, event_period: str, label_source: str) -> tuple[Path, Path, Path]:
     pm = cfg.analysis.pattern_monitoring
@@ -36,7 +80,8 @@ def run_pattern_fit(cfg: ProjectConfig, tag: str, normal_period: str, event_peri
     paths.export.parent.mkdir(parents=True, exist_ok=True)
 
     base_df = pd.read_parquet(cfg.prepare.output_parquet)
-    is_complaint, category = get_label_columns(base_df, label_source)
+    effective_label_source = _pick_effective_label_source(base_df, label_source, pm.complaints_only, pm.include_other_category)
+    is_complaint, category = get_label_columns(base_df, effective_label_source)
     base_df = base_df.copy()
     base_df["is_complaint"] = is_complaint
     base_df["category"] = category
@@ -195,7 +240,8 @@ def run_pattern_fit(cfg: ProjectConfig, tag: str, normal_period: str, event_peri
 
     fit_bundle = {
         "tag": tag,
-        "label_source": label_source,
+        "label_source": effective_label_source,
+        "requested_label_source": label_source,
         "normal_period": normal_period,
         "event_period": event_period,
         "baseline_params": {"shrink_k": pm.baseline_weekday_shrink_k, "min_std": pm.baseline_min_std},
@@ -219,7 +265,8 @@ def run_pattern_fit(cfg: ProjectConfig, tag: str, normal_period: str, event_peri
         "tag": tag,
         "normal_period": normal_period,
         "event_period": event_period,
-        "label_source": label_source,
+        "label_source": effective_label_source,
+        "requested_label_source": label_source,
         "sizes": {"normal_rows": int(len(normal)), "event_rows": int(len(event)), "candidate_categories": len(candidates)},
     }
     paths.fit_meta.write_text(json.dumps(fit_meta, ensure_ascii=False, indent=2), encoding="utf-8")

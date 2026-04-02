@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
 from ..deps import get_service_container
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 
 router = APIRouter(prefix="/api/pattern-monitor", tags=["pattern-monitor"])
+
+
+def _truthy_mask(series: pd.Series) -> pd.Series:
+    normalized = series.map(lambda v: str(v).strip().lower() if v is not None else "")
+    return normalized.isin({"true", "1", "yes", "y", "t"})
 
 
 def _params(**kwargs):
@@ -18,7 +26,11 @@ def _apply_upload_preset(services: dict, params: dict) -> tuple[dict, bool, str 
         return params, True, None
     preset = services["preparation"].build_pattern_monitor_preset(upload_id)
     if not preset.allowed:
-        return params, False, preset.reason
+        # If upload preset is stale/invalid, fallback to regular monitor query
+        # instead of returning empty dashboard payloads.
+        params = dict(params)
+        params.pop("upload_id", None)
+        return params, True, f"upload_preset_ignored: {preset.reason}"
     pp = preset.pattern_monitor_preset
     if pp:
         params = dict(params)
@@ -35,11 +47,13 @@ def summary(pattern_tag: str = "latest", date_from: str | None = None, date_to: 
         return PatternMonitorSummaryResponse(tag=pattern_tag, allowed=False, reason=reason, upload_id=upload_id, summary=PatternMonitorSummaryPayload())
     result = services["pattern_monitor"].summary(pattern_tag, params)
     result.upload_id = upload_id
+    if reason:
+        result.reason = reason
     return result
 
 
 @router.get("/alerts", response_model=AlertRowResponse)
-def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, scoring_mode: str = "base", top_n: int = 200, services=Depends(get_service_container)):
+def alerts(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, scoring_mode: str = "base", top_n: int | None = None, services=Depends(get_service_container)):
     params = _params(**locals())
     params, allowed, _ = _apply_upload_preset(services, params)
     if not allowed:
@@ -66,7 +80,7 @@ def state(pattern_tag: str = "latest", date_from: str | None = None, date_to: st
 
 
 @router.get("/examples")
-def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, top_n: int = 50, services=Depends(get_service_container)):
+def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, upload_id: str | None = None, category: list[str] = Query(default_factory=list), min_score: float | None = None, threshold_mode: str | None = None, top_n: int | None = None, services=Depends(get_service_container)):
     params = _params(**locals())
     params, allowed, reason = _apply_upload_preset(services, params)
     if not allowed:
@@ -75,3 +89,42 @@ def examples(pattern_tag: str = "latest", date_from: str | None = None, date_to:
     out["allowed"] = True
     out["reason"] = None
     return out
+
+
+@router.get("/run-output", response_model=AlertRowResponse)
+def run_output(pattern_tag: str = "latest", top_n: int | None = None, services=Depends(get_service_container)):
+    return services["pattern_monitor"].run_output_rows(pattern_tag, top_n=top_n)
+
+
+@router.get("/run-output-by-path", response_model=AlertRowResponse)
+def run_output_by_path(path: str, top_n: int | None = None, services=Depends(get_service_container)):
+    return services["pattern_monitor"].run_output_rows_by_path(path, top_n=top_n)
+
+
+@router.get("/top-alerts-excel", response_model=AlertRowResponse)
+def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, date_to: str | None = None, category: list[str] = Query(default_factory=list), top_n: int | None = None, services=Depends(get_service_container)):
+    resolved = services["loader"].resolve_tag("pattern_monitor", pattern_tag)
+    export_path = Path(services["cfg"].analysis.pattern_monitoring.exports_dir) / f"pattern_monitor_{resolved}.xlsx"
+    if not export_path.exists():
+        return AlertRowResponse(rows=[])
+    try:
+        df = pd.read_excel(export_path, sheet_name="alert_examples")
+    except Exception:
+        return AlertRowResponse(rows=[])
+    if not df.empty:
+        if "is_pattern_alert" in df.columns:
+            df = df[_truthy_mask(df["is_pattern_alert"])]
+        date_col = next((c for c in ("date", "event_time", "event_date", "created_at") if c in df.columns), None)
+        if date_col:
+            parsed = pd.to_datetime(df[date_col], errors="coerce")
+            if date_from:
+                df = df[parsed >= pd.to_datetime(date_from, errors="coerce")]
+            if date_to:
+                dt_to = pd.to_datetime(date_to, errors="coerce")
+                if pd.notna(dt_to) and "T" not in str(date_to) and " " not in str(date_to):
+                    dt_to = dt_to + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                df = df[parsed <= dt_to]
+        if category and "category" in df.columns:
+            df = df[df["category"].astype(str).isin([str(c) for c in category])]
+    rows = services["pattern_monitor"]._json_records(df, top_n)
+    return AlertRowResponse(rows=rows)

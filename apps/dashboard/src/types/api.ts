@@ -46,3 +46,117 @@ export type ContributionRow = ExecutiveReportResponse['charts']['category_contri
 export type CategoryPriorityRow = ExecutiveReportResponse['charts']['category_priority'][number]
 export type AlertExampleCard = ExecutiveReportResponse['charts']['alert_examples'][number]
 export type SummaryBlock = ExecutiveReportResponse['summary']
+
+export type FeedbackDatasetItem = {
+  id?: number | null
+  row_id: string
+  pattern_tag?: string | null
+  verdict: 'true' | 'false' | 'uncertain'
+  reviewer?: string | null
+  review_date?: string | null
+  reason_code?: string | null
+  comment?: string | null
+  base_score?: number | null
+  rerank_score?: number | null
+  category?: string | null
+  category_label_ru?: string | null
+  subcategory?: string | null
+  subcategory_label_ru?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  model_version?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type FeedbackDatasetSummary = {
+  reviewed_rows: number
+  true_count: number
+  false_count: number
+  uncertain_count: number
+  precision_reviewed: number | null
+  active_model_version: string | null
+}
+
+export type FeedbackDatasetResponse = {
+  items: FeedbackDatasetItem[]
+  total: number
+  page: number
+  page_size: number
+  summary: FeedbackDatasetSummary
+}
+
+export type ReviewDatasetFiltersState = {
+  pattern_tag?: string
+  reviewer?: string
+  verdict?: string
+  category?: string
+  subcategory?: string
+  reason_code?: string
+  model_version?: string
+  date_from?: string
+  date_to?: string
+  q?: string
+  page?: number
+  page_size?: number
+  sort_by?: string
+  sort_order?: string
+}
+
+export type PrecisionAtKItem = { k: number; precision: number | null }
+export type ScoreBucketItem = { bucket: string; reviewed_count: number; true_count: number; precision: number | null }
+export type GroupPrecisionItem = { name: string; label_ru?: string | null; reviewed_count: number; true_count: number; false_count: number; precision: number | null }
+export type ModelVersionMetricsItem = { version_id: string; train_rows: number | null; precision_reviewed: number | null; precision_at_50: number | null; precision_at_100: number | null; active: boolean }
+export type ModeMetrics = {
+  mode: 'base' | 'calibrated' | 'reranked'
+  score_column: string
+  reviewed_rows: number
+  true_count: number
+  false_count: number
+  uncertain_count: number
+  precision_reviewed: number | null
+  precision_at: PrecisionAtKItem[]
+  average_score_true: number | null
+  average_score_false: number | null
+  by_score_bucket: ScoreBucketItem[]
+  by_category: GroupPrecisionItem[]
+  by_cluster: GroupPrecisionItem[]
+}
+
+export type ModelQualityResponse = {
+  reviewed_rows: number
+  compare_modes: ModeMetrics[]
+  lift_vs_base: number | null
+  versions: ModelVersionMetricsItem[]
+}
+
+export type UnflaggedAuditEstimate = {
+  reviewed_in_sample: number
+  true_in_sample: number
+  estimated_hidden_positive_rate: number | null
+  estimated_hidden_positives_in_unflagged_pool: number | null
+  note: string
+}
+export type UnflaggedAuditRow = { row_id: string; review_verdict?: 'true' | 'false' | 'uncertain' | null; reviewer?: string | null; reviewed_at?: string | null; comment?: string | null }
+export type UnflaggedAuditSample = {
+  sample_id: string
+  created_at: string
+  pattern_tag?: string | null
+  date_from?: string | null
+  date_to?: string | null
+  sample_size: number
+  source_pool_size: number
+  query_meta_json?: string | null
+  status: string
+  rows: UnflaggedAuditRow[]
+  estimate?: UnflaggedAuditEstimate | null
+}
+
+export type PreparePreviewResponse = {
+  items: Record<string, unknown>[]
+  columns: string[]
+  total: number
+  page: number
+  page_size: number
+  path: string
+}

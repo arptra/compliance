@@ -2,20 +2,23 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateResponse, PatternMonitorSummaryPayload, PatternMonitorSummaryResponse
 from .data_loader import DataLoader
+from .taxonomy_label_service import TaxonomyLabelService
 
 
 class PatternMonitorService:
-    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None) -> None:
+    def __init__(self, loader: DataLoader, feedback_service=None, calibrator_service=None, registry_service=None, labels: TaxonomyLabelService | None = None) -> None:
         self.loader = loader
         self.feedback_service = feedback_service
         self.calibrator_service = calibrator_service
         self.registry_service = registry_service
+        self.labels = labels
 
     def _resolved_tag(self, tag: str) -> str:
         return self.loader.resolve_tag("pattern_monitor", tag)
@@ -36,6 +39,14 @@ class PatternMonitorService:
                 out = out[out["date"] <= date_to]
         if params.get("category") and "category" in out.columns:
             out = out[out["category"].isin(params["category"])]
+        if params.get("upload_id"):
+            if "source_upload_id" in out.columns:
+                out = out[out["source_upload_id"].astype(str) == str(params["upload_id"])]
+            else:
+                # Some historical/scored artifacts do not carry source_upload_id.
+                # In that case do not hard-drop all rows, otherwise dashboard shows
+                # empty results while underlying pattern_monitor outputs contain data.
+                out = out
         if params.get("min_score") is not None:
             score_col = "row_score" if "row_score" in out.columns else ("score" if "score" in out.columns else None)
             if score_col:
@@ -99,6 +110,26 @@ class PatternMonitorService:
             row_dialog = out["row_dialog"].fillna("").astype(str).str.strip()
             fallback = out[fallback_col].fillna("").astype(str) if fallback_col else ""
             out["row_dialog"] = row_dialog.where(row_dialog != "", fallback)
+        return out
+
+    def _with_ru_labels(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not self.labels or df.empty:
+            return df
+        out = df.copy()
+        if "category" in out.columns:
+            out["category_label_ru"] = out["category"].map(lambda v: self.labels.category_label_ru(None if pd.isna(v) else str(v)))
+        else:
+            out["category_label_ru"] = ""
+        if "subcategory" in out.columns:
+            out["subcategory_label_ru"] = out.apply(
+                lambda r: self.labels.subcategory_label_ru(
+                    None if pd.isna(r.get("category")) else str(r.get("category")),
+                    None if pd.isna(r.get("subcategory")) else str(r.get("subcategory")),
+                ),
+                axis=1,
+            )
+        else:
+            out["subcategory_label_ru"] = ""
         return out
 
     @staticmethod
@@ -254,7 +285,8 @@ class PatternMonitorService:
         resolved = self._resolved_tag(tag)
         scored = self._filter(self.loader.load_pattern_monitor_scored(resolved), params)
         if not scored.empty:
-            scored = scored[self._alert_mask(scored)]
+            alert_mask = self._alert_mask(scored)
+            scored = scored[alert_mask]
 
         requested_mode = params.get("scoring_mode") or "base"
         effective_mode = "base"
@@ -275,9 +307,12 @@ class PatternMonitorService:
             if sort_col in scored.columns:
                 scored = scored.sort_values(sort_col, ascending=False)
             scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
 
         active_version = self.registry_service.get_active() if self.registry_service else None
-        rows = self._json_records(scored, int(params.get("top_n", 200)))
+        top_n_raw = params.get("top_n")
+        limit = int(top_n_raw) if top_n_raw not in (None, "", 0, "0") else None
+        rows = self._json_records(scored, limit)
         return AlertRowResponse(
             rows=rows,
             scoring_mode_requested=requested_mode,
@@ -319,8 +354,37 @@ class PatternMonitorService:
                     break
             if "row_dialog" not in response.columns:
                 response["row_dialog"] = self._series(scored, "row_dialog", "").astype(str)
+            response = self._with_ru_labels(response)
 
         return {
             "tag": resolved,
-            "rows": self._json_records(response, int(params.get("top_n", 200))) if not response.empty else [],
+            "rows": self._json_records(response, int(params["top_n"]) if params.get("top_n") not in (None, "", 0, "0") else None) if not response.empty else [],
         }
+
+    def run_output_rows(self, tag: str, top_n: int | None = None) -> AlertRowResponse:
+        resolved = self._resolved_tag(tag)
+        scored = self.loader.load_pattern_monitor_scored(resolved)
+        if not scored.empty:
+            scored = scored[self._alert_mask(scored)]
+        if not scored.empty:
+            sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
+            if sort_col:
+                scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
+        return AlertRowResponse(rows=self._json_records(scored, top_n))
+
+    def run_output_rows_by_path(self, path: str, top_n: int | None = None) -> AlertRowResponse:
+        p = Path(path)
+        if not p.exists() or p.suffix != ".parquet":
+            return AlertRowResponse(rows=[])
+        scored = self.loader.read_parquet(p)
+        if not scored.empty:
+            scored = scored[self._alert_mask(scored)]
+        if not scored.empty:
+            sort_col = "pattern_like_score" if "pattern_like_score" in scored.columns else ("row_score" if "row_score" in scored.columns else None)
+            if sort_col:
+                scored = scored.sort_values(sort_col, ascending=False)
+            scored = self._with_row_dialog(scored)
+            scored = self._with_ru_labels(scored)
+        return AlertRowResponse(rows=self._json_records(scored, top_n))

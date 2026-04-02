@@ -28,21 +28,26 @@ class DataLoader:
             prepare_parquet=Path(cfg.prepare.output_parquet),
             interim_dir=Path(cfg.analysis.pattern_monitoring.interim_dir),
         )
-        self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[tuple[int, int], Any]] = OrderedDict()
         self._lock = RLock()
         self._cache_max_items = 24
-        self._prepare_cache: tuple[float, pd.DataFrame] | None = None
-        self._prepare_columns_cache: tuple[float, set[str]] | None = None
+        self._prepare_cache: tuple[tuple[int, int], pd.DataFrame] | None = None
+        self._prepare_columns_cache: tuple[tuple[int, int], set[str]] | None = None
 
-    def _cache_get(self, key: str, mtime: float) -> Any | None:
+    @staticmethod
+    def _file_stamp(path: Path) -> tuple[int, int]:
+        st = path.stat()
+        return int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))), int(st.st_size)
+
+    def _cache_get(self, key: str, stamp: tuple[int, int]) -> Any | None:
         cached = self._cache.get(key)
-        if not cached or cached[0] != mtime:
+        if not cached or cached[0] != stamp:
             return None
         self._cache.move_to_end(key)
         return cached[1]
 
-    def _cache_set(self, key: str, mtime: float, value: Any) -> None:
-        self._cache[key] = (mtime, value)
+    def _cache_set(self, key: str, stamp: tuple[int, int], value: Any) -> None:
+        self._cache[key] = (stamp, value)
         self._cache.move_to_end(key)
         while len(self._cache) > self._cache_max_items:
             self._cache.popitem(last=False)
@@ -50,14 +55,14 @@ class DataLoader:
     def _load_cached(self, path: Path, cache_key: str, loader) -> Any:
         if not path.exists():
             return None
-        mtime = path.stat().st_mtime
+        stamp = self._file_stamp(path)
         with self._lock:
-            cached_value = self._cache_get(cache_key, mtime)
+            cached_value = self._cache_get(cache_key, stamp)
             if cached_value is not None:
                 return cached_value
         value = loader(path)
         with self._lock:
-            self._cache_set(cache_key, mtime, value)
+            self._cache_set(cache_key, stamp, value)
         return value
 
     def read_many_parquet(self, paths: list[Path]) -> dict[str, pd.DataFrame]:
@@ -106,7 +111,7 @@ class DataLoader:
             p = self.paths.interim_dir / f"viz_state_{viz_tag}.parquet"
         else:
             p = self.paths.prepare_parquet
-        return p.stat().st_mtime if p.exists() else 0.0
+        return float(self._file_stamp(p)[0]) if p.exists() else 0.0
 
     def _normalize_prepare_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
@@ -174,26 +179,26 @@ class DataLoader:
         p = self.paths.prepare_parquet
         if not p.exists():
             return pd.DataFrame()
-        mtime = p.stat().st_mtime
+        stamp = self._file_stamp(p)
         with self._lock:
-            if self._prepare_cache and self._prepare_cache[0] == mtime:
+            if self._prepare_cache and self._prepare_cache[0] == stamp:
                 return self._prepare_cache[1].copy(deep=False)
         normalized = self._normalize_prepare_columns(self.read_parquet(p))
         with self._lock:
-            self._prepare_cache = (mtime, normalized)
+            self._prepare_cache = (stamp, normalized)
         return normalized.copy(deep=False)
 
     def load_prepare_timeseries(self) -> pd.DataFrame:
         columns = ["event_time", "created_at", "date", "count", "metric_count", "category", "subcategory", "complaint_category_llm", "complaint_subcategory_llm"]
         if not self.paths.prepare_parquet.exists():
             return pd.DataFrame()
-        mtime = self.paths.prepare_parquet.stat().st_mtime
+        stamp = self._file_stamp(self.paths.prepare_parquet)
         with self._lock:
-            if self._prepare_columns_cache and self._prepare_columns_cache[0] == mtime:
+            if self._prepare_columns_cache and self._prepare_columns_cache[0] == stamp:
                 available = self._prepare_columns_cache[1]
             else:
                 available = set(pq.ParquetFile(self.paths.prepare_parquet).schema_arrow.names)
-                self._prepare_columns_cache = (mtime, available)
+                self._prepare_columns_cache = (stamp, available)
         present = [c for c in columns if c in available]
         if not present:
             return self.load_prepare()

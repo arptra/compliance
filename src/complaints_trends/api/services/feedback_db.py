@@ -28,7 +28,9 @@ class FeedbackDB:
                     date_from TEXT NULL,
                     date_to TEXT NULL,
                     category TEXT NULL,
+                    category_label_ru TEXT NULL,
                     subcategory TEXT NULL,
+                    subcategory_label_ru TEXT NULL,
                     base_score REAL NULL,
                     rerank_score REAL NULL,
                     verdict TEXT NOT NULL CHECK (verdict IN ('true','false','uncertain')),
@@ -41,6 +43,11 @@ class FeedbackDB:
                 )
                 """
             )
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(analyst_feedback)").fetchall()}
+            if "category_label_ru" not in cols:
+                conn.execute("ALTER TABLE analyst_feedback ADD COLUMN category_label_ru TEXT NULL")
+            if "subcategory_label_ru" not in cols:
+                conn.execute("ALTER TABLE analyst_feedback ADD COLUMN subcategory_label_ru TEXT NULL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reranker_model_versions (
@@ -69,6 +76,35 @@ class FeedbackDB:
                     true_count INTEGER,
                     false_count INTEGER,
                     uncertain_count INTEGER
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS unflagged_audit_samples (
+                    sample_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    pattern_tag TEXT NULL,
+                    date_from TEXT NULL,
+                    date_to TEXT NULL,
+                    sample_size INTEGER NOT NULL,
+                    source_pool_size INTEGER NOT NULL,
+                    query_meta_json TEXT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('created','reviewed','archived'))
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS unflagged_audit_rows (
+                    id INTEGER PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    row_id TEXT NOT NULL,
+                    review_verdict TEXT NULL CHECK (review_verdict IN ('true','false','uncertain')),
+                    reviewer TEXT NULL,
+                    reviewed_at TEXT NULL,
+                    comment TEXT NULL,
+                    FOREIGN KEY(sample_id) REFERENCES unflagged_audit_samples(sample_id)
                 )
                 """
             )

@@ -286,6 +286,7 @@ class PreparationJobSummary(BaseModel):
     output_prepared_parquet: str | None = None
     merged_into_main: bool = False
     available_for_pattern_monitor: bool = False
+    pattern_monitor_tag: str | None = None
 
 
 class PreparationUploadResponse(BaseModel):
@@ -318,7 +319,9 @@ class PreparationPreviewResponse(BaseModel):
 class PatternMonitorPresetPayload(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
+    month: str | None = None
     upload_id: str
+    pattern_tag: str | None = None
     label_source: str = "llm"
     source_filename: str | None = None
 
@@ -353,7 +356,9 @@ class FeedbackCreate(BaseModel):
     base_score: float | None = None
     rerank_score: float | None = None
     category: str | None = None
+    category_label_ru: str | None = None
     subcategory: str | None = None
+    subcategory_label_ru: str | None = None
     date_from: str | None = None
     date_to: str | None = None
     model_version: str | None = None
@@ -380,6 +385,126 @@ class FeedbackSummaryResponse(BaseModel):
     by_category: list[dict[str, Any]] = Field(default_factory=list)
     by_cluster: list[dict[str, Any]] = Field(default_factory=list)
     by_score_bucket: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FeedbackDatasetItem(FeedbackItem):
+    pass
+
+
+class FeedbackDatasetSummary(BaseModel):
+    reviewed_rows: int = 0
+    true_count: int = 0
+    false_count: int = 0
+    uncertain_count: int = 0
+    precision_reviewed: float | None = None
+    active_model_version: str | None = None
+
+
+class FeedbackDatasetResponse(BaseModel):
+    items: list[FeedbackDatasetItem] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    summary: FeedbackDatasetSummary = Field(default_factory=FeedbackDatasetSummary)
+
+
+class PrecisionAtKItem(BaseModel):
+    k: int
+    precision: float | None = None
+
+
+class ScoreBucketItem(BaseModel):
+    bucket: str
+    reviewed_count: int
+    true_count: int
+    precision: float | None = None
+
+
+class CategoryPrecisionItem(BaseModel):
+    name: str
+    label_ru: str | None = None
+    reviewed_count: int
+    true_count: int
+    false_count: int
+    precision: float | None = None
+
+
+class ClusterPrecisionItem(CategoryPrecisionItem):
+    pass
+
+
+class ModelVersionMetricsItem(BaseModel):
+    version_id: str
+    train_rows: int | None = None
+    precision_reviewed: float | None = None
+    precision_at_50: float | None = None
+    precision_at_100: float | None = None
+    active: bool = False
+
+
+class ModeMetrics(BaseModel):
+    mode: Literal["base", "calibrated", "reranked"]
+    score_column: str
+    reviewed_rows: int = 0
+    true_count: int = 0
+    false_count: int = 0
+    uncertain_count: int = 0
+    precision_reviewed: float | None = None
+    precision_at: list[PrecisionAtKItem] = Field(default_factory=list)
+    average_score_true: float | None = None
+    average_score_false: float | None = None
+    by_score_bucket: list[ScoreBucketItem] = Field(default_factory=list)
+    by_category: list[CategoryPrecisionItem] = Field(default_factory=list)
+    by_cluster: list[ClusterPrecisionItem] = Field(default_factory=list)
+
+
+class ModelQualityResponse(BaseModel):
+    reviewed_rows: int = 0
+    compare_modes: list[ModeMetrics] = Field(default_factory=list)
+    lift_vs_base: float | None = None
+    versions: list[ModelVersionMetricsItem] = Field(default_factory=list)
+
+
+class UnflaggedAuditRow(BaseModel):
+    row_id: str
+    review_verdict: Literal["true", "false", "uncertain"] | None = None
+    reviewer: str | None = None
+    reviewed_at: str | None = None
+    comment: str | None = None
+
+
+class UnflaggedAuditEstimateResponse(BaseModel):
+    reviewed_in_sample: int = 0
+    true_in_sample: int = 0
+    estimated_hidden_positive_rate: float | None = None
+    estimated_hidden_positives_in_unflagged_pool: float | None = None
+    note: str = ""
+
+
+class UnflaggedAuditSample(BaseModel):
+    sample_id: str
+    created_at: str
+    pattern_tag: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    sample_size: int
+    source_pool_size: int
+    query_meta_json: str | None = None
+    status: str
+    rows: list[UnflaggedAuditRow] = Field(default_factory=list)
+    estimate: UnflaggedAuditEstimateResponse | None = None
+
+
+class UnflaggedAuditCreateRequest(BaseModel):
+    pattern_tag: str = "latest"
+    date_from: str | None = None
+    date_to: str | None = None
+    sample_size: int = 100
+    random_seed: int | None = None
+
+
+class UnflaggedAuditReviewRequest(BaseModel):
+    rows: list[UnflaggedAuditRow]
 
 
 class CalibratorTrainRequest(BaseModel):
