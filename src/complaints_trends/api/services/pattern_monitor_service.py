@@ -134,10 +134,14 @@ class PatternMonitorService:
 
     @staticmethod
     def _alert_mask(df: pd.DataFrame) -> pd.Series:
-        if "is_pattern_alert" in df.columns:
-            return df["is_pattern_alert"] == True
-        if "is_alert" in df.columns:
-            return df["is_alert"] == True
+        for col in ("is_pattern_alert", "is_pattern_allert", "is_alert"):
+            if col not in df.columns:
+                continue
+            series = df[col]
+            if pd.api.types.is_bool_dtype(series):
+                return series.fillna(False)
+            normalized = series.map(lambda v: str(v).strip().lower() if v is not None else "")
+            return normalized.isin({"true", "1", "yes", "y", "t"})
         return pd.Series([False] * len(df), index=df.index)
 
     @staticmethod
