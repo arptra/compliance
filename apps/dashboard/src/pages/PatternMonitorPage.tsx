@@ -154,7 +154,7 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const rawRows = (runOutputByPathQ.data?.rows?.length ?? 0) > 0 ? (runOutputByPathQ.data?.rows ?? []) : (alertsQ.data?.rows ?? [])
+  const rawRows = runOutputByPathQ.data?.rows ?? []
   const alertRows = rawRows.filter((row) => {
     const raw = row.is_pattern_alert ?? row.is_pattern_allert ?? row.is_alert
     if (raw === undefined || raw === null || raw === '') return true
@@ -193,7 +193,6 @@ export default function PatternMonitorPage() {
       <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>
         API: <code>{lastRunScoredPath ? runOutputByPathUrl : '/api/runs/pattern-monitor → /api/pattern-monitor/run-output-by-path'}</code>
         {runOutputByPathQ.error ? <span style={{ color: '#991b1b' }}> | data error: {String(runOutputByPathQ.error)}</span> : null}
-        {!lastRunScoredPath && hasStartedMonitor ? <span> | fallback: /api/pattern-monitor/alerts</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
@@ -221,7 +220,8 @@ export default function PatternMonitorPage() {
         </select>
       </div>
       {!hasStartedMonitor && <div style={{ fontSize: 12, opacity: 0.8 }}>Нажмите «Старт pattern-monitor», чтобы загрузить таблицу.</div>}
-      {hasStartedMonitor && !runOutputByPathQ.isLoading && !alertsQ.isLoading && <table className='table'>
+      {hasStartedMonitor && !lastRunScoredPath && !runMonitor.isPending && <div style={{ fontSize: 12, color: '#991b1b' }}>Нет пути к результату запуска (outputs.scored). Перезапустите монитор.</div>}
+      {hasStartedMonitor && !runOutputByPathQ.isLoading && <table className='table'>
         <thead><tr><th>#</th><th>Date</th><th>Category</th><th>Subcategory</th><th>Base</th><th>Rerank</th><th>dialog</th>{reviewMode && <><th>Verdict</th><th>Reason</th><th>Comment</th><th>Reset</th></>}</tr></thead>
         <tbody>
           {visibleRows.map((r, i) => {
