@@ -33,6 +33,7 @@ export default function PatternMonitorPage() {
   const [lastRunInfo, setLastRunInfo] = useState<string>('not_started')
   const [lastRunScoredPath, setLastRunScoredPath] = useState<string>('')
   const [hasStartedMonitor, setHasStartedMonitor] = useState(false)
+  const [lastRunSignature, setLastRunSignature] = useState<string>('')
   const [tableLimit, setTableLimit] = useState<'all' | 10 | 20 | 100>('all')
   const [sp, setSp] = useSearchParams()
   const navigate = useNavigate()
@@ -68,6 +69,24 @@ export default function PatternMonitorPage() {
     for (const c of f.categories) q.append('category', c)
     return q.toString()
   }, [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, scoringMode])
+
+  const runSignature = useMemo(() => JSON.stringify({
+    patternTag,
+    date_from: f.date_from || autoDateFrom || '',
+    date_to: f.date_to || autoDateTo || '',
+    categories: [...f.categories].sort(),
+    uploadId: uploadId || '',
+    autoMonth: autoMonth || '',
+  }), [patternTag, f.date_from, f.date_to, f.categories, uploadId, autoDateFrom, autoDateTo, autoMonth])
+
+  useEffect(() => {
+    if (!hasStartedMonitor || !lastRunSignature || lastRunSignature === runSignature) return
+    setHasStartedMonitor(false)
+    setLastRunScoredPath('')
+    setLastRunInfo('not_started')
+    qc.removeQueries({ queryKey: ['pm-alerts'] })
+    qc.removeQueries({ queryKey: ['pm-run-output-path'] })
+  }, [hasStartedMonitor, lastRunSignature, runSignature, qc])
 
   const alertsUrl = `/api/pattern-monitor/alerts?${qs}`
   const runOutputByPathUrl = lastRunScoredPath ? `/api/pattern-monitor/run-output-by-path?path=${encodeURIComponent(lastRunScoredPath)}` : ''
@@ -113,8 +132,9 @@ export default function PatternMonitorPage() {
 
   const triggerRun = useCallback((trigger: 'manual_click') => {
     setHasStartedMonitor(true)
+    setLastRunSignature(runSignature)
     if (!runMonitor.isPending) runMonitor.mutate(trigger)
-  }, [runMonitor])
+  }, [runMonitor, runSignature])
 
   const hasRunFilter = useMemo(() => {
     const hasDateRange = Boolean((f.date_from || autoDateFrom) && (f.date_to || autoDateTo))
