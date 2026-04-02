@@ -11,6 +11,11 @@ from ..schemas import AlertRowResponse, DailyPressureResponse, OverallStateRespo
 router = APIRouter(prefix="/api/pattern-monitor", tags=["pattern-monitor"])
 
 
+def _truthy_mask(series: pd.Series) -> pd.Series:
+    normalized = series.map(lambda v: str(v).strip().lower() if v is not None else "")
+    return normalized.isin({"true", "1", "yes", "y", "t"})
+
+
 def _params(**kwargs):
     return kwargs
 
@@ -108,7 +113,7 @@ def top_alerts_excel(pattern_tag: str = "latest", date_from: str | None = None, 
         return AlertRowResponse(rows=[])
     if not df.empty:
         if "is_pattern_alert" in df.columns:
-            df = df[df["is_pattern_alert"] == True]
+            df = df[_truthy_mask(df["is_pattern_alert"])]
         date_col = next((c for c in ("date", "event_time", "event_date", "created_at") if c in df.columns), None)
         if date_col:
             parsed = pd.to_datetime(df[date_col], errors="coerce")

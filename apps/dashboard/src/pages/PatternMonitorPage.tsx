@@ -151,7 +151,12 @@ export default function PatternMonitorPage() {
   const onVerdict = (row: Record<string, unknown>, verdict: 'true'|'false'|'uncertain', reason_code?: string, comment?: string) => {
     saveFeedback.mutate({ row_id: String(row.row_id ?? ''), pattern_tag: patternTag, verdict, reason_code, comment, category: row.category, subcategory: row.subcategory, base_score: row.pattern_like_score ?? row.row_score, rerank_score: row.rerank_score ?? row.calibrated_score })
   }
-  const tableRows = topAlertsExcelQ.data?.rows ?? []
+  const alertRowsFallback = (alertsQ.data?.rows ?? []).filter((row) => {
+    const raw = row.is_pattern_alert
+    if (typeof raw === 'boolean') return raw
+    return ['true', '1', 'yes', 'y', 't'].includes(String(raw ?? '').trim().toLowerCase())
+  })
+  const tableRows = (topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? (topAlertsExcelQ.data?.rows ?? []) : alertRowsFallback
   const visibleRows = tableLimit === 'all' ? tableRows : tableRows.slice(0, tableLimit)
 
   return <div>
@@ -185,6 +190,7 @@ export default function PatternMonitorPage() {
         API: <code>{alertsUrl}</code>
         {alertsQ.error ? <span style={{ color: '#991b1b' }}> | alerts error: {String(alertsQ.error)}</span> : null}
         {(topAlertsExcelQ.data?.rows?.length ?? 0) > 0 ? <span> | source: /top-alerts-excel</span> : null}
+        {(topAlertsExcelQ.data?.rows?.length ?? 0) === 0 && alertRowsFallback.length > 0 ? <span> | fallback: /alerts (is_pattern_alert=true)</span> : null}
       </div>
       <div style={{ marginTop: 8 }}>Active version: <ModelVersionBadge version={alertsQ.data?.active_calibrator_version} /></div>
     </div>
