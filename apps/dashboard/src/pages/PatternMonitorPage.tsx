@@ -122,7 +122,12 @@ export default function PatternMonitorPage() {
     onSuccess: async (resp) => {
       setLastRunInfo(`success @ ${new Date().toISOString()}`)
       setLastRunScoredPath(String(resp.outputs?.scored ?? ''))
-      await qc.invalidateQueries({ queryKey: ['pm-summary'] }); await qc.invalidateQueries({ queryKey: ['pm-alerts'] }); await qc.invalidateQueries({ queryKey: ['meta-tags'] })
+      await qc.invalidateQueries({ queryKey: ['pm-summary'] })
+      await qc.invalidateQueries({ queryKey: ['pm-alerts'] })
+      await qc.invalidateQueries({ queryKey: ['pm-top-alerts-excel'] })
+      await qc.invalidateQueries({ queryKey: ['pm-run-output'] })
+      await qc.invalidateQueries({ queryKey: ['pm-run-output-path'] })
+      await qc.invalidateQueries({ queryKey: ['meta-tags'] })
     },
     onError: (e) => {
       setLastRunInfo(`error @ ${new Date().toISOString()} :: ${String(e)}`)
