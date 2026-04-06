@@ -367,12 +367,30 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         df = df.head(limit).copy()
 
     dialog_fields = _get_dialog_fields(cfg, df)
-    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, "event_time", "month", "source_file", "row_id"]))
+    configured_service_columns = [str(c).strip() for c in (cfg.prepare.service_columns or []) if str(c).strip()]
+    service_columns: list[str] = []
+    normalized_src: dict[str, str] = {}
+    for src_col in df.columns:
+        key = " ".join(str(src_col).strip().lower().split())
+        if key and key not in normalized_src:
+            normalized_src[key] = str(src_col)
+    for col in configured_service_columns:
+        normalized = " ".join(col.strip().lower().split())
+        src_col = normalized_src.get(normalized)
+        if src_col and src_col != col and col not in df.columns:
+            src_idx = next((i for i, raw_name in enumerate(df.columns) if str(raw_name) == src_col), None)
+            if src_idx is not None:
+                df[col] = df.iloc[:, src_idx]
+        if col not in df.columns:
+            df[col] = ""
+        if col not in service_columns:
+            service_columns.append(col)
+    keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, *service_columns, "event_time", "month", "source_file", "row_id"]))
     df = df[[c for c in keep if c in df.columns]].copy()
 
     # Normalize heterogeneous Excel object columns to string early to avoid ArrowTypeError
     # on parquet export (e.g. mixed int/str in one source column).
-    text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields]) if c in df.columns]
+    text_like_cols = [c for c in dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, *service_columns]) if c in df.columns]
     for c in text_like_cols:
         df[c] = df[c].apply(lambda v: "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
 

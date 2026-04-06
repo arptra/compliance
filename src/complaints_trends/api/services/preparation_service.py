@@ -137,9 +137,34 @@ class PreparationService:
                 cfg2.input.file_format = "excel"
             else:
                 cfg2.input.file_format = "auto"
+            available_columns = self._read_source_columns(source_path)
+            available_set = {str(c) for c in available_columns}
+            if cfg2.input.datetime_column not in available_set:
+                for candidate in ("created_at", "event_time", "date", "datetime", "createdAt", "timestamp"):
+                    if candidate in available_set:
+                        cfg2.input.datetime_column = candidate
+                        break
+            dialog_candidates = list(dict.fromkeys([*(cfg2.input.dialog_columns or []), cfg2.input.dialog_column] if cfg2.input.dialog_column else [*(cfg2.input.dialog_columns or [])]))
+            has_dialog = any(c in available_set for c in dialog_candidates if c)
+            if not has_dialog:
+                fallback_dialogs = [c for c in ("dialog_text", "call_text", "comment_text", "summary_text", "dialog", "text", "message", "body") if c in available_set]
+                if not fallback_dialogs:
+                    fallback_dialogs = [c for c in (cfg2.input.signal_columns or []) if c in available_set]
+                if fallback_dialogs:
+                    cfg2.input.dialog_columns = fallback_dialogs
+                    cfg2.input.dialog_column = fallback_dialogs[0]
             cfg2.prepare.output_parquet = str(prepared_path)
 
-            df = prepare_dataset(cfg2, pilot=False, llm_mock=not cfg2.llm.enabled)
+            try:
+                df = prepare_dataset(cfg2, pilot=False, llm_mock=not cfg2.llm.enabled)
+            except Exception as e:
+                err_text = str(e)
+                missing_mtls = "mTLS files are missing for GigaChat" in err_text
+                if cfg2.llm.enabled and missing_mtls:
+                    self._append_log(upload_id, "\n[prepare] mTLS files are missing, fallback to llm_mock=true for this upload.\n")
+                    df = prepare_dataset(cfg2, pilot=False, llm_mock=True)
+                else:
+                    raise
             if df.empty:
                 raise ValueError("prepared dataframe is empty")
 
@@ -249,15 +274,14 @@ class PreparationService:
                 tag=monitor_tag,
                 label_source="llm",
                 fit_tag="latest",
-                month=target_month,
+                date_from=job.date_min,
+                date_to=job.date_max,
                 force_materialize=True,
             )
-            source_month_file = Path(self.cfg.analysis.pattern_monitoring.interim_dir) / f"month_{target_month}.parquet"
             self._append_log(
                 upload_id,
                 (
-                    f"\n[pattern-monitor-internal] tag={monitor_tag} month={target_month} label_source=llm force_materialize=true\n"
-                    f"source_month_file={source_month_file}\n"
+                    f"\n[pattern-monitor-internal] tag={monitor_tag} date_from={job.date_min} date_to={job.date_max} label_source=llm force_materialize=true\n"
                     f"scored_rows_file={scored_path}\n"
                     f"state_file={state_path}\n"
                     f"report_file={report_path}\n"
@@ -303,6 +327,17 @@ class PreparationService:
             return {"rows_total": int(len(df)), "date_min": dmin, "date_max": dmax, "available_columns": list(df.columns)}
         except Exception:
             return {"rows_total": 0, "date_min": None, "date_max": None, "available_columns": []}
+
+    @staticmethod
+    def _read_source_columns(source_path: Path) -> list[str]:
+        try:
+            if source_path.suffix.lower() == ".csv":
+                df = pd.read_csv(source_path, nrows=1)
+            else:
+                df = pd.read_excel(source_path, nrows=1)
+            return [str(c) for c in df.columns]
+        except Exception:
+            return []
 
     @staticmethod
     def _normalize_job(payload: dict[str, Any]) -> dict[str, Any]:
