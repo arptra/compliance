@@ -139,7 +139,16 @@ class PreparationService:
                 cfg2.input.file_format = "auto"
             cfg2.prepare.output_parquet = str(prepared_path)
 
-            df = prepare_dataset(cfg2, pilot=False, llm_mock=not cfg2.llm.enabled)
+            try:
+                df = prepare_dataset(cfg2, pilot=False, llm_mock=not cfg2.llm.enabled)
+            except Exception as e:
+                err_text = str(e)
+                missing_mtls = "mTLS files are missing for GigaChat" in err_text
+                if cfg2.llm.enabled and missing_mtls:
+                    self._append_log(upload_id, "\n[prepare] mTLS files are missing, fallback to llm_mock=true for this upload.\n")
+                    df = prepare_dataset(cfg2, pilot=False, llm_mock=True)
+                else:
+                    raise
             if df.empty:
                 raise ValueError("prepared dataframe is empty")
 
