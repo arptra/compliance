@@ -378,7 +378,9 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         normalized = " ".join(col.strip().lower().split())
         src_col = normalized_src.get(normalized)
         if src_col and src_col != col and col not in df.columns:
-            df[col] = df[src_col]
+            src_idx = next((i for i, raw_name in enumerate(df.columns) if str(raw_name) == src_col), None)
+            if src_idx is not None:
+                df[col] = df.iloc[:, src_idx]
         if col not in df.columns:
             df[col] = ""
         if col not in service_columns:
