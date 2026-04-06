@@ -249,15 +249,14 @@ class PreparationService:
                 tag=monitor_tag,
                 label_source="llm",
                 fit_tag="latest",
-                month=target_month,
+                date_from=job.date_min,
+                date_to=job.date_max,
                 force_materialize=True,
             )
-            source_month_file = Path(self.cfg.analysis.pattern_monitoring.interim_dir) / f"month_{target_month}.parquet"
             self._append_log(
                 upload_id,
                 (
-                    f"\n[pattern-monitor-internal] tag={monitor_tag} month={target_month} label_source=llm force_materialize=true\n"
-                    f"source_month_file={source_month_file}\n"
+                    f"\n[pattern-monitor-internal] tag={monitor_tag} date_from={job.date_min} date_to={job.date_max} label_source=llm force_materialize=true\n"
                     f"scored_rows_file={scored_path}\n"
                     f"state_file={state_path}\n"
                     f"report_file={report_path}\n"

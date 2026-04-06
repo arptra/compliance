@@ -367,10 +367,22 @@ def prepare_dataset(cfg: ProjectConfig, pilot: bool = False, limit: int | None =
         df = df.head(limit).copy()
 
     dialog_fields = _get_dialog_fields(cfg, df)
-    service_columns = [str(c) for c in (cfg.prepare.service_columns or []) if str(c).strip()]
-    for col in service_columns:
+    configured_service_columns = [str(c).strip() for c in (cfg.prepare.service_columns or []) if str(c).strip()]
+    service_columns: list[str] = []
+    normalized_src: dict[str, str] = {}
+    for src_col in df.columns:
+        key = " ".join(str(src_col).strip().lower().split())
+        if key and key not in normalized_src:
+            normalized_src[key] = str(src_col)
+    for col in configured_service_columns:
+        normalized = " ".join(col.strip().lower().split())
+        src_col = normalized_src.get(normalized)
+        if src_col and src_col != col and col not in df.columns:
+            df[col] = df[src_col]
         if col not in df.columns:
             df[col] = ""
+        if col not in service_columns:
+            service_columns.append(col)
     keep = list(dict.fromkeys([*cfg.input.signal_columns, *dialog_fields, *service_columns, "event_time", "month", "source_file", "row_id"]))
     df = df[[c for c in keep if c in df.columns]].copy()
 
