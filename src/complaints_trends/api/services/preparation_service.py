@@ -137,6 +137,22 @@ class PreparationService:
                 cfg2.input.file_format = "excel"
             else:
                 cfg2.input.file_format = "auto"
+            available_columns = self._read_source_columns(source_path)
+            available_set = {str(c) for c in available_columns}
+            if cfg2.input.datetime_column not in available_set:
+                for candidate in ("created_at", "event_time", "date", "datetime", "createdAt", "timestamp"):
+                    if candidate in available_set:
+                        cfg2.input.datetime_column = candidate
+                        break
+            dialog_candidates = list(dict.fromkeys([*(cfg2.input.dialog_columns or []), cfg2.input.dialog_column] if cfg2.input.dialog_column else [*(cfg2.input.dialog_columns or [])]))
+            has_dialog = any(c in available_set for c in dialog_candidates if c)
+            if not has_dialog:
+                fallback_dialogs = [c for c in ("dialog_text", "call_text", "comment_text", "summary_text", "dialog", "text", "message", "body") if c in available_set]
+                if not fallback_dialogs:
+                    fallback_dialogs = [c for c in (cfg2.input.signal_columns or []) if c in available_set]
+                if fallback_dialogs:
+                    cfg2.input.dialog_columns = fallback_dialogs
+                    cfg2.input.dialog_column = fallback_dialogs[0]
             cfg2.prepare.output_parquet = str(prepared_path)
 
             try:
@@ -311,6 +327,17 @@ class PreparationService:
             return {"rows_total": int(len(df)), "date_min": dmin, "date_max": dmax, "available_columns": list(df.columns)}
         except Exception:
             return {"rows_total": 0, "date_min": None, "date_max": None, "available_columns": []}
+
+    @staticmethod
+    def _read_source_columns(source_path: Path) -> list[str]:
+        try:
+            if source_path.suffix.lower() == ".csv":
+                df = pd.read_csv(source_path, nrows=1)
+            else:
+                df = pd.read_excel(source_path, nrows=1)
+            return [str(c) for c in df.columns]
+        except Exception:
+            return []
 
     @staticmethod
     def _normalize_job(payload: dict[str, Any]) -> dict[str, Any]:
