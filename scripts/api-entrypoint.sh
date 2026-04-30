@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+APP_ROOT="/app"
 CONFIG_TEMPLATE="${CONFIG_TEMPLATE:-/app/configs/project.yaml}"
 export RUNTIME_CONFIG="${RUNTIME_CONFIG:-/tmp/project.runtime.yaml}"
+
+# shellcheck source=/dev/null
+source "${APP_ROOT}/scripts/setup_gigachat_ca_env.sh"
+setup_gigachat_ca_env "${APP_ROOT}"
 
 python /app/scripts/generate_runtime_config.py \
   --input "$CONFIG_TEMPLATE" \

@@ -4,6 +4,7 @@ import OverviewPage from '../pages/OverviewPage'
 import CategoriesPage from '../pages/CategoriesPage'
 import TimeseriesPage from '../pages/TimeseriesPage'
 import PreparationPage from '../pages/PreparationPage'
+import GigaChatPage from '../pages/GigaChatPage'
 import PatternFitPage from '../pages/PatternFitPage'
 import PatternMonitorPage from '../pages/PatternMonitorPage'
 import ReviewDatasetPage from '../pages/ReviewDatasetPage'
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
     { path: 'categories', element: <CategoriesPage /> },
     { path: 'timeseries', element: <TimeseriesPage /> },
     { path: 'preparation', element: <PreparationPage /> },
+    { path: 'gigachat', element: <GigaChatPage /> },
     { path: 'pattern-fit', element: <PatternFitPage /> },
     { path: 'pattern-monitor', element: <PatternMonitorPage /> },
     { path: 'review-dataset', element: <ReviewDatasetPage /> },

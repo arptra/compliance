@@ -51,14 +51,20 @@ class PIIConfig(AppBaseModel):
 
 class LLMConfig(AppBaseModel):
     enabled: bool = True
-    mode: Literal["mtls", "tls"] = "mtls"
+    mode: Literal["mtls", "tls", "token"] = "mtls"
     base_url: str
     ca_bundle_file: str | None = None
     cert_file: str | None = None
     key_file: str | None = None
     key_file_password_env: str | None = None
+    oauth_url: str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    authorization_key_file: str = "key"
+    oauth_scope: str = "GIGACHAT_API_PERS"
     verify_ssl_certs: bool = True
     model: str = "GigaChat"
+    temperature: float = 0.2
+    top_p: float = 0.95
+    max_output_tokens: int = 2048
     max_workers: int = 8
     batch_size: int = 20
     max_text_chars: int = 1200
@@ -72,6 +78,11 @@ class LLMConfig(AppBaseModel):
     category_mode: Literal["taxonomy", "discover", "questions"] = "taxonomy"
     discovered_taxonomy_file: str = "data/interim/discovered_categories.json"
     questions_file: str = "configs/questions_categories.json"
+    system_prompt: str = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
+    user_prompt_prefix: str = ""
+    context_notes: str = ""
+    classification_prompt_notes: str = ""
+    tagging_prompt_notes: str = ""
 
 
 class PrepareConfig(AppBaseModel):
@@ -254,10 +265,14 @@ def _env_bool(name: str) -> bool | None:
 def _apply_llm_env_overrides(data: dict) -> dict:
     llm = data.setdefault("llm", {})
     env_map = {
+        "GIGACHAT_MODE": "mode",
         "GIGACHAT_BASE_URL": "base_url",
         "GIGACHAT_CA_BUNDLE_FILE": "ca_bundle_file",
         "GIGACHAT_CERT_FILE": "cert_file",
         "GIGACHAT_KEY_FILE": "key_file",
+        "GIGACHAT_OAUTH_URL": "oauth_url",
+        "GIGACHAT_AUTHORIZATION_KEY_FILE": "authorization_key_file",
+        "GIGACHAT_OAUTH_SCOPE": "oauth_scope",
         "GIGACHAT_MODEL": "model",
     }
     for env_name, cfg_key in env_map.items():

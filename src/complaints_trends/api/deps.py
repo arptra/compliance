@@ -15,11 +15,13 @@ from .services.pattern_monitor_service import PatternMonitorService
 from .services.feedback_db import FeedbackDB
 from .services.feedback_service import FeedbackService
 from .services.feedback_dataset_service import FeedbackDatasetService
+from .services.gigachat_connection_service import GigaChatConnectionService
 from .services.feature_build_service import FeatureBuildService
 from .services.model_registry_service import ModelRegistryService
 from .services.calibrator_service import CalibratorService
 from .services.quality_service import QualityService
 from .services.audit_service import AuditService
+from .services.gigachat_lab_service import GigaChatLabService
 from .services.taxonomy_label_service import TaxonomyLabelService
 from .services.report_service import ReportService
 from .services.preparation_service import PreparationService
@@ -47,6 +49,8 @@ def get_services(config_path: str) -> dict:
     monitor = PatternMonitorService(loader, feedback_service=feedback, calibrator_service=calibrator, registry_service=model_registry, labels=labels)
     quality = QualityService(feedback, model_registry, labels=labels)
     audit = AuditService(feedback_db, loader, feedback)
+    gigachat_lab = GigaChatLabService(cfg)
+    gigachat_connection = GigaChatConnectionService(cfg, lab_service=gigachat_lab)
     return {
         "cfg": cfg,
         "loader": loader,
@@ -58,6 +62,8 @@ def get_services(config_path: str) -> dict:
         "feedback_dataset": feedback_dataset,
         "quality": quality,
         "audit": audit,
+        "gigachat_lab": gigachat_lab,
+        "gigachat_connection": gigachat_connection,
         "labels": labels,
         "model_registry": model_registry,
         "calibrator": calibrator,

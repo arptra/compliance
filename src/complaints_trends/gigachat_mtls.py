@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import LLMConfig
+from .gigachat_api import build_gigachat_transport_client
 from .gigachat_schema import NormalizeTicket
 from .questions_loader import load_questions, save_questions_taxonomy
 
@@ -259,6 +260,25 @@ class _HTTPXChatClient:
         content = data["choices"][0]["message"]["content"]
         return _ChatResp(content)
 
+    def list_models(self) -> list[str]:
+        response = self._client.get("/models")
+        response.raise_for_status()
+        payload = response.json()
+        items = payload
+        if isinstance(payload, dict):
+            items = payload.get("data") or payload.get("models") or payload.get("items") or []
+        if not isinstance(items, list):
+            return []
+        models: list[str] = []
+        for item in items:
+            if isinstance(item, dict):
+                model_name = item.get("id") or item.get("name")
+                if model_name:
+                    models.append(str(model_name))
+            elif item:
+                models.append(str(item))
+        return models
+
 
 class LLMCache:
     def __init__(self, db_path: str):
@@ -314,25 +334,27 @@ class GigaChatNormalizer:
         self._load_questions_mode()
 
         if not mock:
-            if cfg.mode == "mtls":
-                _validate_mtls_files(cfg.ca_bundle_file, cfg.cert_file, cfg.key_file)
-                key_password = (os.getenv(cfg.key_file_password_env) if cfg.key_file_password_env else os.getenv("GIGACHAT_KEY_PASSWORD")) or None
-                ssl_context = _build_mtls_ssl_context(
-                    ca_bundle_file=cfg.ca_bundle_file,
-                    cert_file=cfg.cert_file,
-                    key_file=cfg.key_file,
-                    key_file_password=key_password,
-                    verify_ssl_certs=cfg.verify_ssl_certs,
-                )
-                self.client = _HTTPXChatClient(base_url=cfg.base_url, verify=ssl_context, timeout=60.0)
-            else:
-                verify: bool | str = cfg.verify_ssl_certs
-                if cfg.ca_bundle_file:
-                    verify = cfg.ca_bundle_file
-                self.client = _HTTPXChatClient(base_url=cfg.base_url, verify=verify, timeout=60.0)
+            self.client = build_gigachat_transport_client(cfg)
 
     def _key(self, payload: dict) -> str:
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False) + self.cfg.prompt_version + self._mode_signature()
+        raw = json.dumps(
+            {
+                "payload": payload,
+                "prompt_version": self.cfg.prompt_version,
+                "mode_signature": self._mode_signature(),
+                "model": self.cfg.model,
+                "temperature": getattr(self.cfg, "temperature", 0.2),
+                "top_p": getattr(self.cfg, "top_p", 0.95),
+                "max_output_tokens": getattr(self.cfg, "max_output_tokens", 2048),
+                "system_prompt": getattr(self.cfg, "system_prompt", SYSTEM_PROMPT),
+                "user_prompt_prefix": getattr(self.cfg, "user_prompt_prefix", ""),
+                "context_notes": getattr(self.cfg, "context_notes", ""),
+                "classification_prompt_notes": getattr(self.cfg, "classification_prompt_notes", ""),
+                "tagging_prompt_notes": getattr(self.cfg, "tagging_prompt_notes", ""),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _mode_signature(self) -> str:
@@ -345,11 +367,76 @@ class GigaChatNormalizer:
     def _llm_input(self, payload: dict) -> dict:
         return {k: v for k, v in payload.items() if k != "client_first_message"}
 
+    def _system_prompt(self) -> str:
+        value = str(getattr(self.cfg, "system_prompt", SYSTEM_PROMPT) or "").strip()
+        return value or SYSTEM_PROMPT
+
+    def _wrap_user_prompt(self, base_prompt: str) -> str:
+        context_notes = str(getattr(self.cfg, "context_notes", "") or "").strip()
+        user_prompt_prefix = str(getattr(self.cfg, "user_prompt_prefix", "") or "").strip()
+        classification_notes = self._format_labeling_notes(str(getattr(self.cfg, "classification_prompt_notes", "") or "").strip())
+        tagging_notes = self._format_labeling_notes(str(getattr(self.cfg, "tagging_prompt_notes", "") or "").strip())
+        parts: list[str] = []
+        if context_notes:
+            parts.append(f"Контекст эксперимента:\n{context_notes}")
+        if classification_notes:
+            parts.append(f"Правила классификации:\n{classification_notes}")
+        if tagging_notes:
+            parts.append(f"Правила тегирования:\n{tagging_notes}")
+        if user_prompt_prefix:
+            parts.append(user_prompt_prefix)
+        parts.append(base_prompt)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _format_labeling_notes(raw: str) -> str:
+        if not raw:
+            return ""
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                lines: list[str] = []
+                for item in parsed:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name", "") or "").strip()
+                    description = str(item.get("description", "") or "").strip()
+                    if name and description:
+                        lines.append(f"- {name}: {description}")
+                    elif name:
+                        lines.append(f"- {name}")
+                    elif description:
+                        lines.append(f"- {description}")
+                if lines:
+                    return "\n".join(lines)
+        except Exception:
+            pass
+        return raw
+
+    def _chat_payload(self, user_prompt: str) -> dict:
+        payload: dict = {
+            "model": self.cfg.model,
+            "messages": [
+                {"role": "system", "content": self._system_prompt()},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        temperature = getattr(self.cfg, "temperature", None)
+        top_p = getattr(self.cfg, "top_p", None)
+        max_output_tokens = getattr(self.cfg, "max_output_tokens", None)
+        if temperature is not None:
+            payload["temperature"] = float(temperature)
+        if top_p is not None:
+            payload["top_p"] = float(top_p)
+        if max_output_tokens is not None:
+            payload["max_tokens"] = int(max_output_tokens)
+        return payload
+
     def _single_user_prompt(self, payload: dict) -> str:
         if self.category_mode == "questions":
             existing_categories = sorted({v.get("category_code", "") for v in self.question_category_map.values() if str(v.get("category_code", "")).strip()})
             allowed_categories = [*existing_categories, self.questions_fallback_code] if existing_categories else [self.questions_fallback_code]
-            return json.dumps(
+            return self._wrap_user_prompt(json.dumps(
                 {
                     "task": "questionnaire_normalize_ticket",
                     "rules": {
@@ -373,9 +460,9 @@ class GigaChatNormalizer:
                     "input": self._llm_input(payload),
                 },
                 ensure_ascii=False,
-            )
+            ))
         if self.category_mode == "discover":
-            return json.dumps(
+            return self._wrap_user_prompt(json.dumps(
                 {
                     "task": "discover_and_normalize_ticket",
                     "rules": {
@@ -396,8 +483,8 @@ class GigaChatNormalizer:
                     "input": self._llm_input(payload),
                 },
                 ensure_ascii=False,
-            )
-        return json.dumps(
+            ))
+        return self._wrap_user_prompt(json.dumps(
             {
                 "task": "normalize_ticket",
                 "rules": {
@@ -415,13 +502,13 @@ class GigaChatNormalizer:
                 "input": self._llm_input(payload),
             },
             ensure_ascii=False,
-        )
+        ))
 
     def _batch_user_prompt(self, batch_indexes: list[int], batch_payloads: list[dict]) -> str:
         if self.category_mode == "questions":
             existing_categories = sorted({v.get("category_code", "") for v in self.question_category_map.values() if str(v.get("category_code", "")).strip()})
             allowed_categories = [*existing_categories, self.questions_fallback_code] if existing_categories else [self.questions_fallback_code]
-            return json.dumps(
+            return self._wrap_user_prompt(json.dumps(
                 {
                     "task": "questionnaire_normalize_batch",
                     "rules": {
@@ -447,9 +534,9 @@ class GigaChatNormalizer:
                     ],
                 },
                 ensure_ascii=False,
-            )
+            ))
         if self.category_mode == "discover":
-            return json.dumps(
+            return self._wrap_user_prompt(json.dumps(
                 {
                     "task": "discover_and_normalize_tickets",
                     "rules": {
@@ -475,8 +562,8 @@ class GigaChatNormalizer:
                     ],
                 },
                 ensure_ascii=False,
-            )
-        return json.dumps(
+            ))
+        return self._wrap_user_prompt(json.dumps(
             {
                 "task": "normalize_tickets",
                 "rules": {
@@ -499,7 +586,7 @@ class GigaChatNormalizer:
                 ],
             },
             ensure_ascii=False,
-        )
+        ))
 
     def _remember_discovered_category(self, parsed_or_obj) -> None:
         if self.category_mode != "discover":
@@ -699,7 +786,7 @@ class GigaChatNormalizer:
     def estimate_tokens(self, payload: dict) -> int:
         prompt = self._single_user_prompt(payload)
         if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
-            token_input = f"{SYSTEM_PROMPT}\n{prompt}"
+            token_input = f"{self._system_prompt()}\n{prompt}"
             count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
             if count is not None:
                 return max(1, int(count))
@@ -739,21 +826,13 @@ class GigaChatNormalizer:
 
             req_token_count = None
             if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
-                token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
+                token_input = f"{self._system_prompt()}\n{user_prompt}"
                 req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
                 logger.info("[stage=prepare/llm] tokens per batch request: %s", req_token_count if req_token_count is not None else "n/a")
 
             chat_started = time.perf_counter()
             try:
-                response = self.client.chat(
-                    {
-                        "model": self.cfg.model,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                    }
-                )
+                response = self.client.chat(self._chat_payload(user_prompt))
             except Exception as e:
                 hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
                 if hinted is not None:
@@ -881,21 +960,13 @@ class GigaChatNormalizer:
         user_prompt = self._single_user_prompt(payload)
         req_token_count = None
         if self.cfg.request_metrics_enabled and self.client and hasattr(self.client, "count_tokens"):
-            token_input = f"{SYSTEM_PROMPT}\n{user_prompt}"
+            token_input = f"{self._system_prompt()}\n{user_prompt}"
             req_token_count = self.client.count_tokens(model=self.cfg.model, input_text=token_input)
             logger.info("[stage=prepare/llm] tokens per request: %s", req_token_count if req_token_count is not None else "n/a")
 
         chat_started = time.perf_counter()
         try:
-            response = self.client.chat(
-                {
-                    "model": self.cfg.model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                }
-            )
+            response = self.client.chat(self._chat_payload(user_prompt))
         except Exception as e:
             hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="single")
             if hinted is not None:
@@ -915,15 +986,7 @@ class GigaChatNormalizer:
         except Exception:
             repair_prompt = f"Исправь: верни JSON по схеме, убери запрещенные токены.\n{content}"
             try:
-                response2 = self.client.chat(
-                    {
-                        "model": self.cfg.model,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": repair_prompt},
-                        ],
-                    }
-                )
+                response2 = self.client.chat(self._chat_payload(repair_prompt))
             except Exception as e:
                 hinted = _normalize_error_with_tls_hint(self.cfg, e, phase="repair")
                 if hinted is not None:

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .deps import get_services
-from .routers import categories, feedback, health, meta, overview, pattern_fit, pattern_monitor, preparation, reports, runs, timeseries
+from .routers import categories, feedback, gigachat, health, meta, overview, pattern_fit, pattern_monitor, preparation, reports, runs, timeseries
 
 
 def create_app(config_path: str) -> FastAPI:
@@ -20,6 +20,7 @@ def create_app(config_path: str) -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(gigachat.router)
     app.include_router(meta.router)
     app.include_router(overview.router)
     app.include_router(categories.router)
@@ -32,4 +33,3 @@ def create_app(config_path: str) -> FastAPI:
     app.include_router(runs.router)
 
     return app
-

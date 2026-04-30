@@ -32,6 +32,146 @@ class MetaConfigResponse(BaseModel):
     prepare_service_columns: list[str] = Field(default_factory=list)
 
 
+class GigaChatTransportArtifact(BaseModel):
+    label: str
+    path: str
+    exists: bool
+
+
+class GigaChatTransportStatus(BaseModel):
+    name: Literal["mtls", "token"]
+    title: str
+    description: str
+    active: bool = False
+    configured: bool = False
+    ready: bool = False
+    base_url: str
+    oauth_url: str | None = None
+    artifacts: list[GigaChatTransportArtifact] = Field(default_factory=list)
+    message: str = ""
+
+
+class GigaChatTransportStatusResponse(BaseModel):
+    configured_mode: Literal["mtls", "tls", "token"]
+    model: str
+    transports: list[GigaChatTransportStatus] = Field(default_factory=list)
+
+
+class GigaChatTransportProbeRequest(BaseModel):
+    transport: Literal["mtls", "token"]
+
+
+class GigaChatTransportProbeResponse(BaseModel):
+    transport: Literal["mtls", "token"]
+    ok: bool
+    base_url: str
+    oauth_url: str | None = None
+    model: str
+    message: str
+    models: list[str] = Field(default_factory=list)
+
+
+class GigaChatLabSettingOption(BaseModel):
+    value: str
+    label: str
+
+
+class GigaChatLabSettingField(BaseModel):
+    key: str
+    label: str
+    input_type: Literal["text", "textarea", "number", "boolean", "select"]
+    section: str
+    help_text: str | None = None
+    value: Any = None
+    options: list[GigaChatLabSettingOption] = Field(default_factory=list)
+
+
+class GigaChatLabSettingsResponse(BaseModel):
+    title: str = "GigaChat Lab Settings"
+    fields: list[GigaChatLabSettingField] = Field(default_factory=list)
+    saved_at: datetime | None = None
+
+
+class GigaChatLabSettingsUpdateRequest(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class GigaChatWorkbookSheetPreview(BaseModel):
+    name: str
+    rows_total: int = 0
+    column_count: int = 0
+    columns: list[str] = Field(default_factory=list)
+    preview_rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GigaChatWorkbookUploadResponse(BaseModel):
+    upload_id: str
+    filename: str
+    file_format: Literal["excel", "csv"]
+    sheet_count: int = 0
+    sheets: list[GigaChatWorkbookSheetPreview] = Field(default_factory=list)
+
+
+class GigaChatWorkbookSelectSheetRequest(BaseModel):
+    sheet_name: str
+    row_limit: int = 200
+
+
+class GigaChatWorkbookSheetDataResponse(BaseModel):
+    upload_id: str
+    filename: str
+    file_format: Literal["excel", "csv"]
+    sheet_name: str
+    total_rows: int = 0
+    rendered_rows: int = 0
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GigaChatFinalPromptRequest(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+    columns: list[str] = Field(default_factory=list)
+
+
+class GigaChatFinalPromptResponse(BaseModel):
+    generated_at: datetime
+    source_columns: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    saved: bool = False
+    saved_path: str | None = None
+
+
+class GigaChatLabRowRunRequest(BaseModel):
+    transport: Literal["mtls", "token"] = "mtls"
+    values: dict[str, Any] = Field(default_factory=dict)
+    columns: list[str] = Field(default_factory=list)
+    row: dict[str, Any] = Field(default_factory=dict)
+    payload_override: dict[str, Any] | None = None
+    count_tokens: bool = False
+
+
+class GigaChatLabRowRunResponse(BaseModel):
+    transport: Literal["mtls", "token"]
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    response_raw: str = ""
+    response_json: dict[str, Any] | list[Any] | None = None
+    parse_ok: bool = False
+    request_token_count: int | None = None
+
+
+class GigaChatAnnotatedExportRow(BaseModel):
+    classification: str = ""
+    tags: list[str] = Field(default_factory=list)
+    source_row: dict[str, Any] = Field(default_factory=dict)
+
+
+class GigaChatAnnotatedExportRequest(BaseModel):
+    filename: str = "annotated.xlsx"
+    sheet_name: str = "Разметка"
+    source_columns: list[str] = Field(default_factory=list)
+    rows: list[GigaChatAnnotatedExportRow] = Field(default_factory=list)
+
+
 class MetaDatasetsResponse(BaseModel):
     datasets: list[DatasetMeta]
     min_date: date | None = None

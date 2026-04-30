@@ -17,3 +17,26 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
   if (!res.ok) throw new Error(await res.text())
   return res.json() as Promise<T>
 }
+
+function parseFilenameFromDisposition(contentDisposition: string | null) {
+  if (!contentDisposition) return null
+  const utf8Match = contentDisposition.match(/filename\\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1])
+    } catch {
+      return utf8Match[1]
+    }
+  }
+  const basicMatch = contentDisposition.match(/filename="?([^"]+)"?/i)
+  return basicMatch?.[1] ?? null
+}
+
+export async function apiPostBlob(path: string, body: unknown): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) throw new Error(await res.text())
+  return {
+    blob: await res.blob(),
+    filename: parseFilenameFromDisposition(res.headers.get('Content-Disposition')),
+  }
+}
