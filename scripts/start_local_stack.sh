@@ -10,10 +10,12 @@ API_PID_FILE="${RUN_DIR}/api.pid"
 DASHBOARD_PID_FILE="${RUN_DIR}/dashboard.pid"
 RUNTIME_CONFIG="${RUN_DIR}/project.runtime.yaml"
 
-API_HOST="${API_HOST:-127.0.0.1}"
+API_HOST="${API_HOST:-0.0.0.0}"
 API_PORT="${API_PORT:-8000}"
-DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
+DASHBOARD_HOST="${DASHBOARD_HOST:-0.0.0.0}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-5173}"
+API_DISPLAY_URL="${API_DISPLAY_URL:-http://127.0.0.1:${API_PORT}}"
+DASHBOARD_DISPLAY_URL="${DASHBOARD_DISPLAY_URL:-http://127.0.0.1:${DASHBOARD_PORT}}"
 CONFIG_TEMPLATE="${CONFIG_TEMPLATE:-${ROOT_DIR}/configs/project.yaml}"
 PREPARE_OUTPUT_PARQUET="${PREPARE_OUTPUT_PARQUET:-${ROOT_DIR}/data/processed/all_prepared.parquet}"
 INTERIM_DIR="${INTERIM_DIR:-${ROOT_DIR}/data/interim}"
@@ -216,8 +218,12 @@ wait_until_alive "${API_PID}" "API" "${API_LOG}"
 wait_until_alive "${DASHBOARD_PID}" "Dashboard" "${DASHBOARD_LOG}"
 
 cat <<EOF
-API started:       http://127.0.0.1:${API_PORT}
-Dashboard started: http://127.0.0.1:${DASHBOARD_PORT}
+API started:       ${API_DISPLAY_URL}
+Dashboard started: ${DASHBOARD_DISPLAY_URL}
+
+API bind host:     ${API_HOST}:${API_PORT}
+Dashboard bind:    ${DASHBOARD_HOST}:${DASHBOARD_PORT}
+Dashboard -> API:  ${VITE_API_BASE_URL}
 
 API pid:       ${API_PID}
 Dashboard pid: ${DASHBOARD_PID}

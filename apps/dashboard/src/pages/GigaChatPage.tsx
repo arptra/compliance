@@ -18,6 +18,8 @@ import { GigaChatSettingsForm } from '../features/gigachat/GigaChatSettingsForm'
 import { WorkbookSheetPickerModal } from '../features/gigachat/WorkbookSheetPickerModal'
 import { WorkbookSheetTable } from '../features/gigachat/WorkbookSheetTable'
 import { GigaChatTransportCard } from '../features/gigachat/GigaChatTransportCard'
+import { CellHoverPopover, useCellHoverPopover } from '../features/gigachat/useCellHoverPopover'
+import { useResizableTable, type TableRowClamp } from '../features/gigachat/useResizableTable'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatLabRowRunResponse,
@@ -195,6 +197,12 @@ export default function GigaChatPage() {
   const [tokenAccounting, setTokenAccounting] = useState<TokenAccountingState>(() => loadTokenAccountingState())
   const lastAutoPreviewKeyRef = useRef<string | null>(null)
   const lastResolvedPreviewKeyRef = useRef<string | null>(null)
+  const annotatedTable = useResizableTable()
+  const {
+    hoveredCell: hoveredAnnotatedCell,
+    showCellPopover: showAnnotatedCellPopover,
+    hideCellPopover: hideAnnotatedCellPopover,
+  } = useCellHoverPopover()
 
   useEffect(() => {
     document.title = 'GigaChat Lab'
@@ -208,11 +216,20 @@ export default function GigaChatPage() {
     const transports = statusQ.data?.transports ?? []
     if (!transports.length) return
     setSelectedTransport((current) => {
-      if (transports.some((item) => item.name === current)) {
+      const currentTransport = transports.find((item) => item.name === current)
+      if (currentTransport?.ready) {
         return current
       }
+      const ready = transports.find((item) => item.ready)
+      if (ready) {
+        return ready.name
+      }
+      if (currentTransport) {
+        return current
+      }
+      const configured = transports.find((item) => item.configured)
       const active = transports.find((item) => item.active)
-      return active?.name ?? 'mtls'
+      return configured?.name ?? active?.name ?? 'mtls'
     })
   }, [statusQ.data])
 
@@ -314,6 +331,7 @@ export default function GigaChatPage() {
         sheetData.sheet_name,
         sheetData.columns,
         filteredAnnotatedRows.map((row) => ({
+          row_index: row.rowIndex,
           classification: row.classification,
           tags: row.tags,
           source_row: row.sourceRow,
@@ -410,6 +428,10 @@ export default function GigaChatPage() {
   }
 
   const handleRunRow = async (row: Record<string, unknown>, rowIndex: number) => {
+    if (!selected?.ready) {
+      setRowRunError(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке. Сначала выберите ready-вариант подключения.`)
+      return
+    }
     setRowRunError(null)
     setRunRowBusyIndex(rowIndex)
     startProcessingOverlay('Обработка одной жалобы', 1)
@@ -436,6 +458,10 @@ export default function GigaChatPage() {
   }
 
   const handleRunSelectedRows = async () => {
+    if (!selected?.ready) {
+      setBatchRunError(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке. Сначала выберите ready-вариант подключения.`)
+      return
+    }
     if (!sheetData) {
       setBatchRunError('Сначала загрузите рабочую таблицу.')
       return
@@ -765,7 +791,7 @@ export default function GigaChatPage() {
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Excel для разметки</h3>
-          <p>Загрузите локальный Excel или CSV, затем выберите нужный лист и откройте его как рабочую таблицу прямо на странице.</p>
+          <p>Загрузите локальный Excel, CSV или ZIP-архив с ними, затем выберите нужный лист и откройте его как рабочую таблицу прямо на странице.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setUploadCollapsed((current) => !current)}>
           {uploadCollapsed ? 'Развернуть' : 'Свернуть'}
@@ -785,7 +811,7 @@ export default function GigaChatPage() {
           <input
             key={fileInputVersion}
             type='file'
-            accept='.xlsx,.xls,.csv'
+            accept='.xlsx,.xls,.xlsm,.csv,.zip'
             disabled={uploadWorkbook.isPending}
             onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
           />
@@ -940,24 +966,113 @@ export default function GigaChatPage() {
           </div>
         </div>
 
-        <div className='workbook-table-wrap'>
+        <div className='workbook-table-toolbar'>
+          <label className='workbook-row-limit-control'>
+            <span>Высота строк:</span>
+            <select
+              value={String(annotatedTable.rowClamp)}
+              onChange={(e) => {
+                const value = e.target.value
+                if (value === '2' || value === '4' || value === '8') {
+                  annotatedTable.setRowClamp(Number(value) as Exclude<TableRowClamp, 'all'>)
+                  return
+                }
+                annotatedTable.setRowClamp('all')
+              }}
+            >
+              <option value='2'>2 строки</option>
+              <option value='4'>4 строки</option>
+              <option value='8'>8 строк</option>
+              <option value='all'>Полный текст</option>
+            </select>
+          </label>
+        </div>
+
+        <div className='workbook-table-wrap' onMouseLeave={hideAnnotatedCellPopover}>
           <table className='table workbook-table'>
             <thead>
               <tr>
-                <th>Класс</th>
-                <th>Теги</th>
-                {sheetData?.columns.map((column) => <th key={`annotated-head-${column}`}>{column}</th>)}
+                <th style={annotatedTable.getColumnStyle('__classification')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Класс</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Класс'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__classification')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__classification')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__tags')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Теги</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Теги'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__tags')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__tags')}
+                    />
+                  </div>
+                </th>
+                {sheetData?.columns.map((column) => <th key={`annotated-head-${column}`} style={annotatedTable.getColumnStyle(column)}>
+                  <div className='table-simple-header-cell'>
+                    <span>{column}</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label={`Изменить ширину колонки ${column}`}
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, column)}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth(column)}
+                    />
+                  </div>
+                </th>)}
               </tr>
             </thead>
             <tbody>
               {filteredAnnotatedRows.map((row) => <tr key={row.rowKey}>
-                <td>{row.classification || '—'}</td>
-                <td>{row.tags.length ? row.tags.join(', ') : '—'}</td>
-                {sheetData?.columns.map((column) => <td key={`${row.rowKey}-${column}`}>{String(row.sourceRow[column] ?? '')}</td>)}
+                <td style={annotatedTable.getColumnStyle('__classification')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Класс', row.classification || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.classification || '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__tags')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Теги', row.tags.length ? row.tags.join(', ') : '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.tags.length ? row.tags.join(', ') : '—'}
+                  </div>
+                </td>
+                {sheetData?.columns.map((column) => {
+                  const text = String(row.sourceRow[column] ?? '')
+                  return <td key={`${row.rowKey}-${column}`} style={annotatedTable.getColumnStyle(column)}>
+                    <div
+                      className={annotatedTable.cellClampClassName}
+                      style={annotatedTable.cellClampStyle}
+                      onMouseEnter={(e) => showAnnotatedCellPopover(e, column, text)}
+                      onMouseLeave={hideAnnotatedCellPopover}
+                    >
+                      {text}
+                    </div>
+                  </td>
+                })}
               </tr>)}
             </tbody>
           </table>
         </div>
+        <CellHoverPopover hoveredCell={hoveredAnnotatedCell} />
         {exportAnnotatedRows.isError ? <div className='transport-error'>{formatLabError(exportAnnotatedRows.error as Error, 'размеченную таблицу')}</div> : null}
       </>}
     </section>

@@ -68,6 +68,7 @@ export function exportGigaChatAnnotatedWorkbook(
   sheetName: string,
   sourceColumns: string[],
   rows: Array<{
+    row_index?: number | null
     classification: string
     tags: string[]
     source_row: Record<string, unknown>

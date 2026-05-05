@@ -273,6 +273,30 @@ body { margin: 0; }
 .sheet-preview-table-wrap, .workbook-table-wrap { overflow:auto; border:1px solid #e2e8f0; border-radius:8px; background:white; }
 .sheet-preview-table { width:100%; border-collapse:collapse; font-size:12px; }
 .sheet-preview-table th, .sheet-preview-table td { padding:8px; border-bottom:1px solid #e2e8f0; text-align:left; vertical-align:top; }
+.cell-hover-popover {
+  position:fixed;
+  z-index:90;
+  display:grid;
+  gap:8px;
+  padding:12px;
+  border:1px solid #cbd5e1;
+  border-radius:10px;
+  background:rgba(255, 255, 255, 0.98);
+  box-shadow:0 18px 40px rgba(15, 23, 42, 0.20);
+  pointer-events:none;
+}
+.cell-hover-popover-label {
+  font-weight:700;
+  color:#0f172a;
+  word-break:break-word;
+}
+.cell-hover-popover-text {
+  color:#334155;
+  white-space:pre-wrap;
+  word-break:break-word;
+  max-height:220px;
+  overflow:auto;
+}
 
 .workbook-table-section { display:grid; gap:12px; }
 .workbook-table-toolbar {
@@ -304,6 +328,12 @@ body { margin: 0; }
   background:white;
 }
 .workbook-table th { position:sticky; top:0; background:#f8fafc; z-index:1; }
+.workbook-table td {
+  padding: 6px 8px;
+}
+.sheet-preview-table th {
+  position:relative;
+}
 .workbook-select-head,
 .workbook-row-select-cell {
   width:48px;
@@ -311,9 +341,12 @@ body { margin: 0; }
   text-align:center;
 }
 .workbook-actions-head { min-width: 210px; }
-.workbook-header-cell {
+.workbook-header-cell,
+.table-simple-header-cell {
   display:grid;
   gap:8px;
+  position:relative;
+  padding-right:14px;
 }
 .workbook-column-toggle {
   opacity:0;
@@ -329,6 +362,39 @@ body { margin: 0; }
 .workbook-table th:hover .workbook-column-toggle {
   opacity:1;
   pointer-events:auto;
+}
+.table-column-resizer {
+  position:absolute;
+  top:-6px;
+  right:-8px;
+  width:16px;
+  height:calc(100% + 12px);
+  border:none;
+  background:transparent;
+  cursor:col-resize;
+  padding:0;
+}
+.table-column-resizer::before {
+  content:'';
+  position:absolute;
+  top:10px;
+  bottom:10px;
+  left:7px;
+  width:2px;
+  border-radius:999px;
+  background:#cbd5e1;
+  opacity:0;
+  transition:opacity .15s ease, background-color .15s ease;
+}
+.workbook-table th:hover .table-column-resizer::before,
+.sheet-preview-table th:hover .table-column-resizer::before,
+.table-column-resizer:hover::before,
+.table-column-resizer:focus-visible::before {
+  opacity:1;
+}
+.table-column-resizer:hover::before,
+.table-column-resizer:focus-visible::before {
+  background:#2563eb;
 }
 .workbook-column-excluded {
   background:#f1f5f9 !important;
@@ -360,6 +426,22 @@ body { margin: 0; }
 .workbook-row-action-button:focus-visible,
 .workbook-row-action-button:disabled {
   opacity:1;
+}
+.workbook-cell-compact {
+  display: -webkit-box;
+  -webkit-line-clamp: var(--cell-lines, 3);
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
+  max-width: 320px;
+}
+.workbook-cell-expanded {
+  display:block;
+  overflow:visible;
+  max-width:none;
+  -webkit-line-clamp:unset;
 }
 .row-run-grid {
   display:grid;
@@ -431,6 +513,9 @@ body { margin: 0; }
 .labeling-rules-list {
   display:grid;
   gap:8px;
+  max-height:420px;
+  overflow:auto;
+  padding-right:4px;
 }
 .labeling-rule-card {
   display:flex;
@@ -445,6 +530,7 @@ body { margin: 0; }
 .labeling-rule-copy {
   display:grid;
   gap:4px;
+  min-width:0;
 }
 .labeling-rule-name {
   font-weight:700;
@@ -452,6 +538,28 @@ body { margin: 0; }
 }
 .labeling-rule-description {
   color:#475569;
+  display:-webkit-box;
+  -webkit-line-clamp:3;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  word-break:break-word;
+}
+.labeling-rule-actions {
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.labeling-edit-modal {
+  width:min(760px, 96vw);
+  display:grid;
+  gap:16px;
+}
+.labeling-edit-modal-form {
+  display:grid;
+  gap:12px;
+}
+.labeling-edit-modal .lab-field textarea {
+  min-height:220px;
 }
 
 @media (max-width: 1100px) {

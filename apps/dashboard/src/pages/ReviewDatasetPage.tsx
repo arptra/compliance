@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { apiGet } from '../lib/api'
+import { apiGet, apiUrl } from '../lib/api'
 import type { FeedbackDatasetItem, FeedbackDatasetResponse, ReviewDatasetFiltersState } from '../types/api'
 import { ReviewDatasetFilters } from '../components/review-dataset/ReviewDatasetFilters'
 import { ReviewDatasetTable } from '../components/review-dataset/ReviewDatasetTable'
@@ -36,9 +36,9 @@ export default function ReviewDatasetPage() {
 
     <div className='card' style={{ marginTop: 12 }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <a href={`http://localhost:8000/api/feedback/export?${qs}&output_format=csv`} target='_blank' rel='noreferrer'><button>Export CSV</button></a>
-        <a href={`http://localhost:8000/api/feedback/export?${qs}&output_format=json`} target='_blank' rel='noreferrer'><button>Export JSON</button></a>
-        <a href={`http://localhost:8000/api/feedback/export?${qs}&output_format=csv&positives_only=true`} target='_blank' rel='noreferrer'><button>Export positives only</button></a>
+        <a href={apiUrl(`/api/feedback/export?${qs}&output_format=csv`)} target='_blank' rel='noreferrer'><button>Export CSV</button></a>
+        <a href={apiUrl(`/api/feedback/export?${qs}&output_format=json`)} target='_blank' rel='noreferrer'><button>Export JSON</button></a>
+        <a href={apiUrl(`/api/feedback/export?${qs}&output_format=csv&positives_only=true`)} target='_blank' rel='noreferrer'><button>Export positives only</button></a>
       </div>
       {!data?.items?.length ? <div>No feedback data yet.</div> : <ReviewDatasetTable rows={data.items} onSelect={setSelected} />}
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>

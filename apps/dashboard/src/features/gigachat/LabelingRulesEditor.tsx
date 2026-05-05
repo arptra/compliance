@@ -53,25 +53,46 @@ export function LabelingRulesEditor({
 }) {
   const items = useMemo(() => parseRules(value), [value])
   const [adding, setAdding] = useState(false)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [draftName, setDraftName] = useState('')
   const [draftDescription, setDraftDescription] = useState('')
+  const isEditing = editingIndex !== null
 
   const resetDraft = () => {
     setDraftName('')
     setDraftDescription('')
     setAdding(false)
+    setEditingIndex(null)
   }
 
-  const addItem = () => {
+  const submitItem = () => {
     const name = draftName.trim()
     const descriptionText = draftDescription.trim()
     if (!name && !descriptionText) return
+    if (isEditing) {
+      onChange(serializeRules(items.map((item, index) => (
+        index === editingIndex ? { name, description: descriptionText } : item
+      ))))
+      resetDraft()
+      return
+    }
     onChange(serializeRules([...items, { name, description: descriptionText }]))
     resetDraft()
   }
 
   const removeItem = (index: number) => {
     onChange(serializeRules(items.filter((_, idx) => idx !== index)))
+    if (editingIndex === index) {
+      resetDraft()
+    }
+  }
+
+  const startEdit = (index: number) => {
+    const item = items[index]
+    setAdding(true)
+    setEditingIndex(index)
+    setDraftName(item?.name ?? '')
+    setDraftDescription(item?.description ?? '')
   }
 
   return <section className='labeling-panel'>
@@ -81,11 +102,23 @@ export function LabelingRulesEditor({
     </div>
 
     <div className='transport-actions'>
-      <button onClick={() => setAdding((current) => !current)}>{adding ? 'Скрыть форму' : `+ ${addLabel}`}</button>
+      <button onClick={() => {
+        if (adding && !isEditing) {
+          resetDraft()
+          return
+        }
+        setAdding((current) => {
+          const next = !current
+          if (!next) {
+            resetDraft()
+          }
+          return next
+        })
+      }}>{adding && !isEditing ? 'Скрыть форму' : `+ ${addLabel}`}</button>
       {onClear ? <button type='button' onClick={onClear}>{clearLabel ?? 'Сбросить все'}</button> : null}
     </div>
 
-    {adding ? <div className='labeling-entry-form'>
+    {adding && !isEditing ? <div className='labeling-entry-form'>
       <input
         type='text'
         value={draftName}
@@ -98,17 +131,62 @@ export function LabelingRulesEditor({
         onChange={(e) => setDraftDescription(e.target.value)}
         placeholder='Описание'
       />
-      <button onClick={addItem} disabled={!draftName.trim() && !draftDescription.trim()}>Добавить</button>
+      <button onClick={submitItem} disabled={!draftName.trim() && !draftDescription.trim()}>
+        Добавить
+      </button>
     </div> : null}
 
     {items.length ? <div className='labeling-rules-list'>
       {items.map((item, index) => <div key={`${item.name}-${index}`} className='labeling-rule-card'>
         <div className='labeling-rule-copy'>
-          <div className='labeling-rule-name'>{item.name || nameLabel}</div>
-          <div className='labeling-rule-description'>{item.description || 'Без описания'}</div>
+          <div className='labeling-rule-name' title={item.name || nameLabel}>{item.name || nameLabel}</div>
+          <div className='labeling-rule-description' title={item.description || 'Без описания'}>{item.description || 'Без описания'}</div>
         </div>
-        <button className='labeling-remove-button' onClick={() => removeItem(index)}>Удалить</button>
+        <div className='labeling-rule-actions'>
+          <button className='labeling-remove-button' onClick={() => startEdit(index)}>Редактировать</button>
+          <button className='labeling-remove-button' onClick={() => removeItem(index)}>Удалить</button>
+        </div>
       </div>)}
     </div> : <div className='lab-muted'>Пока ничего не добавлено.</div>}
+
+    {isEditing ? <div className='sheet-modal-backdrop' onClick={resetDraft}>
+      <div className='card sheet-modal labeling-edit-modal' onClick={(e) => e.stopPropagation()}>
+        <div className='transport-section-head'>
+          <div className='transport-section-title'>
+            <h3>Редактировать {nameLabel.toLowerCase()}</h3>
+            <p>Изменения сохранятся сразу в правила классификации или тегирования и попадут в итоговый промпт.</p>
+          </div>
+          <button className='transport-collapse-button' type='button' onClick={resetDraft}>Закрыть</button>
+        </div>
+
+        <div className='labeling-edit-modal-form'>
+          <label className='lab-field'>
+            <span>{nameLabel}</span>
+            <input
+              type='text'
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              placeholder={nameLabel}
+            />
+          </label>
+
+          <label className='lab-field wide'>
+            <span>Описание</span>
+            <textarea
+              value={draftDescription}
+              onChange={(e) => setDraftDescription(e.target.value)}
+              placeholder='Подробное описание и правило выбора'
+            />
+          </label>
+        </div>
+
+        <div className='lab-settings-actions'>
+          <button className='primary' type='button' onClick={submitItem} disabled={!draftName.trim() && !draftDescription.trim()}>
+            Сохранить
+          </button>
+          <button type='button' onClick={resetDraft}>Отмена</button>
+        </div>
+      </div>
+    </div> : null}
   </section>
 }

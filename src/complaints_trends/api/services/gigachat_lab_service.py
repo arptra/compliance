@@ -8,6 +8,7 @@ from io import BytesIO
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+from zipfile import ZipFile
 
 import pandas as pd
 
@@ -328,14 +329,18 @@ class GigaChatLabService:
 
     def export_annotated_workbook(self, req: GigaChatAnnotatedExportRequest) -> tuple[str, bytes]:
         source_columns = [str(column).strip() for column in req.source_columns if str(column).strip()]
+        ordered_rows = sorted(
+            list(req.rows),
+            key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
+        )
         export_rows: list[dict[str, Any]] = []
-        for row in req.rows:
+        for row in ordered_rows:
             export_row: dict[str, Any] = {
                 "Класс": row.classification,
                 "Теги": ", ".join([str(tag).strip() for tag in row.tags if str(tag).strip()]),
             }
             for column in source_columns:
-                export_row[column] = self._normalize_cell(row.source_row.get(column))
+                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
             export_rows.append(export_row)
 
         ordered_columns = ["Класс", "Теги", *source_columns]
@@ -349,6 +354,13 @@ class GigaChatLabService:
             ws = writer.sheets[sheet_name]
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
+            for col_idx in range(1, ws.max_column + 1):
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    if isinstance(cell.value, datetime):
+                        cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                    elif isinstance(cell.value, date):
+                        cell.number_format = "yyyy-mm-dd"
 
         buffer.seek(0)
         export_filename = f"{Path(req.filename or 'annotated.xlsx').stem}_annotated.xlsx"
@@ -358,11 +370,18 @@ class GigaChatLabService:
         upload_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
         upload_dir = self.uploads_dir / upload_id
         upload_dir.mkdir(parents=True, exist_ok=True)
-        ext = Path(filename).suffix or ".xlsx"
-        stored_path = upload_dir / f"source{ext}"
-        stored_path.write_bytes(content)
+        display_filename = filename
+        source_content = content
+        ext = (Path(filename).suffix or ".xlsx").lower()
+        if ext == ".zip":
+            inner_name, source_content = self._extract_supported_file_from_zip(filename, content)
+            ext = (Path(inner_name).suffix or ".xlsx").lower()
+            display_filename = f"{filename} -> {inner_name}"
 
-        meta = self._inspect_workbook(stored_path, filename)
+        stored_path = upload_dir / f"source{ext}"
+        stored_path.write_bytes(source_content)
+
+        meta = self._inspect_workbook(stored_path, display_filename)
         (upload_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return GigaChatWorkbookUploadResponse(**meta)
 
@@ -423,6 +442,22 @@ class GigaChatLabService:
             "sheet_count": len(sheets),
             "sheets": sheets,
         }
+
+    @staticmethod
+    def _extract_supported_file_from_zip(filename: str, content: bytes) -> tuple[str, bytes]:
+        supported_suffixes = (".xlsx", ".xls", ".xlsm", ".csv")
+        with ZipFile(BytesIO(content)) as archive:
+            candidates = [
+                info for info in archive.infolist()
+                if not info.is_dir() and info.filename.lower().endswith(supported_suffixes)
+            ]
+            if not candidates:
+                raise ValueError(
+                    f"В архиве {filename} не найдено поддерживаемых файлов Excel/CSV. "
+                    "Ожидается .xlsx, .xls, .xlsm или .csv."
+                )
+            selected = candidates[0]
+            return selected.filename, archive.read(selected)
 
     @staticmethod
     def _parse_rule_items(raw: Any) -> list[dict[str, str]]:
@@ -580,6 +615,23 @@ class GigaChatLabService:
         if isinstance(value, (bool, int, float, str)):
             return value
         return str(value)
+
+    @classmethod
+    def _normalize_export_cell(cls, value: Any) -> Any:
+        normalized = cls._normalize_cell(value)
+        if isinstance(normalized, str):
+            text = normalized.strip()
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                try:
+                    return datetime.fromisoformat(text).date()
+                except Exception:
+                    return normalized
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?", text):
+                try:
+                    return datetime.fromisoformat(text.replace(" ", "T"))
+                except Exception:
+                    return normalized
+        return normalized
 
     @staticmethod
     def _excel_safe_sheet_name(value: str) -> str:

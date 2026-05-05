@@ -1,4 +1,6 @@
 import type { GigaChatWorkbookSheetDataResponse } from './types'
+import { useResizableTable, type TableRowClamp } from './useResizableTable'
+import { CellHoverPopover, useCellHoverPopover } from './useCellHoverPopover'
 
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
 
@@ -39,6 +41,33 @@ export function WorkbookSheetTable({
   batchBusy?: boolean
   busy?: boolean
 }) {
+  const {
+    rowClamp,
+    setRowClamp,
+    startColumnResize,
+    resetColumnWidth,
+    getColumnStyle,
+    cellClampClassName,
+    cellClampStyle,
+  } = useResizableTable()
+  const {
+    hoveredCell,
+    showCellPopover,
+    hideCellPopover,
+  } = useCellHoverPopover()
+
+  const renderCellValue = (column: string, value: unknown) => {
+    const text = String(value ?? '')
+    return <div
+      className={cellClampClassName}
+      style={cellClampStyle}
+      onMouseEnter={(e) => showCellPopover(e, column, text)}
+      onMouseLeave={hideCellPopover}
+    >
+      {text}
+    </div>
+  }
+
   return <div className='workbook-table-section'>
     <div className='workbook-table-meta'>
       <div><b>Файл:</b> <code>{data.filename}</code></div>
@@ -69,6 +98,27 @@ export function WorkbookSheetTable({
         </select>
       </label>
 
+      <label className='workbook-row-limit-control'>
+        <span>Высота строк:</span>
+        <select
+          value={String(rowClamp)}
+          disabled={Boolean(busy)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '2' || value === '4' || value === '8') {
+              setRowClamp(Number(value) as Exclude<TableRowClamp, 'all'>)
+              return
+            }
+            setRowClamp('all')
+          }}
+        >
+          <option value='2'>2 строки</option>
+          <option value='4'>4 строки</option>
+          <option value='8'>8 строк</option>
+          <option value='all'>Полный текст</option>
+        </select>
+      </label>
+
       {canChooseAnotherSheet ? <div className='transport-actions'>
         <button onClick={onChooseAnotherSheet}>Выбрать другой лист</button>
       </div> : null}
@@ -86,7 +136,7 @@ export function WorkbookSheetTable({
       <span className='lab-muted'>Выбрано строк: {selectedRowKeys.length}</span>
     </div>
 
-    <div className='workbook-table-wrap'>
+    <div className='workbook-table-wrap' onMouseLeave={hideCellPopover}>
       <table className='table workbook-table'>
         <thead>
           <tr>
@@ -99,6 +149,7 @@ export function WorkbookSheetTable({
               return <th
                 key={`head-${column}`}
                 className={included ? '' : 'workbook-column-excluded'}
+                style={getColumnStyle(column)}
               >
                 <div className='workbook-header-cell'>
                   <span>{column}</span>
@@ -110,13 +161,24 @@ export function WorkbookSheetTable({
                   >
                     {included ? 'Убрать из промпта' : 'Добавить в промпт'}
                   </button>
+                  <button
+                    type='button'
+                    className='table-column-resizer'
+                    title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                    aria-label={`Изменить ширину колонки ${column}`}
+                    onMouseDown={(e) => startColumnResize(e, column)}
+                    onDoubleClick={() => resetColumnWidth(column)}
+                  />
                 </div>
               </th>
             })}
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((row, idx) => <tr key={`row-${idx}`} className='workbook-table-row'>
+          {data.rows.map((row, idx) => <tr
+            key={`row-${idx}`}
+            className='workbook-table-row'
+          >
             <td className='workbook-row-select-cell'>
                 <input
                   type='checkbox'
@@ -140,13 +202,15 @@ export function WorkbookSheetTable({
               return <td
                 key={`cell-${idx}-${column}`}
                 className={included ? '' : 'workbook-column-excluded'}
+                style={getColumnStyle(column)}
               >
-                {String(row[column] ?? '')}
+                {renderCellValue(column, row[column])}
               </td>
             })}
           </tr>)}
         </tbody>
       </table>
     </div>
+    <CellHoverPopover hoveredCell={hoveredCell} />
   </div>
 }

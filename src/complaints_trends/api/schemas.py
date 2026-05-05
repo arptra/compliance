@@ -160,6 +160,7 @@ class GigaChatLabRowRunResponse(BaseModel):
 
 
 class GigaChatAnnotatedExportRow(BaseModel):
+    row_index: int | None = None
     classification: str = ""
     tags: list[str] = Field(default_factory=list)
     source_row: dict[str, Any] = Field(default_factory=dict)
