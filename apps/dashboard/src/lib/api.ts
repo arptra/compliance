@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:8000`
+const fallbackProtocol = window.location.protocol || 'http:'
+const fallbackApiPort = import.meta.env.VITE_API_PORT || (window.location.port === '15173' ? '18000' : '8000')
+const BASE = import.meta.env.VITE_API_BASE_URL || `${fallbackProtocol}//${window.location.hostname}:${fallbackApiPort}`
 
 export function apiUrl(path: string) {
   return `${BASE}${path}`

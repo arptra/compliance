@@ -66,9 +66,14 @@ resolve_public_host_name() {
 
 setup_vm_runtime_env() {
   local public_scheme="${PUBLIC_SCHEME:-http}"
+  local hmr_protocol="ws"
   local resolved_public_host=""
 
   resolved_public_host="$(resolve_public_host_name)"
+
+  if [[ "${public_scheme}" == "https" ]]; then
+    hmr_protocol="wss"
+  fi
 
   export API_HOST="${API_HOST:-0.0.0.0}"
   export API_PORT="${API_PORT:-8000}"
@@ -80,6 +85,11 @@ setup_vm_runtime_env() {
   export DASHBOARD_PUBLIC_HOST="${DASHBOARD_PUBLIC_HOST:-${RESOLVED_PUBLIC_HOST}}"
 
   export VITE_API_BASE_URL="${VITE_API_BASE_URL:-${public_scheme}://${API_PUBLIC_HOST}:${API_PORT}}"
+  export VITE_API_PORT="${VITE_API_PORT:-${API_PORT}}"
+  export VITE_PUBLIC_ORIGIN="${VITE_PUBLIC_ORIGIN:-${public_scheme}://${DASHBOARD_PUBLIC_HOST}:${DASHBOARD_PORT}}"
+  export VITE_HMR_HOST="${VITE_HMR_HOST:-${DASHBOARD_PUBLIC_HOST}}"
+  export VITE_HMR_CLIENT_PORT="${VITE_HMR_CLIENT_PORT:-${DASHBOARD_PORT}}"
+  export VITE_HMR_PROTOCOL="${VITE_HMR_PROTOCOL:-${hmr_protocol}}"
   export API_DISPLAY_URL="${API_DISPLAY_URL:-${public_scheme}://${API_PUBLIC_HOST}:${API_PORT}}"
   export DASHBOARD_DISPLAY_URL="${DASHBOARD_DISPLAY_URL:-${public_scheme}://${DASHBOARD_PUBLIC_HOST}:${DASHBOARD_PORT}}"
 }

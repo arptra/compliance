@@ -37,9 +37,9 @@ llm:
   ca_bundle_file: "certs/ca.pem"
   cert_file: "certs/client.pem"
   key_file: "certs/client.key"
-  oauth_url: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-  authorization_key_file: "key"
-  oauth_scope: "GIGACHAT_API_PERS"
+#  oauth_url: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+#  authorization_key_file: "key"
+#  oauth_scope: "GIGACHAT_API_PERS"
   verify_ssl_certs: true
   model: "GigaChat-2-Max"
   max_workers: 8

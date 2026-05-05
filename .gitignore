@@ -21,3 +21,4 @@ exports/*
 !exports/.gitkeep
 certs/*
 !certs/.gitkeep
+/apps/dashboard/node_modules/
