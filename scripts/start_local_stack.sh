@@ -129,13 +129,24 @@ ensure_python_environment() {
   bootstrap_python_env
 }
 
-ensure_dashboard_dependencies() {
-  if [[ -x "${DASHBOARD_VITE_BIN}" ]]; then
-    return 0
-  fi
+dashboard_toolchain_healthy() {
+  [[ -x "${DASHBOARD_VITE_BIN}" ]] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+
+  (
+    cd "${DASHBOARD_DIR}"
+    node - <<'EOF' >/dev/null 2>&1
+const esbuild = require('esbuild')
+esbuild.transformSync('const x = 1', { loader: 'js' })
+EOF
+  )
+}
+
+install_dashboard_dependencies() {
+  local install_log="${LOG_DIR}/dashboard-npm-install.log"
 
   if [[ "${AUTO_INSTALL_DASHBOARD_DEPS}" != "1" ]]; then
-    echo "Dashboard dependencies are missing. Run: cd ${DASHBOARD_DIR} && npm ci" >&2
+    echo "Dashboard dependencies are missing or incompatible. Run: cd ${DASHBOARD_DIR} && npm ci" >&2
     exit 1
   fi
 
@@ -145,8 +156,8 @@ ensure_dashboard_dependencies() {
     exit 1
   fi
 
-  local install_log="${LOG_DIR}/dashboard-npm-install.log"
-  echo "Dashboard dependencies are missing. Installing with npm ci..."
+  mkdir -p "${RUN_DIR}/npm-cache"
+  echo "Installing dashboard dependencies for the current platform with npm ci..."
 
   if [[ -f "${DASHBOARD_PACKAGE_LOCK}" ]]; then
     (
@@ -164,6 +175,26 @@ ensure_dashboard_dependencies() {
     echo "Dashboard dependencies installation completed, but vite was not found. Check ${install_log}" >&2
     exit 1
   fi
+
+  if ! dashboard_toolchain_healthy; then
+    echo "Dashboard dependencies were installed, but the frontend toolchain is still not runnable. Check ${install_log}" >&2
+    tail -n 40 "${install_log}" >&2 || true
+    exit 1
+  fi
+}
+
+ensure_dashboard_dependencies() {
+  if dashboard_toolchain_healthy; then
+    return 0
+  fi
+
+  if [[ -x "${DASHBOARD_VITE_BIN}" ]]; then
+    echo "Dashboard dependencies exist, but they look incompatible with the current platform. Reinstalling..."
+  else
+    echo "Dashboard dependencies are missing. Installing..."
+  fi
+
+  install_dashboard_dependencies
 }
 
 mkdir -p "${RUN_DIR}" "${LOG_DIR}" "${INTERIM_DIR}" "${REPORTS_DIR}" "${EXPORTS_DIR}" "${MODELS_DIR}"
