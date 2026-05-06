@@ -243,15 +243,32 @@ class _HTTPXChatClient:
             if response.status_code >= 400:
                 return None
             data = response.json()
-            if isinstance(data, list) and data:
-                first = data[0]
-                if isinstance(first, dict):
-                    return int(first.get("tokens") or first.get("count") or first.get("token_count"))
-            if isinstance(data, dict):
-                return int(data.get("tokens") or data.get("count") or data.get("token_count"))
-            return None
+            return self._extract_token_count(data)
         except Exception:
             return None
+
+    @classmethod
+    def _extract_token_count(cls, data: object) -> int | None:
+        if isinstance(data, list):
+            counts = [cls._extract_token_count(item) for item in data]
+            valid_counts = [item for item in counts if item is not None]
+            return sum(valid_counts) if valid_counts else None
+        if isinstance(data, dict):
+            for key in ("tokens", "count", "token_count", "total_tokens"):
+                value = data.get(key)
+                if isinstance(value, (int, float, str)) and str(value).strip():
+                    try:
+                        return int(float(value))
+                    except Exception:
+                        pass
+                nested = cls._extract_token_count(value)
+                if nested is not None:
+                    return nested
+            for key in ("data", "items", "result", "results"):
+                nested = cls._extract_token_count(data.get(key))
+                if nested is not None:
+                    return nested
+        return None
 
     def chat(self, payload: dict) -> _ChatResp:
         response = self._client.post("/chat/completions", json=payload)

@@ -4,6 +4,7 @@ import json
 import math
 import re
 import uuid
+from contextlib import suppress
 from io import BytesIO
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -591,7 +592,7 @@ class GigaChatLabService:
             raise FileNotFoundError(f"Workbook source file not found for upload: {upload_id}")
 
         if file_format == "csv":
-            df = pd.read_csv(stored_path, dtype=object)
+            df = self._read_csv_frame(stored_path)
             sheet_name = "data"
         else:
             sheet_name = req.sheet_name
@@ -617,7 +618,7 @@ class GigaChatLabService:
     def _inspect_workbook(self, stored_path: Path, filename: str) -> dict[str, Any]:
         suffix = stored_path.suffix.lower()
         if suffix == ".csv":
-            df = pd.read_csv(stored_path, dtype=object)
+            df = self._read_csv_frame(stored_path)
             df = self._drop_empty_unnamed_columns(df)
             sheet = self._build_sheet_preview("data", df)
             return {
@@ -644,21 +645,55 @@ class GigaChatLabService:
             "sheets": sheets,
         }
 
-    @staticmethod
-    def _extract_supported_file_from_zip(filename: str, content: bytes) -> tuple[str, bytes]:
+    @classmethod
+    def _extract_supported_file_from_zip(cls, filename: str, content: bytes) -> tuple[str, bytes]:
         supported_suffixes = (".xlsx", ".xls", ".xlsm", ".csv")
+        suffix_priority = {".xlsx": 0, ".xlsm": 1, ".xls": 2, ".csv": 3}
         with ZipFile(BytesIO(content)) as archive:
             candidates = [
                 info for info in archive.infolist()
-                if not info.is_dir() and info.filename.lower().endswith(supported_suffixes)
+                if not info.is_dir()
+                and not Path(info.filename).name.startswith("._")
+                and "__MACOSX/" not in info.filename
+                and info.filename.lower().endswith(supported_suffixes)
             ]
             if not candidates:
                 raise ValueError(
                     f"В архиве {filename} не найдено поддерживаемых файлов Excel/CSV. "
                     "Ожидается .xlsx, .xls, .xlsm или .csv."
                 )
+            candidates.sort(key=lambda info: (
+                suffix_priority.get(Path(info.filename).suffix.lower(), 99),
+                len(Path(info.filename).parts),
+                info.filename.lower(),
+            ))
             selected = candidates[0]
             return selected.filename, archive.read(selected)
+
+    @classmethod
+    def _read_csv_frame(cls, stored_path: Path) -> pd.DataFrame:
+        errors: list[str] = []
+        for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+            with suppress(Exception):
+                return cls._normalize_csv_columns(pd.read_csv(stored_path, dtype=object, sep=None, engine="python", encoding=encoding))
+            for separator in (";", ",", "\t", "|"):
+                try:
+                    df = pd.read_csv(stored_path, dtype=object, sep=separator, encoding=encoding)
+                    if len(df.columns) > 1:
+                        return cls._normalize_csv_columns(df)
+                except Exception as exc:
+                    errors.append(f"{encoding}/{separator}: {exc}")
+        message = "; ".join(errors[:4]) or "не удалось определить кодировку или разделитель"
+        raise ValueError(
+            "Не удалось прочитать CSV. Проверьте разделитель и кавычки в файле. "
+            f"Последние ошибки: {message}"
+        )
+
+    @staticmethod
+    def _normalize_csv_columns(df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df.columns = [str(column).strip() for column in df.columns]
+        return df
 
     @staticmethod
     def _drop_empty_unnamed_columns(df: pd.DataFrame) -> pd.DataFrame:
