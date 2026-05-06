@@ -15,13 +15,18 @@ import pandas as pd
 from ...config import LLMConfig, ProjectConfig
 from ...gigachat_api import build_gigachat_transport_client
 from ...gigachat_mtls import SYSTEM_PROMPT
-from ...taxonomy import load_taxonomy
 from ..schemas import (
     GigaChatAnnotatedExportRequest,
     GigaChatFinalPromptRequest,
     GigaChatFinalPromptResponse,
     GigaChatLabRowRunRequest,
     GigaChatLabRowRunResponse,
+    GigaChatRuleEvaluationRequest,
+    GigaChatRuleEvaluationResponse,
+    GigaChatRuleEvaluationRow,
+    GigaChatRuleHit,
+    GigaChatRulePack,
+    GigaChatRulePackFilter,
     GigaChatLabSettingField,
     GigaChatLabSettingOption,
     GigaChatLabSettingsResponse,
@@ -46,10 +51,12 @@ class GigaChatLabService:
     DEFAULT_USER_PROMPT_PREFIX = (
         "Разметь одну запись и верни JSON с полями: "
         "client_first_message, short_summary, is_complaint, complaint_category, complaint_subcategory, "
-        "product_area, loan_product, severity, keywords, assigned_tags, confidence, notes, evidence_columns. "
+        "product_area, loan_product, severity, keywords, assigned_tags, reclassified_topic, "
+        "confirmed_rule_hits, rejected_rule_hits, confidence, notes, evidence_columns. "
         "Сначала определи, является ли запись жалобой. Затем выбери основную категорию, при необходимости подкатегорию, "
-        "назначь только разрешенные теги, оцени severity и confidence, а в notes кратко объясни решение. "
-        "Если данных недостаточно, оставляй поле пустым и коротко объясняй неоднозначность в notes."
+        "назначь только разрешенные теги, при необходимости подтверди или отвергни подсказки rule-based движка, "
+        "оцени severity и confidence, а в notes кратко объясни решение. Возвращай только классы и теги из разрешенных списков. "
+        "Если ни один разрешенный класс не подходит, верни пустую строку в complaint_category и объясни причину в notes."
     )
     DEFAULT_CONTEXT_NOTES = (
         "Источник данных: Excel/CSV с клиентскими обращениями. "
@@ -64,6 +71,11 @@ class GigaChatLabService:
         "context_notes",
         "classification_prompt_notes",
         "tagging_prompt_notes",
+        "rule_pack_prompt_notes",
+    }
+    RULE_FILTER_FIELD_ALIASES: dict[str, list[str]] = {
+        "Трайб": ["Во. Группа"],
+        "драйвер": ["Во. Тематика"],
     }
     FIELD_DEFS: list[dict[str, Any]] = [
         {"key": "model", "label": "Model", "input_type": "text", "section": "Запрос"},
@@ -75,6 +87,7 @@ class GigaChatLabService:
         {"key": "context_notes", "label": "Context notes", "input_type": "textarea", "section": "Промпты", "help_text": "Текстовые инструкции про контекст, листы Excel и особенности эксперимента."},
         {"key": "classification_prompt_notes", "label": "Классификации", "input_type": "textarea", "section": "Разметка", "help_text": "Правила корзин, категорий и подкатегорий для классификации."},
         {"key": "tagging_prompt_notes", "label": "Теги", "input_type": "textarea", "section": "Разметка", "help_text": "Правила тегирования, словари тегов и требования к их формату."},
+        {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
     ]
 
     def __init__(self, cfg: ProjectConfig) -> None:
@@ -95,54 +108,96 @@ class GigaChatLabService:
         return json.dumps(items, ensure_ascii=False, indent=2)
 
     def _default_classification_rules(self) -> str:
-        taxonomy = load_taxonomy(self.cfg.files.categories_seed_path)
-        raw_categories = taxonomy.get("raw", {}).get("categories", {}) or {}
-        items: list[dict[str, str]] = []
-        for code, body in raw_categories.items():
-            label = code
-            sub_labels: list[str] = []
-            if isinstance(body, dict):
-                label = str(body.get("label_ru", code) or code)
-                subcategories = body.get("subcategories", {}) or {}
-                if isinstance(subcategories, dict):
-                    for subcode, meta in subcategories.items():
-                        if isinstance(meta, dict):
-                            sub_label = str(meta.get("label_ru", subcode) or subcode)
-                        else:
-                            sub_label = str(meta)
-                        sub_labels.append(f"{subcode} ({sub_label})")
-            description_parts = [label]
-            if sub_labels:
-                description_parts.append(f"Подкатегории: {', '.join(sub_labels)}.")
-            if code == "OTHER":
-                description_parts.append("Используй только если ни одна другая категория явно не подходит.")
-            else:
-                description_parts.append("Выбирай эту категорию, если основная суть жалобы относится именно сюда.")
-            items.append({"name": code, "description": " ".join(description_parts)})
+        items = [
+            {
+                "name": "Проблема с выдачей очередного транша по Образовательному кредиту",
+                "description": "Единственный класс для правила EDU_RECLASS_TRANCH. Выбирай только когда подтверждена проблема с очередным траншем или семестром по образовательному кредиту.",
+            },
+            {
+                "name": "Проблемы с зачислением средств/ оформлением-рассмотрением заявки",
+                "description": "Единственный класс для правила EDU_RECLASS_APPLICATION. Выбирай только когда подтверждена проблема с зачислением средств, оплатой обучения, вузом, периодом обучения, отчислением или заявкой по образовательному кредиту.",
+            },
+        ]
         return self._serialize_rule_items(items)
 
     def _default_tag_rules(self) -> str:
         items = [
-            {"name": "mobile_app", "description": "Назначай, когда проблема проявляется в мобильном приложении или app store версии клиента."},
-            {"name": "web_channel", "description": "Назначай, когда проблема относится к веб-версии, браузеру или личному кабинету в вебе."},
-            {"name": "login", "description": "Назначай, когда обращение связано со входом, авторизацией или недоступностью аккаунта."},
-            {"name": "otp", "description": "Назначай, когда упоминаются SMS, push или одноразовые коды подтверждения."},
-            {"name": "payment", "description": "Назначай, когда проблема относится к оплате, списанию, комиссии или платежной операции."},
-            {"name": "transfer", "description": "Назначай, когда речь идет о переводе между счетами, по реквизитам или по номеру телефона."},
-            {"name": "refund", "description": "Назначай, когда клиент ждет возврат денег, отмену операции или откат платежа."},
-            {"name": "delay", "description": "Назначай, когда ключевая проблема — задержка, зависание, отсутствие статуса или долгое ожидание."},
-            {"name": "fee", "description": "Назначай, когда клиент жалуется на комиссию, тариф, проценты, штрафы или некорректный расчет."},
-            {"name": "ui_bug", "description": "Назначай, когда проблема связана с кнопками, экраном, формой, интерфейсом или визуальной ошибкой."},
-            {"name": "support_quality", "description": "Назначай, когда клиент жалуется на работу поддержки, сроки ответа или качество консультации."},
-            {"name": "security", "description": "Назначай, когда есть признаки взлома, мошенничества, блокировки по безопасности или подозрительных операций."},
-            {"name": "kyc", "description": "Назначай, когда проблема связана с документами, идентификацией, анкетой или персональными данными."},
-            {"name": "loan", "description": "Назначай, когда обращение относится к кредиту, кредитной карте, графику, ставке, страховке или погашению."},
-            {"name": "notifications", "description": "Назначай, когда проблема касается SMS, push, email или других уведомлений."},
-            {"name": "delivery", "description": "Назначай, когда жалоба связана с доставкой карты, документов, товара или курьером."},
-            {"name": "integration", "description": "Назначай, когда сбой вызван сторонним сервисом, интеграцией, платежным шлюзом или внешним контуром."},
-            {"name": "after_update", "description": "Назначай, когда проблема появилась после обновления приложения, версии клиента или релиза."},
+            {
+                "name": "DRA",
+                "description": "Единственный разрешенный тег. Назначай только когда подтверждено правило DRA/ДРПА по словам про смерть, наследство, каникулы, реструктуризацию, приставов, СВО, суд, исполнительное производство, военный контур или банкротство.",
+            },
         ]
         return self._serialize_rule_items(items)
+
+    def _default_rule_packs(self) -> str:
+        items = [
+            {
+                "code": "DRA",
+                "description": "Проставляет тег DRA/ДРПА по словам про смерть, наследство, каникулы, реструктуризацию, приставов, СВО, суд, исполнительное производство, военный контур и банкротство.",
+                "enabled": True,
+                "type": "assign_tag",
+                "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
+                "keywords": [
+                    "умер",
+                    "погиб",
+                    "смерт",
+                    "гибел",
+                    "наследни",
+                    "наследств",
+                    "каникул",
+                    "реструктуриз",
+                    "пристав",
+                    "участник СВО",
+                    "участника СВО",
+                    "участником СВО",
+                    "на СВО",
+                    "судебное решение",
+                    "по решению суда",
+                    "исполнительное производство",
+                    "военн",
+                    "банкрот",
+                ],
+                "filters": [],
+                "target_tag": "DRA",
+                "target_topic": None,
+            },
+            {
+                "code": "EDU_RECLASS_TRANCH",
+                "description": "Переклассифицирует обращения в тему про очередной транш по образовательному кредиту.",
+                "enabled": True,
+                "type": "reclass_topic",
+                "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
+                "keywords": ["транш", "семестр"],
+                "filters": [
+                    {"field": "Трайб", "op": "eq", "value": "ПОТРЕБИТЕЛЬСКИЕ КРЕДИТЫ"},
+                    {"field": "драйвер", "op": "ne", "value": "ОБРАЗОВАТЕЛЬНЫЙ КРЕДИТ"},
+                ],
+                "target_tag": None,
+                "target_topic": "Проблема с выдачей очередного транша по Образовательному кредиту",
+            },
+            {
+                "code": "EDU_RECLASS_APPLICATION",
+                "description": "Переклассифицирует обращения в тему про зачисление средств, оформление или рассмотрение заявки по образовательному кредиту.",
+                "enabled": True,
+                "type": "reclass_topic",
+                "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
+                "keywords": [
+                    "Образовательн",
+                    "Вуз",
+                    "Кредит на образ",
+                    "Оплатить обучение",
+                    "Период*обучения",
+                    "Отчисл",
+                ],
+                "filters": [
+                    {"field": "Трайб", "op": "eq", "value": "ПОТРЕБИТЕЛЬСКИЕ КРЕДИТЫ"},
+                    {"field": "драйвер", "op": "ne", "value": "ОБРАЗОВАТЕЛЬНЫЙ КРЕДИТ"},
+                ],
+                "target_tag": None,
+                "target_topic": "Проблемы с зачислением средств/ оформлением-рассмотрением заявки",
+            },
+        ]
+        return json.dumps(items, ensure_ascii=False, indent=2)
 
     def _default_values(self) -> dict[str, Any]:
         llm = self.cfg.llm.model_dump()
@@ -154,6 +209,7 @@ class GigaChatLabService:
         default_context_notes = str(llm.get("context_notes", "") or "").strip() or self.DEFAULT_CONTEXT_NOTES
         default_classification_notes = str(llm.get("classification_prompt_notes", "") or "").strip() or self._default_classification_rules()
         default_tagging_notes = str(llm.get("tagging_prompt_notes", "") or "").strip() or self._default_tag_rules()
+        default_rule_pack_notes = str(llm.get("rule_pack_prompt_notes", "") or "").strip() or self._default_rule_packs()
         return {
             "model": llm.get("model", "GigaChat"),
             "temperature": llm.get("temperature", 0.2),
@@ -164,6 +220,7 @@ class GigaChatLabService:
             "context_notes": default_context_notes,
             "classification_prompt_notes": default_classification_notes,
             "tagging_prompt_notes": default_tagging_notes,
+            "rule_pack_prompt_notes": default_rule_pack_notes,
         }
 
     def _load_saved_settings(self) -> dict[str, Any]:
@@ -295,7 +352,10 @@ class GigaChatLabService:
 
         columns = [str(column) for column in req.columns if str(column).strip()]
         base_payload = req.payload_override or self._compose_final_payload(values, columns)
+        rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
+        rule_evaluation = self._evaluate_rule_hits_for_row(rule_packs, req.row, 0)
         rendered_payload = self._render_payload_for_row(base_payload, req.row)
+        rendered_payload = self._inject_row_rule_context(rendered_payload, rule_evaluation)
 
         llm_cfg = self.cfg.llm.model_copy(deep=True)
         llm_cfg = self.apply_llm_overrides(llm_cfg)
@@ -325,6 +385,7 @@ class GigaChatLabService:
             response_json=parsed_payload,
             parse_ok=parse_ok,
             request_token_count=token_count,
+            rule_evaluation=rule_evaluation,
         )
 
     def export_annotated_workbook(self, req: GigaChatAnnotatedExportRequest) -> tuple[str, bytes]:
@@ -338,12 +399,34 @@ class GigaChatLabService:
             export_row: dict[str, Any] = {
                 "Класс": row.classification,
                 "Теги": ", ".join([str(tag).strip() for tag in row.tags if str(tag).strip()]),
+                "Rule hits": ", ".join([str(hit).strip() for hit in row.rule_hits if str(hit).strip()]),
+                "Suggested topics": ", ".join([str(topic).strip() for topic in row.suggested_topics if str(topic).strip()]),
+                "Confirmed rule hits": ", ".join([str(hit).strip() for hit in row.confirmed_rule_hits if str(hit).strip()]),
+                "Rejected rule hits": ", ".join([str(hit).strip() for hit in row.rejected_rule_hits if str(hit).strip()]),
+                "Rule decision": row.rule_decision or "",
+                "Model decision": row.model_decision or "",
+                "Reclassified topic": row.reclassified_topic or "",
+                "Final topic": row.final_topic or "",
+                "Decision source": row.decision_source or "",
             }
             for column in source_columns:
                 export_row[column] = self._normalize_export_cell(row.source_row.get(column))
             export_rows.append(export_row)
 
-        ordered_columns = ["Класс", "Теги", *source_columns]
+        ordered_columns = [
+            "Класс",
+            "Теги",
+            "Rule hits",
+            "Suggested topics",
+            "Confirmed rule hits",
+            "Rejected rule hits",
+            "Rule decision",
+            "Model decision",
+            "Reclassified topic",
+            "Final topic",
+            "Decision source",
+            *source_columns,
+        ]
         df = pd.DataFrame(export_rows, columns=ordered_columns)
         df = self._sanitize_for_excel(df)
 
@@ -364,6 +447,116 @@ class GigaChatLabService:
 
         buffer.seek(0)
         export_filename = f"{Path(req.filename or 'annotated.xlsx').stem}_annotated.xlsx"
+        return export_filename, buffer.getvalue()
+
+    def export_validation_workbook(self, req: GigaChatAnnotatedExportRequest) -> tuple[str, bytes]:
+        source_columns = [str(column).strip() for column in req.source_columns if str(column).strip()]
+        ordered_rows = sorted(
+            list(req.rows),
+            key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
+        )
+        export_rows: list[dict[str, Any]] = []
+        for row in ordered_rows:
+            model_class = row.classification or ""
+            model_tags = ", ".join([str(tag).strip() for tag in row.tags if str(tag).strip()])
+            model_topic = row.final_topic or row.reclassified_topic or row.classification or ""
+            export_row: dict[str, Any] = {
+                "Review status": "needs_review",
+                "Class matches": "",
+                "Tags match": "",
+                "Topic matches": "",
+                "Expected class": "",
+                "Expected tags": "",
+                "Expected final topic": "",
+                "Reviewer comment": "",
+                "Model class": model_class,
+                "Model tags": model_tags,
+                "Rule hits": ", ".join([str(hit).strip() for hit in row.rule_hits if str(hit).strip()]),
+                "Suggested topics": ", ".join([str(topic).strip() for topic in row.suggested_topics if str(topic).strip()]),
+                "Confirmed rule hits": ", ".join([str(hit).strip() for hit in row.confirmed_rule_hits if str(hit).strip()]),
+                "Rejected rule hits": ", ".join([str(hit).strip() for hit in row.rejected_rule_hits if str(hit).strip()]),
+                "Rule decision": row.rule_decision or "",
+                "Model decision": row.model_decision or "",
+                "Reclassified topic": row.reclassified_topic or "",
+                "Model final topic": model_topic,
+                "Decision source": row.decision_source or "",
+            }
+            for column in source_columns:
+                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
+            export_rows.append(export_row)
+
+        ordered_columns = [
+            "Review status",
+            "Class matches",
+            "Tags match",
+            "Topic matches",
+            "Expected class",
+            "Expected tags",
+            "Expected final topic",
+            "Reviewer comment",
+            "Model class",
+            "Model tags",
+            "Rule hits",
+            "Suggested topics",
+            "Confirmed rule hits",
+            "Rejected rule hits",
+            "Rule decision",
+            "Model decision",
+            "Reclassified topic",
+            "Model final topic",
+            "Decision source",
+            *source_columns,
+        ]
+        df = pd.DataFrame(export_rows, columns=ordered_columns)
+        df = self._sanitize_for_excel(df)
+
+        buffer = BytesIO()
+        sheet_name = self._excel_safe_sheet_name(req.sheet_name or "Validation")
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.sheets[sheet_name]
+            ws.freeze_panes = "I2"
+            ws.auto_filter.ref = ws.dimensions
+
+            from openpyxl.styles import Font, PatternFill
+            from openpyxl.worksheet.datavalidation import DataValidation
+
+            manual_fill = PatternFill("solid", fgColor="FFF2CC")
+            model_fill = PatternFill("solid", fgColor="D9EAF7")
+            source_fill = PatternFill("solid", fgColor="E2F0D9")
+            for col_idx in range(1, ws.max_column + 1):
+                header = ws.cell(row=1, column=col_idx)
+                header.font = Font(bold=True)
+                if col_idx <= 8:
+                    header.fill = manual_fill
+                elif col_idx <= 19:
+                    header.fill = model_fill
+                else:
+                    header.fill = source_fill
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    if isinstance(cell.value, datetime):
+                        cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                    elif isinstance(cell.value, date):
+                        cell.number_format = "yyyy-mm-dd"
+
+            if ws.max_row >= 2:
+                yes_no = DataValidation(type="list", formula1='"yes,no,needs_review"', allow_blank=True)
+                ws.add_data_validation(yes_no)
+                for col_letter in ("B", "C", "D"):
+                    yes_no.add(f"{col_letter}2:{col_letter}{ws.max_row}")
+                status = DataValidation(type="list", formula1='"needs_review,approved,rejected"', allow_blank=True)
+                ws.add_data_validation(status)
+                status.add(f"A2:A{ws.max_row}")
+
+            for col_idx in range(1, ws.max_column + 1):
+                max_len = len(str(ws.cell(row=1, column=col_idx).value or ""))
+                for row_idx in range(2, min(ws.max_row, 40) + 1):
+                    max_len = max(max_len, len(str(ws.cell(row=row_idx, column=col_idx).value or "")))
+                ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = max(12, min(48, max_len * 0.8))
+
+        buffer.seek(0)
+        export_filename = f"{Path(req.filename or 'annotated.xlsx').stem}_validation.xlsx"
         return export_filename, buffer.getvalue()
 
     def upload_workbook(self, filename: str, content: bytes) -> GigaChatWorkbookUploadResponse:
@@ -406,6 +599,7 @@ class GigaChatLabService:
             if sheet_name not in available_sheets:
                 raise ValueError(f"Sheet not found in workbook: {sheet_name}")
             df = pd.read_excel(stored_path, sheet_name=sheet_name, dtype=object)
+        df = self._drop_empty_unnamed_columns(df)
 
         columns = [str(c) for c in df.columns]
         rows = self._frame_to_rows(df.head(min(max(int(req.row_limit), 1), 1000)))
@@ -424,6 +618,7 @@ class GigaChatLabService:
         suffix = stored_path.suffix.lower()
         if suffix == ".csv":
             df = pd.read_csv(stored_path, dtype=object)
+            df = self._drop_empty_unnamed_columns(df)
             sheet = self._build_sheet_preview("data", df)
             return {
                 "upload_id": stored_path.parent.name,
@@ -434,7 +629,13 @@ class GigaChatLabService:
             }
 
         excel = pd.ExcelFile(stored_path)
-        sheets = [self._build_sheet_preview(sheet_name, pd.read_excel(excel, sheet_name=sheet_name, dtype=object)).model_dump() for sheet_name in excel.sheet_names]
+        sheets = [
+            self._build_sheet_preview(
+                sheet_name,
+                self._drop_empty_unnamed_columns(pd.read_excel(excel, sheet_name=sheet_name, dtype=object)),
+            ).model_dump()
+            for sheet_name in excel.sheet_names
+        ]
         return {
             "upload_id": stored_path.parent.name,
             "filename": filename,
@@ -460,6 +661,23 @@ class GigaChatLabService:
             return selected.filename, archive.read(selected)
 
     @staticmethod
+    def _drop_empty_unnamed_columns(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty and not len(df.columns):
+            return df
+        keep_columns = []
+        for column in df.columns:
+            column_name = str(column)
+            is_unnamed = column_name.startswith("Unnamed:")
+            if not is_unnamed:
+                keep_columns.append(column)
+                continue
+            series = df[column]
+            has_value = bool(series.map(lambda value: not pd.isna(value) and str(value).strip() != "").any())
+            if has_value:
+                keep_columns.append(column)
+        return df.loc[:, keep_columns]
+
+    @staticmethod
     def _parse_rule_items(raw: Any) -> list[dict[str, str]]:
         text = str(raw or "").strip()
         if not text:
@@ -482,6 +700,155 @@ class GigaChatLabService:
             )
         return [item for item in items if item["name"] or item["description"]]
 
+    @staticmethod
+    def _split_rule_list(raw: Any) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        if raw is None:
+            return []
+        text = str(raw).replace("\r", "\n")
+        parts = [part.strip() for chunk in text.split("\n") for part in chunk.split(",")]
+        return [part for part in parts if part]
+
+    @classmethod
+    def _parse_rule_pack_items(cls, raw: Any) -> list[GigaChatRulePack]:
+        text = str(raw or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return []
+        if not isinstance(parsed, list):
+            return []
+
+        items: list[GigaChatRulePack] = []
+        for index, entry in enumerate(parsed):
+            if not isinstance(entry, dict):
+                continue
+            filters: list[GigaChatRulePackFilter] = []
+            for filter_entry in entry.get("filters", []) or []:
+                if not isinstance(filter_entry, dict):
+                    continue
+                field = str(filter_entry.get("field", "") or "").strip()
+                op = str(filter_entry.get("op", "eq") or "eq").strip().lower()
+                value = str(filter_entry.get("value", "") or "").strip()
+                if not field or not value or op not in {"eq", "ne"}:
+                    continue
+                filters.append(GigaChatRulePackFilter(field=field, op=op, value=value))
+
+            code = str(entry.get("code", "") or "").strip() or f"RULE_{index + 1}"
+            rule_type = str(entry.get("type", "assign_tag") or "assign_tag").strip().lower()
+            if rule_type not in {"assign_tag", "reclass_topic"}:
+                rule_type = "assign_tag"
+
+            items.append(
+                GigaChatRulePack(
+                    code=code,
+                    description=str(entry.get("description", "") or "").strip(),
+                    enabled=bool(entry.get("enabled", True)),
+                    type=rule_type,
+                    source_fields=cls._split_rule_list(entry.get("source_fields")),
+                    keywords=cls._split_rule_list(entry.get("keywords")),
+                    filters=filters,
+                    target_tag=str(entry.get("target_tag", "") or "").strip() or None,
+                    target_topic=str(entry.get("target_topic", "") or "").strip() or None,
+                )
+            )
+        return items
+
+    @staticmethod
+    def _normalize_match_text(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        text = re.sub(r"\s+", " ", text)
+        return text
+
+    @classmethod
+    def _keyword_matches_text(cls, keyword: str, text: str) -> bool:
+        normalized_keyword = cls._normalize_match_text(keyword)
+        normalized_text = cls._normalize_match_text(text)
+        if not normalized_keyword or not normalized_text:
+            return False
+        regex_pattern = ".*".join(re.escape(part) for part in normalized_keyword.split("*"))
+        regex_pattern = regex_pattern.replace(r"\ ", r"\s+")
+        try:
+            return re.search(regex_pattern, normalized_text, flags=re.IGNORECASE) is not None
+        except re.error:
+            return normalized_keyword in normalized_text
+
+    @classmethod
+    def _row_filter_matches(cls, row: dict[str, Any], rule_filter: GigaChatRulePackFilter) -> bool:
+        field_names = [rule_filter.field, *cls.RULE_FILTER_FIELD_ALIASES.get(rule_filter.field, [])]
+        row_value = next((row.get(field_name) for field_name in field_names if field_name in row), None)
+        left = cls._normalize_match_text(row_value)
+        right = cls._normalize_match_text(rule_filter.value)
+        if rule_filter.op == "eq":
+            return left == right
+        return left != right
+
+    @classmethod
+    def _evaluate_rule_hits_for_row(
+        cls,
+        rule_packs: list[GigaChatRulePack],
+        row: dict[str, Any],
+        row_index: int,
+    ) -> GigaChatRuleEvaluationRow:
+        hits: list[GigaChatRuleHit] = []
+
+        for rule_pack in rule_packs:
+            if not rule_pack.enabled:
+                continue
+            if rule_pack.filters and not all(cls._row_filter_matches(row, rule_filter) for rule_filter in rule_pack.filters):
+                continue
+
+            matched_keywords: list[str] = []
+            matched_fields: list[str] = []
+            for keyword in rule_pack.keywords:
+                keyword_matched = False
+                for field_name in rule_pack.source_fields:
+                    if cls._keyword_matches_text(keyword, row.get(field_name)):
+                        keyword_matched = True
+                        if field_name not in matched_fields:
+                            matched_fields.append(field_name)
+                if keyword_matched:
+                    matched_keywords.append(keyword)
+
+            if not matched_keywords:
+                continue
+
+            hits.append(
+                GigaChatRuleHit(
+                    code=rule_pack.code,
+                    description=rule_pack.description,
+                    type=rule_pack.type,
+                    matched_keywords=matched_keywords,
+                    matched_fields=matched_fields,
+                    target_tag=rule_pack.target_tag,
+                    target_topic=rule_pack.target_topic,
+                )
+            )
+
+        suggested_tags = list(dict.fromkeys([hit.target_tag for hit in hits if hit.target_tag]))
+        suggested_topics = list(dict.fromkeys([hit.target_topic for hit in hits if hit.target_topic]))
+
+        return GigaChatRuleEvaluationRow(
+            row_index=row_index,
+            hits=hits,
+            suggested_tags=[str(item) for item in suggested_tags],
+            suggested_topics=[str(item) for item in suggested_topics],
+        )
+
+    def evaluate_rule_packs(self, req: GigaChatRuleEvaluationRequest) -> GigaChatRuleEvaluationResponse:
+        values = dict(self._effective_values()[0])
+        for key, value in req.values.items():
+            values[key] = self._coerce_setting_value(key, value)
+        rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
+        evaluations = [
+            self._evaluate_rule_hits_for_row(rule_packs, row, row_index)
+            for row_index, row in enumerate(req.rows)
+        ]
+        return GigaChatRuleEvaluationResponse(rule_packs=rule_packs, evaluations=evaluations)
+
     @classmethod
     def _format_rule_lines(cls, raw: Any, *, label: str) -> str:
         items = cls._parse_rule_items(raw)
@@ -495,6 +862,51 @@ class GigaChatLabService:
                 lines.append(f"- {item['name']}")
             else:
                 lines.append(f"- {item['description']}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _format_rule_pack_lines(cls, raw: Any) -> str:
+        rule_packs = cls._parse_rule_pack_items(raw)
+        if not rule_packs:
+            return "Rule packs: список пока пустой."
+        lines = ["Rule packs:"]
+        for item in rule_packs:
+            if not item.enabled:
+                continue
+            filter_text = (
+                "; ".join(f"{rule_filter.field} {rule_filter.op} {rule_filter.value}" for rule_filter in item.filters)
+                if item.filters else
+                "без бизнес-фильтров"
+            )
+            keyword_text = ", ".join(item.keywords) if item.keywords else "без keywords"
+            action_text = item.target_tag if item.type == "assign_tag" else item.target_topic
+            lines.append(
+                f"- {item.code} [{item.type}]: поля={', '.join(item.source_fields) or 'не заданы'}; "
+                f"фильтры={filter_text}; keywords={keyword_text}; действие={action_text or 'не задано'}."
+            )
+            if item.description:
+                lines.append(f"  Описание: {item.description}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_row_rule_context(evaluation: GigaChatRuleEvaluationRow) -> str:
+        if not evaluation.hits:
+            return "Rule-based precheck для этой строки не нашел совпадений."
+        lines = ["Rule-based precheck для этой строки нашел следующие совпадения:"]
+        for hit in evaluation.hits:
+            action = f"tag={hit.target_tag}" if hit.type == "assign_tag" else f"topic={hit.target_topic}"
+            lines.append(
+                f"- {hit.code} [{hit.type}] -> {action}; keywords={', '.join(hit.matched_keywords)}; "
+                f"fields={', '.join(hit.matched_fields)}."
+            )
+        if evaluation.suggested_tags:
+            lines.append(f"Предложенные теги по локальным правилам: {', '.join(evaluation.suggested_tags)}")
+        if evaluation.suggested_topics:
+            lines.append(f"Предложенные переклассификации по локальным правилам: {', '.join(evaluation.suggested_topics)}")
+        lines.append(
+            "Подтверди или отвергни каждое срабатывание. В confirmed_rule_hits верни подтвержденные коды правил, "
+            "в rejected_rule_hits — отклоненные. Если rule-pack предлагает reclass_topic, при подтверждении верни его в reclassified_topic."
+        )
         return "\n".join(lines)
 
     @staticmethod
@@ -527,6 +939,7 @@ class GigaChatLabService:
 
         class_rules = self._format_rule_lines(values.get("classification_prompt_notes", ""), label="Классификации")
         tag_rules = self._format_rule_lines(values.get("tagging_prompt_notes", ""), label="Теги")
+        rule_pack_rules = self._format_rule_pack_lines(values.get("rule_pack_prompt_notes", ""))
         parsed_class_rules = self._parse_rule_items(values.get("classification_prompt_notes", ""))
         parsed_tag_rules = self._parse_rule_items(values.get("tagging_prompt_notes", ""))
         placeholder_row = self._placeholder_row(columns)
@@ -538,11 +951,16 @@ class GigaChatLabService:
             prompt_parts.append(user_prompt_prefix)
         prompt_parts.append(class_rules)
         prompt_parts.append(tag_rules)
+        prompt_parts.append(rule_pack_rules)
         prompt_parts.append(f"Активные колонки для анализа: {', '.join(columns) if columns else 'не выбраны'}")
         prompt_parts.append(
             "Ниже шаблон одной записи. В реальном запросе на место плейсхолдеров будут подставлены значения выбранных колонок:"
         )
         prompt_parts.append(json.dumps(placeholder_row, ensure_ascii=False, indent=2))
+        prompt_parts.append(
+            "Перед отправкой каждой реальной строки локальный rule-based precheck вычислит совпадения по rule packs и "
+            "добавит их в user message. Используй эти совпадения как сильную подсказку, но подтверждай их только если они реально согласуются с текстом строки."
+        )
 
         return {
             "model": model,
@@ -570,6 +988,34 @@ class GigaChatLabService:
             if parts:
                 return "\n\n".join(parts)
         return json.dumps(payload, ensure_ascii=False)
+
+    @classmethod
+    def _inject_row_rule_context(cls, payload: dict[str, Any], evaluation: GigaChatRuleEvaluationRow) -> dict[str, Any]:
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return payload
+
+        next_payload = dict(payload)
+        next_messages: list[dict[str, Any]] = []
+        injected = False
+        rule_context = cls._format_row_rule_context(evaluation)
+
+        for message in messages:
+            if not isinstance(message, dict):
+                next_messages.append(message)
+                continue
+            next_message = dict(message)
+            if next_message.get("role") == "user":
+                content = str(next_message.get("content", "") or "").strip()
+                next_message["content"] = f"{content}\n\n{rule_context}".strip()
+                injected = True
+            next_messages.append(next_message)
+
+        if not injected:
+            next_messages.append({"role": "user", "content": rule_context})
+
+        next_payload["messages"] = next_messages
+        return next_payload
 
     def _build_sheet_preview(self, sheet_name: str, df: pd.DataFrame) -> GigaChatWorkbookSheetPreview:
         columns = [str(c) for c in df.columns]

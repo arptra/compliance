@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  evaluateGigaChatRulePacks,
   exportGigaChatAnnotatedWorkbook,
+  exportGigaChatValidationWorkbook,
   getGigaChatLabSettings,
   getGigaChatStatus,
   probeGigaChatTransport,
@@ -14,6 +16,8 @@ import {
 } from '../features/gigachat/api'
 import { GigaChatProcessingOverlay } from '../features/gigachat/GigaChatProcessingOverlay'
 import { LabelingRulesEditor } from '../features/gigachat/LabelingRulesEditor'
+import { evaluateRulePacksLocally, parseRulePacks } from '../features/gigachat/rulePackMatcher'
+import { RulePackEditor } from '../features/gigachat/RulePackEditor'
 import { GigaChatSettingsForm } from '../features/gigachat/GigaChatSettingsForm'
 import { WorkbookSheetPickerModal } from '../features/gigachat/WorkbookSheetPickerModal'
 import { WorkbookSheetTable } from '../features/gigachat/WorkbookSheetTable'
@@ -23,17 +27,28 @@ import { useResizableTable, type TableRowClamp } from '../features/gigachat/useR
 import type {
   GigaChatFinalPromptResponse,
   GigaChatLabRowRunResponse,
+  GigaChatRuleEvaluationRow,
   GigaChatTransportName,
   GigaChatWorkbookSheetDataResponse,
   GigaChatWorkbookUploadResponse,
 } from '../features/gigachat/types'
 
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
+type LabSetupTab = 'prompts' | 'labels' | 'rules'
 type AnnotatedSheetRow = {
   rowKey: string
   rowIndex: number
   classification: string
   tags: string[]
+  ruleHits: string[]
+  suggestedTopics: string[]
+  confirmedRuleHits: string[]
+  rejectedRuleHits: string[]
+  ruleDecision: string
+  modelDecision: string
+  reclassifiedTopic: string
+  finalTopic: string
+  decisionSource: string
   responseRaw: string
   responseJson?: unknown
   sourceRow: Record<string, unknown>
@@ -54,9 +69,80 @@ type TokenAccountingState = {
 }
 
 const TOKEN_ACCOUNTING_STORAGE_KEY = 'gigachat-lab-token-accounting'
+const DEFAULT_RULE_PACK_PROMPT_NOTES = JSON.stringify([
+  {
+    code: 'DRA',
+    description: 'Проставляет тег DRA/ДРПА по словам про смерть, наследство, каникулы, реструктуризацию, приставов, СВО, суд, исполнительное производство, военный контур и банкротство.',
+    enabled: true,
+    type: 'assign_tag',
+    source_fields: ['Во. Описание', 'Обр. Результат суммаризации диалога'],
+    keywords: [
+      'умер',
+      'погиб',
+      'смерт',
+      'гибел',
+      'наследни',
+      'наследств',
+      'каникул',
+      'реструктуриз',
+      'пристав',
+      'участник СВО',
+      'участника СВО',
+      'участником СВО',
+      'на СВО',
+      'судебное решение',
+      'по решению суда',
+      'исполнительное производство',
+      'военн',
+      'банкрот',
+    ],
+    filters: [],
+    target_tag: 'DRA',
+    target_topic: null,
+  },
+  {
+    code: 'EDU_RECLASS_TRANCH',
+    description: 'Переклассифицирует обращения в тему про очередной транш по образовательному кредиту.',
+    enabled: true,
+    type: 'reclass_topic',
+    source_fields: ['Во. Описание', 'Обр. Результат суммаризации диалога'],
+    keywords: ['транш', 'семестр'],
+    filters: [
+      { field: 'Трайб', op: 'eq', value: 'ПОТРЕБИТЕЛЬСКИЕ КРЕДИТЫ' },
+      { field: 'драйвер', op: 'ne', value: 'ОБРАЗОВАТЕЛЬНЫЙ КРЕДИТ' },
+    ],
+    target_tag: null,
+    target_topic: 'Проблема с выдачей очередного транша по Образовательному кредиту',
+  },
+  {
+    code: 'EDU_RECLASS_APPLICATION',
+    description: 'Переклассифицирует обращения в тему про зачисление средств, оформление или рассмотрение заявки по образовательному кредиту.',
+    enabled: true,
+    type: 'reclass_topic',
+    source_fields: ['Во. Описание', 'Обр. Результат суммаризации диалога'],
+    keywords: ['Образовательн', 'Вуз', 'Кредит на образ', 'Оплатить обучение', 'Период*обучения', 'Отчисл'],
+    filters: [
+      { field: 'Трайб', op: 'eq', value: 'ПОТРЕБИТЕЛЬСКИЕ КРЕДИТЫ' },
+      { field: 'драйвер', op: 'ne', value: 'ОБРАЗОВАТЕЛЬНЫЙ КРЕДИТ' },
+    ],
+    target_tag: null,
+    target_topic: 'Проблемы с зачислением средств/ оформлением-рассмотрением заявки',
+  },
+], null, 2)
 
 function fieldsToValues(fields: Array<{ key: string; value: unknown }>) {
   return Object.fromEntries(fields.map((field) => [field.key, field.value]))
+}
+
+function hasRulePacks(value: unknown) {
+  const text = String(value ?? '').trim()
+  if (!text) return false
+  try {
+    const parsed = JSON.parse(text) as unknown
+    return Array.isArray(parsed) && parsed.length > 0
+  } catch {
+    return false
+  }
 }
 
 function stringifyJson(value: unknown) {
@@ -97,11 +183,28 @@ function loadTokenAccountingState(): TokenAccountingState {
 function extractClassification(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return ''
   const record = responseJson as Record<string, unknown>
-  if (typeof record.complaint_category === 'string') return record.complaint_category
+  const directKeys = [
+    'final_topic',
+    'complaint_category',
+    'complaint_subcategory',
+    'category',
+    'topic',
+    'theme',
+    'class',
+    'тематика',
+    'класс',
+  ]
+  for (const key of directKeys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
   const classification = record.classification
   if (classification && typeof classification === 'object' && !Array.isArray(classification)) {
-    const cls = (classification as Record<string, unknown>).class
-    if (typeof cls === 'string') return cls
+    const classificationRecord = classification as Record<string, unknown>
+    for (const key of ['class', 'category', 'topic', 'theme', 'тематика', 'класс']) {
+      const value = classificationRecord[key]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
   }
   return ''
 }
@@ -127,6 +230,32 @@ function extractTags(responseJson: unknown) {
   return []
 }
 
+function extractStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : []
+}
+
+function extractConfirmedRuleHits(responseJson: unknown) {
+  if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return [] as string[]
+  return extractStringList((responseJson as Record<string, unknown>).confirmed_rule_hits)
+}
+
+function extractRejectedRuleHits(responseJson: unknown) {
+  if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return [] as string[]
+  return extractStringList((responseJson as Record<string, unknown>).rejected_rule_hits)
+}
+
+function extractReclassifiedTopic(responseJson: unknown) {
+  if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return ''
+  const record = responseJson as Record<string, unknown>
+  for (const key of ['reclassified_topic', 'suggested_topic', 'target_topic']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
 function formatLabError(error: Error | null | undefined, resourceLabel: string) {
   if (!error) return ''
   const raw = String(error.message || '').trim()
@@ -146,7 +275,7 @@ function formatLabError(error: Error | null | undefined, resourceLabel: string) 
 
 export default function GigaChatPage() {
   const qc = useQueryClient()
-  const labelingFieldKeys = new Set(['classification_prompt_notes', 'tagging_prompt_notes'])
+  const labelingFieldKeys = new Set(['classification_prompt_notes', 'tagging_prompt_notes', 'rule_pack_prompt_notes'])
   const statusQ = useQuery({
     queryKey: ['gigachat-status'],
     queryFn: getGigaChatStatus,
@@ -163,6 +292,7 @@ export default function GigaChatPage() {
   const [selectedTransport, setSelectedTransport] = useState<GigaChatTransportName>('mtls')
   const [heroCollapsed, setHeroCollapsed] = useState(false)
   const [settingsCollapsed, setSettingsCollapsed] = useState(false)
+  const [activeSetupTab, setActiveSetupTab] = useState<LabSetupTab>('prompts')
   const [uploadCollapsed, setUploadCollapsed] = useState(false)
   const [workbookCollapsed, setWorkbookCollapsed] = useState(false)
   const [resultCollapsed, setResultCollapsed] = useState(false)
@@ -189,10 +319,14 @@ export default function GigaChatPage() {
   const [annotatedRows, setAnnotatedRows] = useState<AnnotatedSheetRow[]>([])
   const [annotatedClassFilter, setAnnotatedClassFilter] = useState<string[]>([])
   const [annotatedTagFilter, setAnnotatedTagFilter] = useState<string[]>([])
+  const [annotatedRuleFilter, setAnnotatedRuleFilter] = useState<string[]>([])
+  const [annotatedDecisionSourceFilter, setAnnotatedDecisionSourceFilter] = useState<string[]>([])
+  const [ruleEvaluationMap, setRuleEvaluationMap] = useState<Record<number, GigaChatRuleEvaluationRow>>({})
   const [runRowBusyIndex, setRunRowBusyIndex] = useState<number | null>(null)
   const [batchBusy, setBatchBusy] = useState(false)
   const [rowRunError, setRowRunError] = useState<string | null>(null)
   const [batchRunError, setBatchRunError] = useState<string | null>(null)
+  const [ruleEvaluationError, setRuleEvaluationError] = useState<string | null>(null)
   const [processingOverlay, setProcessingOverlay] = useState<ProcessingOverlayState | null>(null)
   const [tokenAccounting, setTokenAccounting] = useState<TokenAccountingState>(() => loadTokenAccountingState())
   const lastAutoPreviewKeyRef = useRef<string | null>(null)
@@ -235,7 +369,11 @@ export default function GigaChatPage() {
 
   useEffect(() => {
     if (!settingsQ.data?.fields?.length) return
-    setSettingValues(fieldsToValues(settingsQ.data.fields))
+    const values = fieldsToValues(settingsQ.data.fields)
+    if (!hasRulePacks(values.rule_pack_prompt_notes)) {
+      values.rule_pack_prompt_notes = DEFAULT_RULE_PACK_PROMPT_NOTES
+    }
+    setSettingValues(values)
   }, [settingsQ.data])
 
   const probe = useMutation({
@@ -334,6 +472,15 @@ export default function GigaChatPage() {
           row_index: row.rowIndex,
           classification: row.classification,
           tags: row.tags,
+          rule_hits: row.ruleHits,
+          suggested_topics: row.suggestedTopics,
+          confirmed_rule_hits: row.confirmedRuleHits,
+          rejected_rule_hits: row.rejectedRuleHits,
+          rule_decision: row.ruleDecision,
+          model_decision: row.modelDecision,
+          reclassified_topic: row.reclassifiedTopic || null,
+          final_topic: row.finalTopic || null,
+          decision_source: row.decisionSource,
           source_row: row.sourceRow,
         })),
       )
@@ -342,6 +489,56 @@ export default function GigaChatPage() {
       const sourceName = sheetData?.filename ?? 'annotated.xlsx'
       const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'annotated'}_annotated.xlsx`
       downloadBlob(blob, filename || fallbackName)
+    },
+  })
+
+  const exportValidationRows = useMutation({
+    mutationFn: async () => {
+      if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
+      return exportGigaChatValidationWorkbook(
+        sheetData.filename,
+        sheetData.sheet_name,
+        sheetData.columns,
+        filteredAnnotatedRows.map((row) => ({
+          row_index: row.rowIndex,
+          classification: row.classification,
+          tags: row.tags,
+          rule_hits: row.ruleHits,
+          suggested_topics: row.suggestedTopics,
+          confirmed_rule_hits: row.confirmedRuleHits,
+          rejected_rule_hits: row.rejectedRuleHits,
+          rule_decision: row.ruleDecision,
+          model_decision: row.modelDecision,
+          reclassified_topic: row.reclassifiedTopic || null,
+          final_topic: row.finalTopic || null,
+          decision_source: row.decisionSource,
+          source_row: row.sourceRow,
+        })),
+      )
+    },
+    onSuccess: ({ blob, filename }) => {
+      const sourceName = sheetData?.filename ?? 'validation.xlsx'
+      const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'annotated'}_validation.xlsx`
+      downloadBlob(blob, filename || fallbackName)
+    },
+  })
+
+  const evaluateRulePacks = useMutation({
+    mutationFn: async (rows: Array<Record<string, unknown>>) => {
+      try {
+        return await evaluateGigaChatRulePacks(settingValues, rows)
+      } catch (error) {
+        const message = String((error as Error).message || '')
+        if (!message.includes('Not Found')) throw error
+        return evaluateRulePacksLocally(settingValues, rows)
+      }
+    },
+    onSuccess: (data) => {
+      setRuleEvaluationMap(Object.fromEntries(data.evaluations.map((item) => [item.row_index, item])))
+      setRuleEvaluationError(null)
+    },
+    onError: (error) => {
+      setRuleEvaluationError(formatLabError(error as Error, 'rule packs'))
     },
   })
 
@@ -365,20 +562,64 @@ export default function GigaChatPage() {
   useEffect(() => {
     if (!sheetData) {
       setSelectedSheetRowKeys([])
+      setRuleEvaluationMap({})
       return
     }
     const available = new Set(sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
     setSelectedSheetRowKeys((current) => current.filter((key) => available.has(key)))
   }, [sheetData])
 
+  useEffect(() => {
+    if (!sheetData) return
+    const timer = window.setTimeout(() => {
+      evaluateRulePacks.mutate(sheetData.rows)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [sheetData, settingValues.rule_pack_prompt_notes])
+
   const appendAnnotatedResult = (data: GigaChatLabRowRunResponse, rowIndex: number, row: Record<string, unknown>) => {
     if (!sheetData) return
     const rowKey = buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, rowIndex)
+    const localRuleHits = data.rule_evaluation?.hits.map((item) => item.code) ?? []
+    const confirmedRuleHits = extractConfirmedRuleHits(data.response_json)
+    const rejectedRuleHits = extractRejectedRuleHits(data.response_json)
+    const reclassifiedTopic = extractReclassifiedTopic(data.response_json)
+    const classification = extractClassification(data.response_json)
+    const finalTopic = reclassifiedTopic || classification
+    const ruleDecision = confirmedRuleHits.length || rejectedRuleHits.length
+      ? [
+        confirmedRuleHits.length ? `confirmed: ${confirmedRuleHits.join(', ')}` : '',
+        rejectedRuleHits.length ? `rejected: ${rejectedRuleHits.join(', ')}` : '',
+      ].filter(Boolean).join('; ')
+      : localRuleHits.length ? 'pending_in_model_response' : 'no_rule_hits'
+    const modelDecision = data.parse_ok
+      ? confirmedRuleHits.length || reclassifiedTopic
+        ? 'confirmed'
+        : rejectedRuleHits.length
+          ? 'rejected'
+          : finalTopic
+            ? 'classified'
+            : 'empty_result'
+      : 'raw_response'
+    const decisionSource = confirmedRuleHits.length || reclassifiedTopic
+      ? 'rule+llm'
+      : localRuleHits.length
+        ? 'llm_with_rule_precheck'
+        : 'llm_only'
     const annotatedRow: AnnotatedSheetRow = {
       rowKey,
       rowIndex,
-      classification: extractClassification(data.response_json),
+      classification,
       tags: extractTags(data.response_json),
+      ruleHits: localRuleHits,
+      suggestedTopics: data.rule_evaluation?.suggested_topics ?? [],
+      confirmedRuleHits,
+      rejectedRuleHits,
+      ruleDecision,
+      modelDecision,
+      reclassifiedTopic,
+      finalTopic,
+      decisionSource,
       responseRaw: data.response_raw,
       responseJson: data.response_json,
       sourceRow: row,
@@ -547,18 +788,111 @@ export default function GigaChatPage() {
     () => Array.from(new Set(annotatedRows.flatMap((row) => row.tags))).sort(),
     [annotatedRows],
   )
+  const annotatedRuleOptions = useMemo(
+    () => Array.from(new Set(annotatedRows.flatMap((row) => row.ruleHits))).sort(),
+    [annotatedRows],
+  )
+  const annotatedDecisionSourceOptions = useMemo(
+    () => Array.from(new Set(annotatedRows.map((row) => row.decisionSource).filter(Boolean))).sort(),
+    [annotatedRows],
+  )
   const filteredAnnotatedRows = useMemo(
     () => annotatedRows.filter((row) => {
       const classMatch = !annotatedClassFilter.length || annotatedClassFilter.includes(row.classification)
       const tagMatch = !annotatedTagFilter.length || row.tags.some((tag) => annotatedTagFilter.includes(tag))
-      return classMatch && tagMatch
+      const ruleMatch = !annotatedRuleFilter.length || row.ruleHits.some((ruleCode) => annotatedRuleFilter.includes(ruleCode))
+      const sourceMatch = !annotatedDecisionSourceFilter.length || annotatedDecisionSourceFilter.includes(row.decisionSource)
+      return classMatch && tagMatch && ruleMatch && sourceMatch
     }),
-    [annotatedRows, annotatedClassFilter, annotatedTagFilter],
+    [annotatedRows, annotatedClassFilter, annotatedTagFilter, annotatedRuleFilter, annotatedDecisionSourceFilter],
   )
   const totalTokenCost = useMemo(
     () => (tokenAccounting.totalTokens / 1000) * tokenAccounting.pricePer1k,
     [tokenAccounting.totalTokens, tokenAccounting.pricePer1k],
   )
+  const ruleEvaluationSummary = useMemo(() => {
+    const summary = new Map<string, {
+      code: string
+      count: number
+      keywords: Set<string>
+      fields: Set<string>
+      suggested: Set<string>
+    }>()
+    Object.values(ruleEvaluationMap).forEach((evaluation) => {
+      evaluation.hits.forEach((hit) => {
+        const current = summary.get(hit.code) ?? {
+          code: hit.code,
+          count: 0,
+          keywords: new Set<string>(),
+          fields: new Set<string>(),
+          suggested: new Set<string>(),
+        }
+        current.count += 1
+        hit.matched_keywords.forEach((keyword) => current.keywords.add(keyword))
+        hit.matched_fields.forEach((field) => current.fields.add(field))
+        if (hit.target_tag) current.suggested.add(`tag:${hit.target_tag}`)
+        if (hit.target_topic) current.suggested.add(`topic:${hit.target_topic}`)
+        summary.set(hit.code, current)
+      })
+    })
+    return Array.from(summary.values()).sort((left, right) => right.count - left.count || left.code.localeCompare(right.code))
+  }, [ruleEvaluationMap])
+  const ruleHitRowCount = useMemo(
+    () => Object.values(ruleEvaluationMap).filter((evaluation) => evaluation.hits.length).length,
+    [ruleEvaluationMap],
+  )
+  const rulePackOptions = useMemo(
+    () => parseRulePacks(settingValues.rule_pack_prompt_notes).map((item) => item.code).filter(Boolean),
+    [settingValues.rule_pack_prompt_notes],
+  )
+  const ruleValidationSummary = useMemo(() => {
+    if (!sheetData) return null
+    const hasExpectedHits = sheetData.columns.includes('Expected rule hits')
+    const hasExpectedTags = sheetData.columns.includes('Expected tags')
+    const hasExpectedTopic = sheetData.columns.includes('Expected final topic')
+    if (!hasExpectedHits && !hasExpectedTags && !hasExpectedTopic) {
+      return {
+        available: false,
+        total: sheetData.rows.length,
+        passed: 0,
+        failed: 0,
+        reason: 'В текущем листе нет эталонных колонок Expected rule hits / Expected tags / Expected final topic.',
+      }
+    }
+    const splitExpected = (value: unknown) => String(value ?? '')
+      .replace(/,/gu, ';')
+      .split(';')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    let passed = 0
+    sheetData.rows.forEach((row, index) => {
+      const evaluation = ruleEvaluationMap[index]
+      const actualHits = evaluation?.hits.map((hit) => hit.code) ?? []
+      const actualTags = evaluation?.suggested_tags ?? []
+      const actualTopic = evaluation?.suggested_topics?.[0] ?? ''
+      const expectedHits = hasExpectedHits ? splitExpected(row['Expected rule hits']) : actualHits
+      const expectedTags = hasExpectedTags ? splitExpected(row['Expected tags']) : actualTags
+      const expectedTopic = hasExpectedTopic ? String(row['Expected final topic'] ?? '').trim() : actualTopic
+      const sameHits = actualHits.join('|') === expectedHits.join('|')
+      const sameTags = actualTags.join('|') === expectedTags.join('|')
+      const sameTopic = actualTopic === expectedTopic
+      if (sameHits && sameTags && sameTopic) passed += 1
+    })
+    return {
+      available: true,
+      total: sheetData.rows.length,
+      passed,
+      failed: sheetData.rows.length - passed,
+      reason: '',
+    }
+  }, [ruleEvaluationMap, sheetData])
+  const handleEvaluateRules = () => {
+    if (!sheetData) {
+      setRuleEvaluationError('Сначала загрузите лист Excel, чтобы прогнать rule packs по строкам.')
+      return
+    }
+    evaluateRulePacks.mutate(sheetData.rows)
+  }
 
   return <div className='transport-page'>
     <section className='transport-hero card'>
@@ -696,11 +1030,11 @@ export default function GigaChatPage() {
       </> : null}
     </section>
 
-    <section className='card transport-result'>
+    <section className='card transport-result lab-setup-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
-          <h3>Настройки GigaChat</h3>
-          <p>Параметры самого запроса: model, sampling и всё, что относится к system/user/context prompt перед отправкой в GigaChat.</p>
+          <h3>Настройки Lab</h3>
+          <p>Три рабочие зоны: промпты, справочники классов/тегов и локальные правила, которые проверяются до отправки в GigaChat.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setSettingsCollapsed((current) => !current)}>
           {settingsCollapsed ? 'Развернуть' : 'Свернуть'}
@@ -715,49 +1049,76 @@ export default function GigaChatPage() {
             <div><b>Профиль:</b> <code>{settingsQ.data.title}</code></div>
             <div><b>Последнее сохранение:</b> {settingsQ.data.saved_at ? new Date(settingsQ.data.saved_at).toLocaleString() : 'еще не сохраняли'}</div>
           </div>
-          <GigaChatSettingsForm
-            fields={requestSettingsFields}
-            values={settingValues}
-            busy={saveSettings.isPending}
-            saveError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'настройки') : null}
-            onChange={(key, value) => setSettingValues((current) => ({ ...current, [key]: value }))}
-            onSave={() => saveSettings.mutate()}
-          />
+
+          <div className='lab-setup-tabs' role='tablist' aria-label='GigaChat Lab settings tabs'>
+            <button
+              type='button'
+              className={activeSetupTab === 'prompts' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('prompts')}
+            >
+              Промпты
+            </button>
+            <button
+              type='button'
+              className={activeSetupTab === 'labels' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('labels')}
+            >
+              Классы и теги
+            </button>
+            <button
+              type='button'
+              className={activeSetupTab === 'rules' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('rules')}
+            >
+              Правила
+            </button>
+          </div>
+
+          {activeSetupTab === 'prompts' ? <div className='lab-tab-panel'>
+            <GigaChatSettingsForm
+              fields={requestSettingsFields}
+              values={settingValues}
+              busy={saveSettings.isPending}
+              saveError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'настройки') : null}
+              onChange={(key, value) => setSettingValues((current) => ({ ...current, [key]: value }))}
+              onSave={() => saveSettings.mutate()}
+            />
+          </div> : null}
+
+          {activeSetupTab === 'labels' ? <div className='lab-tab-panel labeling-grid two-columns'>
+            <LabelingRulesEditor
+              title='Классификации'
+              description='Список классов для классификации: корзины, категории, подкатегории и краткие правила, как их выбирать.'
+              addLabel='Добавить класс'
+              clearLabel='Сбросить все классы'
+              nameLabel='Класс'
+              value={settingValues.classification_prompt_notes}
+              onChange={(value) => setSettingValues((current) => ({ ...current, classification_prompt_notes: value }))}
+              onClear={() => setSettingValues((current) => ({ ...current, classification_prompt_notes: '[]' }))}
+            />
+
+            <LabelingRulesEditor
+              title='Теги'
+              description='Список тегов и краткие описания, когда тег должен присваиваться обращению.'
+              addLabel='Добавить тег'
+              clearLabel='Сбросить все теги'
+              nameLabel='Тег'
+              value={settingValues.tagging_prompt_notes}
+              onChange={(value) => setSettingValues((current) => ({ ...current, tagging_prompt_notes: value }))}
+              onClear={() => setSettingValues((current) => ({ ...current, tagging_prompt_notes: '[]' }))}
+            />
+          </div> : null}
+
+          {activeSetupTab === 'rules' ? <div className='lab-tab-panel'>
+            <RulePackEditor
+              value={settingValues.rule_pack_prompt_notes}
+              onChange={(value) => setSettingValues((current) => ({ ...current, rule_pack_prompt_notes: value }))}
+              availableFields={sheetData?.columns ?? []}
+              defaultValue={DEFAULT_RULE_PACK_PROMPT_NOTES}
+            />
+          </div> : null}
         </> : null}
       </> : null}
-    </section>
-
-    <section className='card transport-result'>
-      <div className='transport-section-head'>
-        <div className='transport-section-title'>
-          <h3>Классификация и разметка</h3>
-          <p>Две отдельные области для правил классификации и правил тегирования, которые добавляются в prompt-контекст эксперимента.</p>
-        </div>
-      </div>
-
-      <div className='labeling-grid'>
-        <LabelingRulesEditor
-          title='Классификации'
-          description='Список классов для классификации: корзины, категории, подкатегории и краткие правила, как их выбирать.'
-          addLabel='Добавить класс'
-          clearLabel='Сбросить все классы'
-          nameLabel='Класс'
-          value={settingValues.classification_prompt_notes}
-          onChange={(value) => setSettingValues((current) => ({ ...current, classification_prompt_notes: value }))}
-          onClear={() => setSettingValues((current) => ({ ...current, classification_prompt_notes: '[]' }))}
-        />
-
-        <LabelingRulesEditor
-          title='Теги'
-          description='Список тегов и краткие описания, когда тег должен присваиваться обращению.'
-          addLabel='Добавить тег'
-          clearLabel='Сбросить все теги'
-          nameLabel='Тег'
-          value={settingValues.tagging_prompt_notes}
-          onChange={(value) => setSettingValues((current) => ({ ...current, tagging_prompt_notes: value }))}
-          onClear={() => setSettingValues((current) => ({ ...current, tagging_prompt_notes: '[]' }))}
-        />
-      </div>
 
       <div className='lab-settings-actions'>
         <button onClick={() => saveFinalPrompt.mutate()} disabled={saveFinalPrompt.isPending}>
@@ -830,6 +1191,96 @@ export default function GigaChatPage() {
           <div><b>Выбранный лист:</b> <code>{selectedSheetName ?? 'еще не выбран'}</code></div>
         </div> : null}
       </> : null}
+    </section>
+
+    <section className='card transport-result rule-validation-card'>
+      <div className='transport-section-head'>
+        <div className='transport-section-title'>
+          <h3>Проверка правил</h3>
+          <p>Локальный прогон rule packs по текущему листу до GigaChat: здесь видно, какие правила сработали, по каким полям и сколько строк они нашли.</p>
+        </div>
+        <div className='transport-actions'>
+          <button type='button' onClick={handleEvaluateRules} disabled={!sheetData || evaluateRulePacks.isPending}>
+            {evaluateRulePacks.isPending ? 'Прогоняем правила...' : 'Прогнать правила на текущем листе'}
+          </button>
+        </div>
+      </div>
+
+      {!sheetData ? <p>Загрузите Excel и выберите лист, чтобы проверить rule packs.</p> : <>
+        <div className='rule-validation-summary'>
+          <div className='rule-validation-kpi'>
+            <span>Строк с rule hits</span>
+            <strong>{ruleHitRowCount}</strong>
+            <small>из {sheetData.rows.length} показанных строк</small>
+          </div>
+          <div className='rule-validation-kpi'>
+            <span>Активных срабатываний</span>
+            <strong>{ruleEvaluationSummary.reduce((sum, item) => sum + item.count, 0)}</strong>
+            <small>по всем rule packs</small>
+          </div>
+          <div className='rule-validation-kpi'>
+            <span>Rule packs с матчами</span>
+            <strong>{ruleEvaluationSummary.length}</strong>
+            <small>в текущем листе</small>
+          </div>
+        </div>
+
+        {ruleEvaluationSummary.length ? <div className='rule-validation-list'>
+          {ruleEvaluationSummary.map((item) => <div key={item.code} className='rule-validation-row'>
+            <div>
+              <strong>{item.code}</strong>
+              <div className='lab-muted'>{item.count} совпадений</div>
+            </div>
+            <div>
+              <span className='lab-muted'>Поля</span>
+              <div>{Array.from(item.fields).join(', ') || '—'}</div>
+            </div>
+            <div>
+              <span className='lab-muted'>Keywords</span>
+              <div>{Array.from(item.keywords).slice(0, 8).join(', ') || '—'}</div>
+            </div>
+            <div>
+              <span className='lab-muted'>Suggested action</span>
+              <div>{Array.from(item.suggested).join(', ') || '—'}</div>
+            </div>
+          </div>)}
+        </div> : <div className='lab-muted'>Пока совпадений нет. Если лист уже выбран, можно нажать “Прогнать правила” или проверить keywords/фильтры во вкладке “Правила”.</div>}
+
+        {evaluateRulePacks.isPending ? <div className='lab-muted'>Пересчитываем локальные rule packs для текущих строк...</div> : null}
+        {ruleEvaluationError ? <div className='transport-error'>{ruleEvaluationError}</div> : null}
+      </>}
+    </section>
+
+    <section className='card transport-result rule-verification-card'>
+      <div className='transport-section-head'>
+        <div className='transport-section-title'>
+          <h3>Валидация и верификация</h3>
+          <p>Проверка качества rule packs на тестовом наборе с эталонными колонками. Это отдельный слой от GigaChat: он сверяет локальные rule hits с ожидаемым результатом.</p>
+        </div>
+      </div>
+
+      {!sheetData ? <p>Загрузите тестовый лист, чтобы увидеть статус валидации.</p> : <>
+        <div className='rule-validation-summary'>
+          <div className='rule-validation-kpi'>
+            <span>Статус</span>
+            <strong>{ruleValidationSummary?.available ? 'Активна' : 'Нет эталона'}</strong>
+            <small>{ruleValidationSummary?.available ? 'есть expected-колонки' : 'нужен validation-набор'}</small>
+          </div>
+          <div className='rule-validation-kpi'>
+            <span>PASS</span>
+            <strong>{ruleValidationSummary?.passed ?? 0}</strong>
+            <small>строк совпало с эталоном</small>
+          </div>
+          <div className='rule-validation-kpi'>
+            <span>FAIL</span>
+            <strong>{ruleValidationSummary?.failed ?? 0}</strong>
+            <small>строк требует разбора</small>
+          </div>
+        </div>
+        {!ruleValidationSummary?.available ? <div className='lab-muted'>
+          {ruleValidationSummary?.reason} Для обычного январского файла это нормально: он нужен для разметки. Для валидации нужен отдельный golden-test файл или audit export с expected-колонками.
+        </div> : null}
+      </>}
     </section>
 
     <section className='card transport-result'>
@@ -910,9 +1361,35 @@ export default function GigaChatPage() {
               return [...rest, ...shuffled.slice(0, Math.min(5, shuffled.length))]
             })
           }}
+          onSelectRuleHitRows={() => {
+            if (!sheetData) return
+            const keys = sheetData.rows
+              .map((_, index) => ({ index, evaluation: ruleEvaluationMap[index] }))
+              .filter(({ evaluation }) => evaluation?.hits?.length)
+              .map(({ index }) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index))
+            setSelectedSheetRowKeys((current) => {
+              const visible = new Set(sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
+              const rest = current.filter((key) => !visible.has(key))
+              return [...rest, ...keys]
+            })
+          }}
+          onSelectNoRuleHitRows={() => {
+            if (!sheetData) return
+            const keys = sheetData.rows
+              .map((_, index) => ({ index, evaluation: ruleEvaluationMap[index] }))
+              .filter(({ evaluation }) => !(evaluation?.hits?.length))
+              .map(({ index }) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index))
+            setSelectedSheetRowKeys((current) => {
+              const visible = new Set(sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
+              const rest = current.filter((key) => !visible.has(key))
+              return [...rest, ...keys]
+            })
+          }}
           onRunSelectedRows={handleRunSelectedRows}
           batchBusy={batchBusy}
           busy={batchBusy || runRowBusyIndex !== null}
+          ruleEvaluations={ruleEvaluationMap}
+          rulePackOptions={rulePackOptions}
         /> : null}
         {rowRunError ? <div className='transport-error'>{rowRunError}</div> : null}
         {batchRunError ? <div className='transport-error'>{batchRunError}</div> : null}
@@ -932,6 +1409,13 @@ export default function GigaChatPage() {
             disabled={exportAnnotatedRows.isPending}
           >
             {exportAnnotatedRows.isPending ? 'Выгружаем Excel...' : 'Выгрузить в Excel'}
+          </button>
+          <button
+            type='button'
+            onClick={() => exportValidationRows.mutate()}
+            disabled={exportValidationRows.isPending}
+          >
+            {exportValidationRows.isPending ? 'Готовим validation...' : 'Сделать validation-файл'}
           </button>
         </div> : null}
       </div>
@@ -958,10 +1442,32 @@ export default function GigaChatPage() {
               {annotatedTagOptions.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </label>
+          <label className='annotated-filter'>
+            <span>Фильтр по rule hits</span>
+            <select
+              multiple
+              value={annotatedRuleFilter}
+              onChange={(e) => setAnnotatedRuleFilter(Array.from(e.target.selectedOptions).map((option) => option.value))}
+            >
+              {annotatedRuleOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className='annotated-filter'>
+            <span>Фильтр по source</span>
+            <select
+              multiple
+              value={annotatedDecisionSourceFilter}
+              onChange={(e) => setAnnotatedDecisionSourceFilter(Array.from(e.target.selectedOptions).map((option) => option.value))}
+            >
+              {annotatedDecisionSourceOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
           <div className='transport-actions'>
             <button type='button' onClick={() => {
               setAnnotatedClassFilter([])
               setAnnotatedTagFilter([])
+              setAnnotatedRuleFilter([])
+              setAnnotatedDecisionSourceFilter([])
             }}>Сбросить фильтры</button>
           </div>
         </div>
@@ -1018,6 +1524,84 @@ export default function GigaChatPage() {
                     />
                   </div>
                 </th>
+                <th style={annotatedTable.getColumnStyle('__rule_hits')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Rule hits</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Rule hits'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__rule_hits')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__rule_hits')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__rule_decision')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Rule decision</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Rule decision'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__rule_decision')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__rule_decision')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__model_decision')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Model decision</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Model decision'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__model_decision')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__model_decision')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__reclassified_topic')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Reclassified topic</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Reclassified topic'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__reclassified_topic')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__reclassified_topic')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__final_topic')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Final topic</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Final topic'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__final_topic')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__final_topic')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__decision_source')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Decision source</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Decision source'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__decision_source')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__decision_source')}
+                    />
+                  </div>
+                </th>
                 {sheetData?.columns.map((column) => <th key={`annotated-head-${column}`} style={annotatedTable.getColumnStyle(column)}>
                   <div className='table-simple-header-cell'>
                     <span>{column}</span>
@@ -1055,6 +1639,66 @@ export default function GigaChatPage() {
                     {row.tags.length ? row.tags.join(', ') : '—'}
                   </div>
                 </td>
+                <td style={annotatedTable.getColumnStyle('__rule_hits')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Rule hits', row.ruleHits.length ? row.ruleHits.join(', ') : '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.ruleHits.length ? row.ruleHits.join(', ') : '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__rule_decision')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Rule decision', row.ruleDecision || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.ruleDecision || '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__model_decision')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Model decision', row.modelDecision || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.modelDecision || '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__reclassified_topic')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Reclassified topic', row.reclassifiedTopic || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.reclassifiedTopic || '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__final_topic')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Final topic', row.finalTopic || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.finalTopic || '—'}
+                  </div>
+                </td>
+                <td style={annotatedTable.getColumnStyle('__decision_source')}>
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(e, 'Decision source', row.decisionSource || '—')}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {row.decisionSource || '—'}
+                  </div>
+                </td>
                 {sheetData?.columns.map((column) => {
                   const text = String(row.sourceRow[column] ?? '')
                   return <td key={`${row.rowKey}-${column}`} style={annotatedTable.getColumnStyle(column)}>
@@ -1074,6 +1718,7 @@ export default function GigaChatPage() {
         </div>
         <CellHoverPopover hoveredCell={hoveredAnnotatedCell} />
         {exportAnnotatedRows.isError ? <div className='transport-error'>{formatLabError(exportAnnotatedRows.error as Error, 'размеченную таблицу')}</div> : null}
+        {exportValidationRows.isError ? <div className='transport-error'>{formatLabError(exportValidationRows.error as Error, 'validation-файл')}</div> : null}
       </>}
     </section>
 
@@ -1152,6 +1797,7 @@ export default function GigaChatPage() {
           <div><b>Transport:</b> <code>{rowRunResult.transport}</code></div>
           <div><b>JSON parse:</b> {rowRunResult.parse_ok ? 'успешно' : 'не удалось распарсить'}</div>
           <div><b>Токены запроса:</b> {rowRunResult.request_token_count ?? 'не считали'}</div>
+          <div><b>Rule hits:</b> {rowRunResult.rule_evaluation?.hits.length ? rowRunResult.rule_evaluation.hits.map((item) => item.code).join(', ') : 'нет'}</div>
         </div>
         <div className='row-run-grid'>
           <section className='row-run-panel'>

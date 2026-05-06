@@ -2,6 +2,7 @@ import { apiGet, apiPost, apiPostBlob, apiPostForm } from '../../lib/api'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatLabRowRunResponse,
+  GigaChatRuleEvaluationResponse,
   GigaChatLabSettingsResponse,
   GigaChatTransportName,
   GigaChatTransportProbeResponse,
@@ -45,6 +46,10 @@ export function saveGigaChatFinalPrompt(values: Record<string, unknown>, columns
   return apiPost<GigaChatFinalPromptResponse>('/api/gigachat/lab/final-prompt/save', { values, columns })
 }
 
+export function evaluateGigaChatRulePacks(values: Record<string, unknown>, rows: Array<Record<string, unknown>>) {
+  return apiPost<GigaChatRuleEvaluationResponse>('/api/gigachat/lab/rule-packs/evaluate', { values, rows })
+}
+
 export function runGigaChatWorkbookRow(
   transport: GigaChatTransportName,
   values: Record<string, unknown>,
@@ -71,10 +76,47 @@ export function exportGigaChatAnnotatedWorkbook(
     row_index?: number | null
     classification: string
     tags: string[]
+    rule_hits?: string[]
+    suggested_topics?: string[]
+    confirmed_rule_hits?: string[]
+    rejected_rule_hits?: string[]
+    rule_decision?: string | null
+    model_decision?: string | null
+    reclassified_topic?: string | null
+    final_topic?: string | null
+    decision_source?: string | null
     source_row: Record<string, unknown>
   }>,
 ) {
   return apiPostBlob('/api/gigachat/lab/annotated/export', {
+    filename,
+    sheet_name: sheetName,
+    source_columns: sourceColumns,
+    rows,
+  })
+}
+
+export function exportGigaChatValidationWorkbook(
+  filename: string,
+  sheetName: string,
+  sourceColumns: string[],
+  rows: Array<{
+    row_index?: number | null
+    classification: string
+    tags: string[]
+    rule_hits?: string[]
+    suggested_topics?: string[]
+    confirmed_rule_hits?: string[]
+    rejected_rule_hits?: string[]
+    rule_decision?: string | null
+    model_decision?: string | null
+    reclassified_topic?: string | null
+    final_topic?: string | null
+    decision_source?: string | null
+    source_row: Record<string, unknown>
+  }>,
+) {
+  return apiPostBlob('/api/gigachat/lab/annotated/validation-export', {
     filename,
     sheet_name: sheetName,
     source_columns: sourceColumns,

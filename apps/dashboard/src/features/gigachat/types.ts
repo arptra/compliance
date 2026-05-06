@@ -93,6 +93,46 @@ export type GigaChatFinalPromptResponse = {
   saved_path?: string | null
 }
 
+export type GigaChatRulePackFilter = {
+  field: string
+  op: 'eq' | 'ne'
+  value: string
+}
+
+export type GigaChatRulePack = {
+  code: string
+  description: string
+  enabled: boolean
+  type: 'assign_tag' | 'reclass_topic'
+  source_fields: string[]
+  keywords: string[]
+  filters: GigaChatRulePackFilter[]
+  target_tag?: string | null
+  target_topic?: string | null
+}
+
+export type GigaChatRuleHit = {
+  code: string
+  description: string
+  type: 'assign_tag' | 'reclass_topic'
+  matched_keywords: string[]
+  matched_fields: string[]
+  target_tag?: string | null
+  target_topic?: string | null
+}
+
+export type GigaChatRuleEvaluationRow = {
+  row_index: number
+  hits: GigaChatRuleHit[]
+  suggested_tags: string[]
+  suggested_topics: string[]
+}
+
+export type GigaChatRuleEvaluationResponse = {
+  rule_packs: GigaChatRulePack[]
+  evaluations: GigaChatRuleEvaluationRow[]
+}
+
 export type GigaChatLabRowRunResponse = {
   transport: GigaChatTransportName
   request_payload: Record<string, unknown>
@@ -100,4 +140,5 @@ export type GigaChatLabRowRunResponse = {
   response_json?: unknown
   parse_ok: boolean
   request_token_count?: number | null
+  rule_evaluation?: GigaChatRuleEvaluationRow | null
 }

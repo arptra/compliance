@@ -13,6 +13,8 @@ from ..schemas import (
     GigaChatLabRowRunResponse,
     GigaChatLabSettingsResponse,
     GigaChatLabSettingsUpdateRequest,
+    GigaChatRuleEvaluationRequest,
+    GigaChatRuleEvaluationResponse,
     GigaChatTransportProbeRequest,
     GigaChatTransportProbeResponse,
     GigaChatTransportStatusResponse,
@@ -54,6 +56,11 @@ def save_final_prompt(req: GigaChatFinalPromptRequest, services=Depends(get_serv
     return services["gigachat_lab"].build_final_prompt(req, save_snapshot=True)
 
 
+@router.post("/lab/rule-packs/evaluate", response_model=GigaChatRuleEvaluationResponse)
+def evaluate_rule_packs(req: GigaChatRuleEvaluationRequest, services=Depends(get_service_container)):
+    return services["gigachat_lab"].evaluate_rule_packs(req)
+
+
 @router.post("/lab/run-row", response_model=GigaChatLabRowRunResponse)
 def run_row(req: GigaChatLabRowRunRequest, services=Depends(get_service_container)):
     return services["gigachat_lab"].run_row_prompt(req)
@@ -63,6 +70,20 @@ def run_row(req: GigaChatLabRowRunRequest, services=Depends(get_service_containe
 def export_annotated(req: GigaChatAnnotatedExportRequest, services=Depends(get_service_container)):
     try:
         filename, content = services["gigachat_lab"].export_annotated_workbook(req)
+        quoted_name = quote(filename)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_name}"},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/annotated/validation-export")
+def export_validation(req: GigaChatAnnotatedExportRequest, services=Depends(get_service_container)):
+    try:
+        filename, content = services["gigachat_lab"].export_validation_workbook(req)
         quoted_name = quote(filename)
         return Response(
             content=content,

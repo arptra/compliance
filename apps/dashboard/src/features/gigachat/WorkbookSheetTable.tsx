@@ -1,4 +1,5 @@
-import type { GigaChatWorkbookSheetDataResponse } from './types'
+import { useMemo, useState } from 'react'
+import type { GigaChatRuleEvaluationRow, GigaChatWorkbookSheetDataResponse } from './types'
 import { useResizableTable, type TableRowClamp } from './useResizableTable'
 import { CellHoverPopover, useCellHoverPopover } from './useCellHoverPopover'
 
@@ -20,8 +21,12 @@ export function WorkbookSheetTable({
   onToggleAllRows,
   onPickRandomRows,
   onRunSelectedRows,
+  onSelectRuleHitRows,
+  onSelectNoRuleHitRows,
   batchBusy,
   busy,
+  ruleEvaluations,
+  rulePackOptions,
 }: {
   data: GigaChatWorkbookSheetDataResponse
   onChooseAnotherSheet?: () => void
@@ -38,8 +43,12 @@ export function WorkbookSheetTable({
   onToggleAllRows: (checked: boolean) => void
   onPickRandomRows: () => void
   onRunSelectedRows: () => void
+  onSelectRuleHitRows: () => void
+  onSelectNoRuleHitRows: () => void
   batchBusy?: boolean
   busy?: boolean
+  ruleEvaluations: Record<number, GigaChatRuleEvaluationRow>
+  rulePackOptions: string[]
 }) {
   const {
     rowClamp,
@@ -55,6 +64,27 @@ export function WorkbookSheetTable({
     showCellPopover,
     hideCellPopover,
   } = useCellHoverPopover()
+  const [showOnlyRuleHits, setShowOnlyRuleHits] = useState(false)
+  const [ruleFilter, setRuleFilter] = useState('')
+
+  const ruleOptions = useMemo(
+    () => Array.from(new Set([
+      ...rulePackOptions,
+      ...Object.values(ruleEvaluations).flatMap((evaluation) => evaluation.hits.map((hit) => hit.code)),
+    ].filter(Boolean))).sort(),
+    [ruleEvaluations, rulePackOptions],
+  )
+  const visibleRows = useMemo(
+    () => data.rows
+      .map((row, idx) => ({ row, idx, evaluation: ruleEvaluations[idx] }))
+      .filter(({ evaluation }) => {
+        const hits = evaluation?.hits ?? []
+        if (showOnlyRuleHits && !hits.length) return false
+        if (ruleFilter && !hits.some((hit) => hit.code === ruleFilter)) return false
+        return true
+      }),
+    [data.rows, ruleEvaluations, ruleFilter, showOnlyRuleHits],
+  )
 
   const renderCellValue = (column: string, value: unknown) => {
     const text = String(value ?? '')
@@ -130,10 +160,32 @@ export function WorkbookSheetTable({
         <span>Выбрать все</span>
       </label>
       <button type='button' onClick={onPickRandomRows} disabled={Boolean(busy)}>Выбрать случайно</button>
+      <button type='button' onClick={onSelectRuleHitRows} disabled={Boolean(busy)}>Выбрать с rule hits</button>
+      <button type='button' onClick={onSelectNoRuleHitRows} disabled={Boolean(busy)}>Выбрать без rule hits</button>
       <button type='button' onClick={onRunSelectedRows} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
         {batchBusy ? 'Отправляем выбранные...' : 'Отправить выбранное в GigaChat для классификации'}
       </button>
       <span className='lab-muted'>Выбрано строк: {selectedRowKeys.length}</span>
+    </div>
+
+    <div className='rule-table-controls'>
+      <label className='lab-checkbox'>
+        <input
+          type='checkbox'
+          checked={showOnlyRuleHits}
+          onChange={(e) => setShowOnlyRuleHits(e.target.checked)}
+        />
+        <span><strong>Показать только строки с rule hits</strong></span>
+      </label>
+      <label className='workbook-row-limit-control'>
+        <span>Rule pack:</span>
+        <select value={ruleFilter} onChange={(e) => setRuleFilter(e.target.value)}>
+          <option value=''>Все правила</option>
+          {ruleOptions.map((ruleCode) => <option key={ruleCode} value={ruleCode}>{ruleCode}</option>)}
+        </select>
+      </label>
+      <span className='lab-muted'>В таблице: {visibleRows.length} из {data.rows.length}</span>
+      <span className='lab-muted'>Пустой rule hit не означает финальное решение. Это только значит, что локальные правила не нашли подсказку; такие строки можно выбрать и отправить в GigaChat.</span>
     </div>
 
     <div className='workbook-table-wrap' onMouseLeave={hideCellPopover}>
@@ -144,6 +196,71 @@ export function WorkbookSheetTable({
               <input type='checkbox' checked={allVisibleRowsSelected} disabled={Boolean(busy)} onChange={(e) => onToggleAllRows(e.target.checked)} />
             </th>
             <th className='workbook-actions-head'>Действие</th>
+            <th style={getColumnStyle('__rule_hits')}>
+              <div className='table-simple-header-cell'>
+                <span>Rule hits</span>
+                <button
+                  type='button'
+                  className='table-column-resizer'
+                  title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                  aria-label='Изменить ширину колонки Rule hits'
+                  onMouseDown={(e) => startColumnResize(e, '__rule_hits')}
+                  onDoubleClick={() => resetColumnWidth('__rule_hits')}
+                />
+              </div>
+            </th>
+            <th style={getColumnStyle('__suggested_actions')}>
+              <div className='table-simple-header-cell'>
+                <span>Suggested action</span>
+                <button
+                  type='button'
+                  className='table-column-resizer'
+                  title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                  aria-label='Изменить ширину колонки Suggested action'
+                  onMouseDown={(e) => startColumnResize(e, '__suggested_actions')}
+                  onDoubleClick={() => resetColumnWidth('__suggested_actions')}
+                />
+              </div>
+            </th>
+            <th style={getColumnStyle('__matched_keywords')}>
+              <div className='table-simple-header-cell'>
+                <span>Matched keywords</span>
+                <button
+                  type='button'
+                  className='table-column-resizer'
+                  title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                  aria-label='Изменить ширину колонки Matched keywords'
+                  onMouseDown={(e) => startColumnResize(e, '__matched_keywords')}
+                  onDoubleClick={() => resetColumnWidth('__matched_keywords')}
+                />
+              </div>
+            </th>
+            <th style={getColumnStyle('__matched_fields')}>
+              <div className='table-simple-header-cell'>
+                <span>Matched fields</span>
+                <button
+                  type='button'
+                  className='table-column-resizer'
+                  title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                  aria-label='Изменить ширину колонки Matched fields'
+                  onMouseDown={(e) => startColumnResize(e, '__matched_fields')}
+                  onDoubleClick={() => resetColumnWidth('__matched_fields')}
+                />
+              </div>
+            </th>
+            <th style={getColumnStyle('__suggested_topic')}>
+              <div className='table-simple-header-cell'>
+                <span>Suggested topic</span>
+                <button
+                  type='button'
+                  className='table-column-resizer'
+                  title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                  aria-label='Изменить ширину колонки Suggested topic'
+                  onMouseDown={(e) => startColumnResize(e, '__suggested_topic')}
+                  onDoubleClick={() => resetColumnWidth('__suggested_topic')}
+                />
+              </div>
+            </th>
             {data.columns.map((column) => {
               const included = includedPromptColumns.includes(column)
               return <th
@@ -175,10 +292,19 @@ export function WorkbookSheetTable({
           </tr>
         </thead>
         <tbody>
-          {data.rows.map((row, idx) => <tr
-            key={`row-${idx}`}
-            className='workbook-table-row'
-          >
+          {visibleRows.map(({ row, idx, evaluation }) => {
+            const ruleCodes = evaluation?.hits.map((hit) => hit.code).join(', ') || '—'
+            const matchedKeywords = Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_keywords) ?? [])).join(', ') || '—'
+            const matchedFields = Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_fields) ?? [])).join(', ') || '—'
+            const suggestedActions = [
+              ...(evaluation?.suggested_tags ?? []).map((item) => `tag:${item}`),
+              ...(evaluation?.suggested_topics ?? []).map((item) => `topic:${item}`),
+            ].join(', ') || '—'
+            const suggestedTopic = evaluation?.suggested_topics?.join(', ') || '—'
+            return <tr
+              key={`row-${idx}`}
+              className='workbook-table-row'
+            >
             <td className='workbook-row-select-cell'>
                 <input
                   type='checkbox'
@@ -197,6 +323,21 @@ export function WorkbookSheetTable({
                 {runRowBusyIndex === idx ? 'Отправляем...' : 'Отправить запрос в GigaChat'}
               </button>
             </td>
+            <td style={getColumnStyle('__rule_hits')}>
+              {renderCellValue('Rule hits', ruleCodes)}
+            </td>
+            <td style={getColumnStyle('__suggested_actions')}>
+              {renderCellValue('Suggested action', suggestedActions)}
+            </td>
+            <td style={getColumnStyle('__matched_keywords')}>
+              {renderCellValue('Matched keywords', matchedKeywords)}
+            </td>
+            <td style={getColumnStyle('__matched_fields')}>
+              {renderCellValue('Matched fields', matchedFields)}
+            </td>
+            <td style={getColumnStyle('__suggested_topic')}>
+              {renderCellValue('Suggested topic', suggestedTopic)}
+            </td>
             {data.columns.map((column) => {
               const included = includedPromptColumns.includes(column)
               return <td
@@ -207,7 +348,8 @@ export function WorkbookSheetTable({
                 {renderCellValue(column, row[column])}
               </td>
             })}
-          </tr>)}
+            </tr>
+          })}
         </tbody>
       </table>
     </div>

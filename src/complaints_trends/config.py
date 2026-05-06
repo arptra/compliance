@@ -83,6 +83,7 @@ class LLMConfig(AppBaseModel):
     context_notes: str = ""
     classification_prompt_notes: str = ""
     tagging_prompt_notes: str = ""
+    rule_pack_prompt_notes: str = ""
 
 
 class PrepareConfig(AppBaseModel):

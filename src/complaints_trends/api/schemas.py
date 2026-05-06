@@ -141,6 +141,51 @@ class GigaChatFinalPromptResponse(BaseModel):
     saved_path: str | None = None
 
 
+class GigaChatRulePackFilter(BaseModel):
+    field: str
+    op: Literal["eq", "ne"] = "eq"
+    value: str
+
+
+class GigaChatRulePack(BaseModel):
+    code: str
+    description: str = ""
+    enabled: bool = True
+    type: Literal["assign_tag", "reclass_topic"] = "assign_tag"
+    source_fields: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    filters: list[GigaChatRulePackFilter] = Field(default_factory=list)
+    target_tag: str | None = None
+    target_topic: str | None = None
+
+
+class GigaChatRuleHit(BaseModel):
+    code: str
+    description: str = ""
+    type: Literal["assign_tag", "reclass_topic"] = "assign_tag"
+    matched_keywords: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
+    target_tag: str | None = None
+    target_topic: str | None = None
+
+
+class GigaChatRuleEvaluationRow(BaseModel):
+    row_index: int
+    hits: list[GigaChatRuleHit] = Field(default_factory=list)
+    suggested_tags: list[str] = Field(default_factory=list)
+    suggested_topics: list[str] = Field(default_factory=list)
+
+
+class GigaChatRuleEvaluationRequest(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GigaChatRuleEvaluationResponse(BaseModel):
+    rule_packs: list[GigaChatRulePack] = Field(default_factory=list)
+    evaluations: list[GigaChatRuleEvaluationRow] = Field(default_factory=list)
+
+
 class GigaChatLabRowRunRequest(BaseModel):
     transport: Literal["mtls", "token"] = "mtls"
     values: dict[str, Any] = Field(default_factory=dict)
@@ -157,12 +202,22 @@ class GigaChatLabRowRunResponse(BaseModel):
     response_json: dict[str, Any] | list[Any] | None = None
     parse_ok: bool = False
     request_token_count: int | None = None
+    rule_evaluation: GigaChatRuleEvaluationRow | None = None
 
 
 class GigaChatAnnotatedExportRow(BaseModel):
     row_index: int | None = None
     classification: str = ""
     tags: list[str] = Field(default_factory=list)
+    rule_hits: list[str] = Field(default_factory=list)
+    suggested_topics: list[str] = Field(default_factory=list)
+    confirmed_rule_hits: list[str] = Field(default_factory=list)
+    rejected_rule_hits: list[str] = Field(default_factory=list)
+    rule_decision: str | None = None
+    model_decision: str | None = None
+    reclassified_topic: str | None = None
+    final_topic: str | None = None
+    decision_source: str | None = None
     source_row: dict[str, Any] = Field(default_factory=dict)
 
 
