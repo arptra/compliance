@@ -58,6 +58,31 @@ export type GigaChatLabSettingsResponse = {
   saved_at?: string | null
 }
 
+export type GigaChatSettingsVersionStatus = 'draft' | 'test' | 'working' | 'release' | 'archived'
+
+export type GigaChatLabSettingsVersionSummary = {
+  version_id: string
+  title: string
+  description: string
+  status: GigaChatSettingsVersionStatus
+  created_by: string
+  created_at?: string | null
+  updated_at?: string | null
+  base_version_id?: string | null
+  path?: string | null
+  is_default: boolean
+}
+
+export type GigaChatLabSettingsVersionsResponse = {
+  versions: GigaChatLabSettingsVersionSummary[]
+}
+
+export type GigaChatLabSettingsVersionResponse = {
+  version: GigaChatLabSettingsVersionSummary
+  fields: GigaChatLabSettingField[]
+  values: Record<string, unknown>
+}
+
 export type GigaChatWorkbookSheetPreview = {
   name: string
   rows_total: number
@@ -141,4 +166,41 @@ export type GigaChatLabRowRunResponse = {
   parse_ok: boolean
   request_token_count?: number | null
   rule_evaluation?: GigaChatRuleEvaluationRow | null
+}
+
+export type GigaChatBackgroundTaskStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
+
+export type GigaChatBackgroundTaskSummary = {
+  task_id: string
+  kind: string
+  status: GigaChatBackgroundTaskStatus
+  filename: string
+  sheet_name: string
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  total_rows: number
+  completed_rows: number
+  failed_rows: number
+  progress: number
+  current_label: string
+  error?: string | null
+  result_path?: string | null
+}
+
+export type GigaChatBackgroundTaskListResponse = {
+  tasks: GigaChatBackgroundTaskSummary[]
+}
+
+export type GigaChatBackgroundTaskRowRun = {
+  row_index: number
+  source_row: Record<string, unknown>
+  result?: GigaChatLabRowRunResponse | null
+  error?: string | null
+}
+
+export type GigaChatBackgroundTaskResultResponse = {
+  task: GigaChatBackgroundTaskSummary
+  workbook: GigaChatWorkbookSheetDataResponse
+  row_runs: GigaChatBackgroundTaskRowRun[]
 }

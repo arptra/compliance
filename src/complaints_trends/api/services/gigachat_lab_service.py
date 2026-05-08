@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
+import traceback
 import uuid
 from contextlib import suppress
 from io import BytesIO
@@ -18,6 +20,11 @@ from ...gigachat_api import build_gigachat_transport_client
 from ...gigachat_mtls import SYSTEM_PROMPT
 from ..schemas import (
     GigaChatAnnotatedExportRequest,
+    GigaChatBackgroundTaskListResponse,
+    GigaChatBackgroundTaskResultResponse,
+    GigaChatBackgroundTaskRowRun,
+    GigaChatBackgroundTaskStartRequest,
+    GigaChatBackgroundTaskSummary,
     GigaChatFinalPromptRequest,
     GigaChatFinalPromptResponse,
     GigaChatLabRowRunRequest,
@@ -32,6 +39,11 @@ from ..schemas import (
     GigaChatLabSettingOption,
     GigaChatLabSettingsResponse,
     GigaChatLabSettingsUpdateRequest,
+    GigaChatLabSettingsVersionCreateRequest,
+    GigaChatLabSettingsVersionResponse,
+    GigaChatLabSettingsVersionsResponse,
+    GigaChatLabSettingsVersionSummary,
+    GigaChatLabSettingsVersionUpdateRequest,
     GigaChatWorkbookSelectSheetRequest,
     GigaChatWorkbookSheetDataResponse,
     GigaChatWorkbookSheetPreview,
@@ -52,8 +64,9 @@ class GigaChatLabService:
     DEFAULT_USER_PROMPT_PREFIX = (
         "Разметь одну запись и верни JSON с полями: "
         "client_first_message, short_summary, is_complaint, complaint_category, complaint_subcategory, "
-        "product_area, loan_product, severity, keywords, assigned_tags, reclassified_topic, "
-        "confirmed_rule_hits, rejected_rule_hits, confidence, notes, evidence_columns. "
+        "product_area, loan_product, severity, keywords, assigned_tags, local_tags, model_added_tags, "
+        "model_rejected_tags, reclassified_topic, confirmed_rule_hits, rejected_rule_hits, tag_decisions, "
+        "match_type, evidence, confidence, notes, evidence_columns. "
         "Сначала определи, является ли запись жалобой. Затем выбери основную категорию, при необходимости подкатегорию, "
         "назначь только разрешенные теги, при необходимости подтверди или отвергни подсказки rule-based движка, "
         "оцени severity и confidence, а в notes кратко объясни решение. Возвращай только классы и теги из разрешенных списков. "
@@ -90,15 +103,22 @@ class GigaChatLabService:
         {"key": "tagging_prompt_notes", "label": "Теги", "input_type": "textarea", "section": "Разметка", "help_text": "Правила тегирования, словари тегов и требования к их формату."},
         {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
     ]
+    _background_lock = threading.Lock()
+    _background_cancel_flags: dict[str, threading.Event] = {}
+    _background_threads: dict[str, threading.Thread] = {}
 
     def __init__(self, cfg: ProjectConfig) -> None:
         self.cfg = cfg
         self.base_dir = Path(cfg.analysis.pattern_monitoring.interim_dir) / "gigachat_lab"
         self.uploads_dir = self.base_dir / "uploads"
+        self.background_dir = Path("data/background")
+        self.versions_dir = Path("data/gigachat_lab/versions")
         self.settings_path = self.base_dir / "settings.json"
         self.final_prompt_path = self.base_dir / "final_prompt_snapshot.json"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.background_dir.mkdir(parents=True, exist_ok=True)
+        self.versions_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _now() -> datetime:
@@ -126,6 +146,10 @@ class GigaChatLabService:
             {
                 "name": "DRA",
                 "description": "Единственный разрешенный тег. Назначай только когда подтверждено правило DRA/ДРПА по словам про смерть, наследство, каникулы, реструктуризацию, приставов, СВО, суд, исполнительное производство, военный контур или банкротство.",
+            },
+            {
+                "name": "ИПОТЕКА",
+                "description": "Назначай, когда обращение относится к ипотеке, жилищному кредиту, кредиту под залог недвижимости, квартире/дому в залоге, закладной, эскроу, обременению, созаемщику или рефинансированию ипотечного кредита.",
             },
         ]
         return self._serialize_rule_items(items)
@@ -160,6 +184,33 @@ class GigaChatLabService:
                 ],
                 "filters": [],
                 "target_tag": "DRA",
+                "target_topic": None,
+            },
+            {
+                "code": "IPOTEKA",
+                "description": "Проставляет тег ИПОТЕКА по обращениям про ипотеку, жилищный кредит, недвижимость в залоге, закладную, эскроу, обременение и ипотечное рефинансирование.",
+                "enabled": True,
+                "type": "assign_tag",
+                "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
+                "keywords": [
+                    "ипотек",
+                    "жилищн",
+                    "недвижим",
+                    "квартир",
+                    "дом в залог",
+                    "залог недвиж",
+                    "закладн",
+                    "эскроу",
+                    "обременен",
+                    "созаемщик",
+                    "созаемщ",
+                    "рефинансир*ипот",
+                    "рефинансирован*ипот",
+                    "материнск*капитал",
+                    "первоначальн*взнос",
+                ],
+                "filters": [],
+                "target_tag": "ИПОТЕКА",
                 "target_topic": None,
             },
             {
@@ -250,6 +301,152 @@ class GigaChatLabService:
             values[key] = value
         return values, saved.get("saved_at")
 
+    def _fields_from_values(self, values: dict[str, Any]) -> list[GigaChatLabSettingField]:
+        fields: list[GigaChatLabSettingField] = []
+        for meta in self.FIELD_DEFS:
+            options = [GigaChatLabSettingOption(value=v, label=l) for v, l in meta.get("options", [])]
+            fields.append(
+                GigaChatLabSettingField(
+                    key=meta["key"],
+                    label=meta["label"],
+                    input_type=meta["input_type"],
+                    section=meta["section"],
+                    help_text=meta.get("help_text"),
+                    value=values.get(meta["key"]),
+                    options=options,
+                )
+            )
+        return fields
+
+    @staticmethod
+    def _version_id_from_title(title: str) -> str:
+        raw = re.sub(r"[^a-zA-Z0-9_-]+", "_", title.strip().lower()).strip("_")
+        return raw or f"version_{uuid.uuid4().hex[:8]}"
+
+    def _version_path(self, version_id: str) -> Path:
+        safe = self._version_id_from_title(version_id)
+        return self.versions_dir / f"{safe}.json"
+
+    def _default_version_payload(self) -> dict[str, Any]:
+        values, saved_at = self._effective_values()
+        now = saved_at or self._now().isoformat()
+        return {
+            "version_id": "default",
+            "title": "Default",
+            "description": "Базовая версия из дефолтных и legacy-настроек Lab.",
+            "status": "release",
+            "created_by": "system",
+            "created_at": now,
+            "updated_at": saved_at,
+            "base_version_id": None,
+            "values": values,
+        }
+
+    def _read_version_payload(self, version_id: str) -> dict[str, Any]:
+        if version_id == "default" and not self._version_path(version_id).exists():
+            return self._default_version_payload()
+        path = self._version_path(version_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Settings version not found: {version_id}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"Settings version is not a JSON object: {version_id}")
+        return payload
+
+    def _write_version_payload(self, payload: dict[str, Any]) -> None:
+        version_id = str(payload.get("version_id") or "")
+        if not version_id:
+            raise ValueError("version_id is required")
+        self._version_path(version_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _version_summary_from_payload(self, payload: dict[str, Any], *, is_default: bool = False) -> GigaChatLabSettingsVersionSummary:
+        version_id = str(payload.get("version_id") or "default")
+        path = self._version_path(version_id)
+        return GigaChatLabSettingsVersionSummary(
+            version_id=version_id,
+            title=str(payload.get("title") or version_id),
+            description=str(payload.get("description") or ""),
+            status=payload.get("status") or "draft",
+            created_by=str(payload.get("created_by") or ""),
+            created_at=datetime.fromisoformat(payload["created_at"]) if payload.get("created_at") else None,
+            updated_at=datetime.fromisoformat(payload["updated_at"]) if payload.get("updated_at") else None,
+            base_version_id=payload.get("base_version_id"),
+            path=str(path) if path.exists() else None,
+            is_default=is_default,
+        )
+
+    def _values_from_version_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        defaults = self._default_values()
+        values = dict(defaults)
+        raw_values = payload.get("values", {})
+        if isinstance(raw_values, dict):
+            for key, value in raw_values.items():
+                if key in defaults:
+                    values[key] = self._coerce_setting_value(key, value)
+        return values
+
+    def list_settings_versions(self) -> GigaChatLabSettingsVersionsResponse:
+        versions: list[GigaChatLabSettingsVersionSummary] = []
+        for path in sorted(self.versions_dir.glob("*.json")):
+            with suppress(Exception):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                versions.append(self._version_summary_from_payload(payload, is_default=payload.get("version_id") == "default"))
+        if not versions:
+            versions.append(self._version_summary_from_payload(self._default_version_payload(), is_default=True))
+        versions.sort(key=lambda item: (not item.is_default, item.title.lower()))
+        return GigaChatLabSettingsVersionsResponse(versions=versions)
+
+    def get_settings_version(self, version_id: str) -> GigaChatLabSettingsVersionResponse:
+        payload = self._read_version_payload(version_id)
+        values = self._values_from_version_payload(payload)
+        return GigaChatLabSettingsVersionResponse(
+            version=self._version_summary_from_payload(payload, is_default=version_id == "default"),
+            fields=self._fields_from_values(values),
+            values=values,
+        )
+
+    def create_settings_version(self, req: GigaChatLabSettingsVersionCreateRequest) -> GigaChatLabSettingsVersionResponse:
+        version_id = self._version_id_from_title(req.version_id or req.title)
+        if self._version_path(version_id).exists():
+            raise ValueError(f"Settings version already exists: {version_id}")
+        base_payload = self._read_version_payload(req.base_version_id or "default")
+        now = self._now().isoformat()
+        payload = {
+            "version_id": version_id,
+            "title": req.title.strip() or version_id,
+            "description": req.description,
+            "status": req.status,
+            "created_by": req.created_by,
+            "created_at": now,
+            "updated_at": now,
+            "base_version_id": req.base_version_id or "default",
+            "values": self._values_from_version_payload(base_payload),
+        }
+        self._write_version_payload(payload)
+        return self.get_settings_version(version_id)
+
+    def save_settings_version(self, version_id: str, req: GigaChatLabSettingsVersionUpdateRequest) -> GigaChatLabSettingsVersionResponse:
+        if version_id == "default" and not self._version_path(version_id).exists():
+            payload = self._default_version_payload()
+            payload["created_at"] = self._now().isoformat()
+        else:
+            payload = self._read_version_payload(version_id)
+        if req.title is not None:
+            payload["title"] = req.title
+        if req.description is not None:
+            payload["description"] = req.description
+        if req.status is not None:
+            payload["status"] = req.status
+        values = self._values_from_version_payload(payload)
+        for key, value in req.values.items():
+            if key in values:
+                values[key] = self._coerce_setting_value(key, value)
+        payload["values"] = values
+        payload["updated_by"] = req.updated_by or payload.get("updated_by") or payload.get("created_by") or ""
+        payload["updated_at"] = self._now().isoformat()
+        self._write_version_payload(payload)
+        return self.get_settings_version(str(payload["version_id"]))
+
     def _coerce_setting_value(self, key: str, value: Any) -> Any:
         meta = next((x for x in self.FIELD_DEFS if x["key"] == key), None)
         if meta is None:
@@ -270,20 +467,6 @@ class GigaChatLabService:
 
     def get_settings(self) -> GigaChatLabSettingsResponse:
         values, saved_at_raw = self._effective_values()
-        fields: list[GigaChatLabSettingField] = []
-        for meta in self.FIELD_DEFS:
-            options = [GigaChatLabSettingOption(value=v, label=l) for v, l in meta.get("options", [])]
-            fields.append(
-                GigaChatLabSettingField(
-                    key=meta["key"],
-                    label=meta["label"],
-                    input_type=meta["input_type"],
-                    section=meta["section"],
-                    help_text=meta.get("help_text"),
-                    value=values.get(meta["key"]),
-                    options=options,
-                )
-            )
         saved_at = None
         if isinstance(saved_at_raw, str) and saved_at_raw.strip():
             try:
@@ -292,7 +475,7 @@ class GigaChatLabService:
                 saved_at = None
         return GigaChatLabSettingsResponse(
             title="GigaChat Lab Settings",
-            fields=fields,
+            fields=self._fields_from_values(values),
             saved_at=saved_at,
         )
 
@@ -389,6 +572,156 @@ class GigaChatLabService:
             rule_evaluation=rule_evaluation,
         )
 
+    def list_background_tasks(self) -> GigaChatBackgroundTaskListResponse:
+        tasks: list[GigaChatBackgroundTaskSummary] = []
+        for meta_path in sorted(self.background_dir.glob("*/task.json"), reverse=True):
+            with suppress(Exception):
+                tasks.append(GigaChatBackgroundTaskSummary(**json.loads(meta_path.read_text(encoding="utf-8"))))
+        tasks.sort(key=lambda item: item.created_at, reverse=True)
+        return GigaChatBackgroundTaskListResponse(tasks=tasks)
+
+    def start_background_labeling(self, req: GigaChatBackgroundTaskStartRequest) -> GigaChatBackgroundTaskSummary:
+        task_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        task_dir = self.background_dir / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        summary = GigaChatBackgroundTaskSummary(
+            task_id=task_id,
+            status="queued",
+            filename=req.filename,
+            sheet_name=req.sheet_name,
+            created_at=self._now(),
+            total_rows=len(req.rows),
+            current_label="Задача поставлена в очередь",
+        )
+        (task_dir / "input.json").write_text(req.model_dump_json(indent=2), encoding="utf-8")
+        self._write_background_summary(summary)
+
+        cancel_flag = threading.Event()
+        worker = threading.Thread(
+            target=self._run_background_labeling,
+            args=(task_id, req, cancel_flag),
+            daemon=True,
+            name=f"gigachat-bg-{task_id}",
+        )
+        with self._background_lock:
+            self._background_cancel_flags[task_id] = cancel_flag
+            self._background_threads[task_id] = worker
+        worker.start()
+        return summary
+
+    def cancel_background_task(self, task_id: str) -> GigaChatBackgroundTaskSummary:
+        summary = self._read_background_summary(task_id)
+        with self._background_lock:
+            flag = self._background_cancel_flags.get(task_id)
+            if flag:
+                flag.set()
+        if summary.status in {"queued", "running"}:
+            summary.status = "cancelled"
+            summary.finished_at = self._now()
+            summary.current_label = "Отмена запрошена"
+            self._write_background_summary(summary)
+        return summary
+
+    def load_background_result(self, task_id: str) -> GigaChatBackgroundTaskResultResponse:
+        summary = self._read_background_summary(task_id)
+        result_path = self.background_dir / task_id / "result.json"
+        if not result_path.exists():
+            raise FileNotFoundError(f"Background task result not found: {task_id}")
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        return GigaChatBackgroundTaskResultResponse(
+            task=summary,
+            workbook=GigaChatWorkbookSheetDataResponse(**payload["workbook"]),
+            row_runs=[GigaChatBackgroundTaskRowRun(**row) for row in payload.get("row_runs", [])],
+        )
+
+    def _run_background_labeling(self, task_id: str, req: GigaChatBackgroundTaskStartRequest, cancel_flag: threading.Event) -> None:
+        summary = self._read_background_summary(task_id)
+        task_dir = self.background_dir / task_id
+        source_rows = [item.source_row for item in req.rows]
+        row_runs: list[dict[str, Any]] = []
+        summary.status = "running"
+        summary.started_at = self._now()
+        summary.current_label = "Фоновая разметка запущена"
+        self._write_background_summary(summary)
+
+        try:
+            for index, item in enumerate(req.rows):
+                if cancel_flag.is_set():
+                    summary.status = "cancelled"
+                    summary.current_label = "Задача отменена"
+                    break
+                summary.current_label = f"Размечаем строку {index + 1} из {len(req.rows)}"
+                self._write_background_summary(summary)
+                try:
+                    result = self.run_row_prompt(GigaChatLabRowRunRequest(
+                        transport=req.transport,
+                        values=req.values,
+                        columns=req.columns,
+                        row=item.source_row,
+                        payload_override=req.payload_override,
+                        count_tokens=req.count_tokens,
+                    ))
+                    row_runs.append({
+                        "row_index": item.row_index,
+                        "source_row": item.source_row,
+                        "result": result.model_dump(mode="json"),
+                        "error": None,
+                    })
+                except Exception as exc:
+                    summary.failed_rows += 1
+                    row_runs.append({
+                        "row_index": item.row_index,
+                        "source_row": item.source_row,
+                        "result": None,
+                        "error": str(exc),
+                    })
+                summary.completed_rows = index + 1
+                summary.progress = summary.completed_rows / summary.total_rows if summary.total_rows else 1
+                self._write_background_summary(summary)
+
+            if summary.status != "cancelled":
+                summary.status = "completed"
+                summary.current_label = "Готово"
+            summary.finished_at = self._now()
+            workbook = GigaChatWorkbookSheetDataResponse(
+                upload_id=f"background-{task_id}",
+                filename=req.filename,
+                file_format="csv",
+                sheet_name=req.sheet_name,
+                total_rows=len(source_rows),
+                rendered_rows=len(source_rows),
+                columns=req.columns,
+                rows=source_rows,
+            )
+            result_path = task_dir / "result.json"
+            result_path.write_text(json.dumps({
+                "workbook": workbook.model_dump(mode="json"),
+                "row_runs": row_runs,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            summary.result_path = str(result_path)
+            self._write_background_summary(summary)
+        except Exception as exc:
+            summary.status = "failed"
+            summary.error = f"{exc}\n{traceback.format_exc()}"
+            summary.current_label = "Задача завершилась ошибкой"
+            summary.finished_at = self._now()
+            self._write_background_summary(summary)
+        finally:
+            with self._background_lock:
+                self._background_cancel_flags.pop(task_id, None)
+                self._background_threads.pop(task_id, None)
+
+    def _read_background_summary(self, task_id: str) -> GigaChatBackgroundTaskSummary:
+        meta_path = self.background_dir / task_id / "task.json"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"Background task not found: {task_id}")
+        return GigaChatBackgroundTaskSummary(**json.loads(meta_path.read_text(encoding="utf-8")))
+
+    def _write_background_summary(self, summary: GigaChatBackgroundTaskSummary) -> None:
+        task_dir = self.background_dir / summary.task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "task.json").write_text(summary.model_dump_json(indent=2), encoding="utf-8")
+
     def export_annotated_workbook(self, req: GigaChatAnnotatedExportRequest) -> tuple[str, bytes]:
         source_columns = [str(column).strip() for column in req.source_columns if str(column).strip()]
         ordered_rows = sorted(
@@ -400,6 +733,12 @@ class GigaChatLabService:
             export_row: dict[str, Any] = {
                 "Класс": row.classification,
                 "Теги": ", ".join([str(tag).strip() for tag in row.tags if str(tag).strip()]),
+                "Local tags": ", ".join([str(tag).strip() for tag in row.local_tags if str(tag).strip()]),
+                "Model added tags": ", ".join([str(tag).strip() for tag in row.model_added_tags if str(tag).strip()]),
+                "Model rejected tags": ", ".join([str(tag).strip() for tag in row.model_rejected_tags if str(tag).strip()]),
+                "Match type": row.match_type or "",
+                "Evidence": row.evidence or "",
+                "Tag decisions": row.tag_decisions or "",
                 "Rule hits": ", ".join([str(hit).strip() for hit in row.rule_hits if str(hit).strip()]),
                 "Suggested topics": ", ".join([str(topic).strip() for topic in row.suggested_topics if str(topic).strip()]),
                 "Confirmed rule hits": ", ".join([str(hit).strip() for hit in row.confirmed_rule_hits if str(hit).strip()]),
@@ -417,6 +756,12 @@ class GigaChatLabService:
         ordered_columns = [
             "Класс",
             "Теги",
+            "Local tags",
+            "Model added tags",
+            "Model rejected tags",
+            "Match type",
+            "Evidence",
+            "Tag decisions",
             "Rule hits",
             "Suggested topics",
             "Confirmed rule hits",
@@ -472,6 +817,12 @@ class GigaChatLabService:
                 "Reviewer comment": "",
                 "Model class": model_class,
                 "Model tags": model_tags,
+                "Local tags": ", ".join([str(tag).strip() for tag in row.local_tags if str(tag).strip()]),
+                "Model added tags": ", ".join([str(tag).strip() for tag in row.model_added_tags if str(tag).strip()]),
+                "Model rejected tags": ", ".join([str(tag).strip() for tag in row.model_rejected_tags if str(tag).strip()]),
+                "Match type": row.match_type or "",
+                "Evidence": row.evidence or "",
+                "Tag decisions": row.tag_decisions or "",
                 "Rule hits": ", ".join([str(hit).strip() for hit in row.rule_hits if str(hit).strip()]),
                 "Suggested topics": ", ".join([str(topic).strip() for topic in row.suggested_topics if str(topic).strip()]),
                 "Confirmed rule hits": ", ".join([str(hit).strip() for hit in row.confirmed_rule_hits if str(hit).strip()]),
@@ -497,6 +848,12 @@ class GigaChatLabService:
             "Reviewer comment",
             "Model class",
             "Model tags",
+            "Local tags",
+            "Model added tags",
+            "Model rejected tags",
+            "Match type",
+            "Evidence",
+            "Tag decisions",
             "Rule hits",
             "Suggested topics",
             "Confirmed rule hits",
@@ -603,7 +960,8 @@ class GigaChatLabService:
         df = self._drop_empty_unnamed_columns(df)
 
         columns = [str(c) for c in df.columns]
-        rows = self._frame_to_rows(df.head(min(max(int(req.row_limit), 1), 1000)))
+        row_limit = min(max(int(req.row_limit), 1), len(df))
+        rows = self._frame_to_rows(df.head(row_limit))
         return GigaChatWorkbookSheetDataResponse(
             upload_id=upload_id,
             filename=filename,
@@ -925,22 +1283,31 @@ class GigaChatLabService:
 
     @staticmethod
     def _format_row_rule_context(evaluation: GigaChatRuleEvaluationRow) -> str:
+        lines: list[str] = []
         if not evaluation.hits:
-            return "Rule-based precheck для этой строки не нашел совпадений."
-        lines = ["Rule-based precheck для этой строки нашел следующие совпадения:"]
-        for hit in evaluation.hits:
-            action = f"tag={hit.target_tag}" if hit.type == "assign_tag" else f"topic={hit.target_topic}"
-            lines.append(
-                f"- {hit.code} [{hit.type}] -> {action}; keywords={', '.join(hit.matched_keywords)}; "
-                f"fields={', '.join(hit.matched_fields)}."
-            )
-        if evaluation.suggested_tags:
-            lines.append(f"Предложенные теги по локальным правилам: {', '.join(evaluation.suggested_tags)}")
-        if evaluation.suggested_topics:
-            lines.append(f"Предложенные переклассификации по локальным правилам: {', '.join(evaluation.suggested_topics)}")
+            lines.append("Rule-based precheck для этой строки не нашел совпадений.")
+        else:
+            lines.append("Rule-based precheck для этой строки нашел следующие совпадения:")
+            for hit in evaluation.hits:
+                action = f"tag={hit.target_tag}" if hit.type == "assign_tag" else f"topic={hit.target_topic}"
+                lines.append(
+                    f"- {hit.code} [{hit.type}] -> {action}; keywords={', '.join(hit.matched_keywords)}; "
+                    f"fields={', '.join(hit.matched_fields)}."
+                )
+            if evaluation.suggested_tags:
+                lines.append(f"Предложенные теги по локальным правилам: {', '.join(evaluation.suggested_tags)}")
+            if evaluation.suggested_topics:
+                lines.append(f"Предложенные переклассификации по локальным правилам: {', '.join(evaluation.suggested_topics)}")
         lines.append(
             "Подтверди или отвергни каждое срабатывание. В confirmed_rule_hits верни подтвержденные коды правил, "
             "в rejected_rule_hits — отклоненные. Если rule-pack предлагает reclass_topic, при подтверждении верни его в reclassified_topic."
+        )
+        lines.append(
+            "Отдельно выполни semantic tag review: локальные совпадения — это подсказка, а не полный результат. "
+            "Самостоятельно проверь все разрешенные теги по смыслу в разрешенных source_fields rule-pack'ов: "
+            "точные ключи, однокоренные формы, опечатки, искаженные написания, синонимы и косвенное описание ситуации. "
+            "Если разрешенный тег подходит без local rule hit, добавь его в model_added_tags. "
+            "Если local rule hit ошибочный по контексту или отрицанию, добавь тег в model_rejected_tags и код правила в rejected_rule_hits."
         )
         return "\n".join(lines)
 
@@ -987,6 +1354,16 @@ class GigaChatLabService:
         prompt_parts.append(class_rules)
         prompt_parts.append(tag_rules)
         prompt_parts.append(rule_pack_rules)
+        prompt_parts.append(
+            "Semantic tag review:\n"
+            "- Можно назначать только теги из раздела `Теги` и из действий активных assign_tag rule packs.\n"
+            "- Local rule hits являются подсказками, но не ограничивают результат: проверь разрешенные теги независимо.\n"
+            "- Для каждого итогового тега укажи `tag_decisions`: tag, decision (`confirmed`, `added`, `rejected`, `not_applicable`), "
+            "source (`local_rule`, `llm_semantic`), match_type (`exact`, `stem`, `typo`, `synonym`, `semantic`, `rejected`, `none`), evidence, reason.\n"
+            "- `local_tags` = теги, предложенные локальными правилами. `model_added_tags` = разрешенные теги, добавленные моделью без local hit. "
+            "`model_rejected_tags` = локальные теги, отвергнутые моделью. `assigned_tags` = финальные теги после подтверждения/добавления/отклонения.\n"
+            "- Если тег добавлен по смыслу, evidence должен быть короткой фразой из строки или точным указанием поля, иначе тег не ставь."
+        )
         prompt_parts.append(f"Активные колонки для анализа: {', '.join(columns) if columns else 'не выбраны'}")
         prompt_parts.append(
             "Ниже шаблон одной записи. В реальном запросе на место плейсхолдеров будут подставлены значения выбранных колонок:"

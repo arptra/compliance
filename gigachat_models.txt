@@ -1,0 +1,14 @@
+GigaChat
+GigaChat-2
+GigaChat-2-Max
+GigaChat-2-Pro
+GigaChat-Max
+GigaChat-Max-preview
+GigaChat-Plus
+GigaChat-Pro
+GigaChat-Pro-preview
+GigaChat-preview
+Embeddings
+Embeddings-2
+EmbeddingsGigaR
+GigaEmbeddings-3B-2025-09

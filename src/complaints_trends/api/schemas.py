@@ -96,6 +96,46 @@ class GigaChatLabSettingsUpdateRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 
 
+class GigaChatLabSettingsVersionSummary(BaseModel):
+    version_id: str
+    title: str
+    description: str = ""
+    status: Literal["draft", "test", "working", "release", "archived"] = "draft"
+    created_by: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    base_version_id: str | None = None
+    path: str | None = None
+    is_default: bool = False
+
+
+class GigaChatLabSettingsVersionsResponse(BaseModel):
+    versions: list[GigaChatLabSettingsVersionSummary] = Field(default_factory=list)
+
+
+class GigaChatLabSettingsVersionResponse(BaseModel):
+    version: GigaChatLabSettingsVersionSummary
+    fields: list[GigaChatLabSettingField] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class GigaChatLabSettingsVersionCreateRequest(BaseModel):
+    title: str
+    version_id: str | None = None
+    description: str = ""
+    status: Literal["draft", "test", "working", "release", "archived"] = "draft"
+    created_by: str = ""
+    base_version_id: str = "default"
+
+
+class GigaChatLabSettingsVersionUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    status: Literal["draft", "test", "working", "release", "archived"] | None = None
+    updated_by: str | None = None
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
 class GigaChatWorkbookSheetPreview(BaseModel):
     name: str
     rows_total: int = 0
@@ -205,10 +245,67 @@ class GigaChatLabRowRunResponse(BaseModel):
     rule_evaluation: GigaChatRuleEvaluationRow | None = None
 
 
+class GigaChatBackgroundTaskInputRow(BaseModel):
+    row_index: int
+    source_row: dict[str, Any] = Field(default_factory=dict)
+
+
+class GigaChatBackgroundTaskStartRequest(BaseModel):
+    transport: Literal["mtls", "token"] = "mtls"
+    values: dict[str, Any] = Field(default_factory=dict)
+    columns: list[str] = Field(default_factory=list)
+    rows: list[GigaChatBackgroundTaskInputRow] = Field(default_factory=list)
+    filename: str = "background.csv"
+    sheet_name: str = "data"
+    payload_override: dict[str, Any] | None = None
+    count_tokens: bool = False
+
+
+class GigaChatBackgroundTaskSummary(BaseModel):
+    task_id: str
+    kind: str = "gigachat_labeling"
+    status: Literal["queued", "running", "completed", "cancelled", "failed"]
+    filename: str = ""
+    sheet_name: str = ""
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    total_rows: int = 0
+    completed_rows: int = 0
+    failed_rows: int = 0
+    progress: float = 0
+    current_label: str = ""
+    error: str | None = None
+    result_path: str | None = None
+
+
+class GigaChatBackgroundTaskListResponse(BaseModel):
+    tasks: list[GigaChatBackgroundTaskSummary] = Field(default_factory=list)
+
+
+class GigaChatBackgroundTaskRowRun(BaseModel):
+    row_index: int
+    source_row: dict[str, Any] = Field(default_factory=dict)
+    result: GigaChatLabRowRunResponse | None = None
+    error: str | None = None
+
+
+class GigaChatBackgroundTaskResultResponse(BaseModel):
+    task: GigaChatBackgroundTaskSummary
+    workbook: GigaChatWorkbookSheetDataResponse
+    row_runs: list[GigaChatBackgroundTaskRowRun] = Field(default_factory=list)
+
+
 class GigaChatAnnotatedExportRow(BaseModel):
     row_index: int | None = None
     classification: str = ""
     tags: list[str] = Field(default_factory=list)
+    local_tags: list[str] = Field(default_factory=list)
+    model_added_tags: list[str] = Field(default_factory=list)
+    model_rejected_tags: list[str] = Field(default_factory=list)
+    match_type: str | None = None
+    evidence: str | None = None
+    tag_decisions: str | None = None
     rule_hits: list[str] = Field(default_factory=list)
     suggested_topics: list[str] = Field(default_factory=list)
     confirmed_rule_hits: list[str] = Field(default_factory=list)

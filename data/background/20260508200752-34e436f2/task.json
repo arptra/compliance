@@ -1,0 +1,17 @@
+{
+  "task_id": "20260508200752-34e436f2",
+  "kind": "gigachat_labeling",
+  "status": "completed",
+  "filename": "gigachat_complex_tag_mix_test.xlsx",
+  "sheet_name": "Complex tag mix",
+  "created_at": "2026-05-08T20:07:52.121095Z",
+  "started_at": "2026-05-08T20:07:52.122286Z",
+  "finished_at": "2026-05-08T20:09:39.629586Z",
+  "total_rows": 12,
+  "completed_rows": 12,
+  "failed_rows": 0,
+  "progress": 1.0,
+  "current_label": "Готово",
+  "error": null,
+  "result_path": "data/background/20260508200752-34e436f2/result.json"
+}

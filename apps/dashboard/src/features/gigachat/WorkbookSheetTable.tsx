@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { GigaChatRuleEvaluationRow, GigaChatWorkbookSheetDataResponse } from './types'
 import { useResizableTable, type TableRowClamp } from './useResizableTable'
 import { CellHoverPopover, useCellHoverPopover } from './useCellHoverPopover'
+import { useVirtualTableRows } from './useVirtualTableRows'
 
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
 
@@ -21,6 +22,7 @@ export function WorkbookSheetTable({
   onToggleAllRows,
   onPickRandomRows,
   onRunSelectedRows,
+  onRunSelectedRowsInBackground,
   onSelectRuleHitRows,
   onSelectNoRuleHitRows,
   batchBusy,
@@ -43,6 +45,7 @@ export function WorkbookSheetTable({
   onToggleAllRows: (checked: boolean) => void
   onPickRandomRows: () => void
   onRunSelectedRows: () => void
+  onRunSelectedRowsInBackground?: () => void
   onSelectRuleHitRows: () => void
   onSelectNoRuleHitRows: () => void
   batchBusy?: boolean
@@ -85,6 +88,8 @@ export function WorkbookSheetTable({
       }),
     [data.rows, ruleEvaluations, ruleFilter, showOnlyRuleHits],
   )
+  const virtualTable = useVirtualTableRows(visibleRows, rowClamp === 'all' ? 148 : 112)
+  const tableColumnCount = 7 + data.columns.length
 
   const renderCellValue = (column: string, value: unknown) => {
     const text = String(value ?? '')
@@ -165,6 +170,9 @@ export function WorkbookSheetTable({
       <button type='button' onClick={onRunSelectedRows} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
         {batchBusy ? 'Отправляем выбранные...' : 'Отправить выбранное в GigaChat для классификации'}
       </button>
+      {onRunSelectedRowsInBackground ? <button type='button' onClick={onRunSelectedRowsInBackground} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
+        Запустить фоном
+      </button> : null}
       <span className='lab-muted'>Выбрано строк: {selectedRowKeys.length}</span>
     </div>
 
@@ -185,10 +193,11 @@ export function WorkbookSheetTable({
         </select>
       </label>
       <span className='lab-muted'>В таблице: {visibleRows.length} из {data.rows.length}</span>
+      <span className='lab-muted'>Отрисовано сейчас: {virtualTable.virtualRows.length}</span>
       <span className='lab-muted'>Пустой rule hit не означает финальное решение. Это только значит, что локальные правила не нашли подсказку; такие строки можно выбрать и отправить в GigaChat.</span>
     </div>
 
-    <div className='workbook-table-wrap' onMouseLeave={hideCellPopover}>
+    <div className='workbook-table-wrap' ref={virtualTable.scrollRef} onScroll={virtualTable.onScroll} onMouseLeave={hideCellPopover}>
       <table className='table workbook-table'>
         <thead>
           <tr>
@@ -292,7 +301,11 @@ export function WorkbookSheetTable({
           </tr>
         </thead>
         <tbody>
-          {visibleRows.map(({ row, idx, evaluation }) => {
+          {virtualTable.topSpacerHeight ? <tr aria-hidden='true' className='virtual-table-spacer-row'>
+            <td colSpan={tableColumnCount} style={{ height: virtualTable.topSpacerHeight }} />
+          </tr> : null}
+          {virtualTable.virtualRows.map(({ item }) => {
+            const { row, idx, evaluation } = item
             const ruleCodes = evaluation?.hits.map((hit) => hit.code).join(', ') || '—'
             const matchedKeywords = Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_keywords) ?? [])).join(', ') || '—'
             const matchedFields = Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_fields) ?? [])).join(', ') || '—'
@@ -350,6 +363,9 @@ export function WorkbookSheetTable({
             })}
             </tr>
           })}
+          {virtualTable.bottomSpacerHeight ? <tr aria-hidden='true' className='virtual-table-spacer-row'>
+            <td colSpan={tableColumnCount} style={{ height: virtualTable.bottomSpacerHeight }} />
+          </tr> : null}
         </tbody>
       </table>
     </div>

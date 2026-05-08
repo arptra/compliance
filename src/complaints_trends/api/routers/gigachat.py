@@ -7,12 +7,20 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from ..deps import get_service_container
 from ..schemas import (
     GigaChatAnnotatedExportRequest,
+    GigaChatBackgroundTaskListResponse,
+    GigaChatBackgroundTaskResultResponse,
+    GigaChatBackgroundTaskStartRequest,
+    GigaChatBackgroundTaskSummary,
     GigaChatFinalPromptRequest,
     GigaChatFinalPromptResponse,
     GigaChatLabRowRunRequest,
     GigaChatLabRowRunResponse,
     GigaChatLabSettingsResponse,
     GigaChatLabSettingsUpdateRequest,
+    GigaChatLabSettingsVersionCreateRequest,
+    GigaChatLabSettingsVersionResponse,
+    GigaChatLabSettingsVersionsResponse,
+    GigaChatLabSettingsVersionUpdateRequest,
     GigaChatRuleEvaluationRequest,
     GigaChatRuleEvaluationResponse,
     GigaChatTransportProbeRequest,
@@ -46,6 +54,37 @@ def save_lab_settings(req: GigaChatLabSettingsUpdateRequest, services=Depends(ge
     return services["gigachat_lab"].save_settings(req)
 
 
+@router.get("/lab/settings/versions", response_model=GigaChatLabSettingsVersionsResponse)
+def list_lab_settings_versions(services=Depends(get_service_container)):
+    return services["gigachat_lab"].list_settings_versions()
+
+
+@router.post("/lab/settings/versions", response_model=GigaChatLabSettingsVersionResponse)
+def create_lab_settings_version(req: GigaChatLabSettingsVersionCreateRequest, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].create_settings_version(req)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/lab/settings/versions/{version_id}", response_model=GigaChatLabSettingsVersionResponse)
+def get_lab_settings_version(version_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].get_settings_version(version_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/lab/settings/versions/{version_id}", response_model=GigaChatLabSettingsVersionResponse)
+def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUpdateRequest, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].save_settings_version(version_id, req)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/lab/final-prompt", response_model=GigaChatFinalPromptResponse)
 def final_prompt_preview(req: GigaChatFinalPromptRequest, services=Depends(get_service_container)):
     return services["gigachat_lab"].build_final_prompt(req, save_snapshot=False)
@@ -64,6 +103,35 @@ def evaluate_rule_packs(req: GigaChatRuleEvaluationRequest, services=Depends(get
 @router.post("/lab/run-row", response_model=GigaChatLabRowRunResponse)
 def run_row(req: GigaChatLabRowRunRequest, services=Depends(get_service_container)):
     return services["gigachat_lab"].run_row_prompt(req)
+
+
+@router.get("/lab/background-tasks", response_model=GigaChatBackgroundTaskListResponse)
+def list_background_tasks(services=Depends(get_service_container)):
+    return services["gigachat_lab"].list_background_tasks()
+
+
+@router.post("/lab/background-tasks", response_model=GigaChatBackgroundTaskSummary)
+def start_background_task(req: GigaChatBackgroundTaskStartRequest, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].start_background_labeling(req)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/background-tasks/{task_id}/cancel", response_model=GigaChatBackgroundTaskSummary)
+def cancel_background_task(task_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].cancel_background_task(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/lab/background-tasks/{task_id}/result", response_model=GigaChatBackgroundTaskResultResponse)
+def background_task_result(task_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].load_background_result(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/lab/annotated/export")
