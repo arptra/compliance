@@ -19,6 +19,18 @@ function formatRuleAction(rule: GigaChatRulePack) {
     : `Topic: ${rule.target_topic || '—'}`
 }
 
+function sourceFieldStatus(rule: GigaChatRulePack, availableFields: string[]) {
+  if (!availableFields.length) return { valid: true, missing: [] as string[] }
+  if (!rule.source_fields.length) return { valid: false, missing: ['Source fields не выбраны'] }
+  const available = new Set(availableFields)
+  const ruleFields = [
+    ...rule.source_fields,
+    ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
+  ]
+  const missing = Array.from(new Set(ruleFields.filter((field) => !available.has(field))))
+  return { valid: missing.length === 0, missing }
+}
+
 function emptyFilter(): GigaChatRulePackFilter {
   return { field: '', op: 'eq', value: '' }
 }
@@ -53,6 +65,13 @@ export function RulePackEditor({
   const [draft, setDraft] = useState<GigaChatRulePack>(emptyRule())
   const [sourceFieldsText, setSourceFieldsText] = useState('')
   const [keywordsText, setKeywordsText] = useState('')
+  const draftSourceFields = useMemo(() => splitLines(sourceFieldsText), [sourceFieldsText])
+  const draftHasEmptySourceFields = availableFields.length > 0 && draftSourceFields.length === 0
+  const draftMissingSourceFields = useMemo(
+    () => availableFields.length ? draftSourceFields.filter((field) => !availableFields.includes(field)) : [],
+    [availableFields, draftSourceFields],
+  )
+  const draftHasMissingSourceFields = draftHasEmptySourceFields || draftMissingSourceFields.length > 0
 
   const resetDraft = () => {
     setEditingIndex(null)
@@ -80,11 +99,31 @@ export function RulePackEditor({
     setKeywordsText('')
   }
 
+  const updateDraftCode = (code: string) => {
+    setDraft((current) => {
+      const previousCode = current.code.trim()
+      const shouldMirrorTarget = current.type === 'assign_tag' && (!current.target_tag || current.target_tag.trim() === previousCode)
+      return {
+        ...current,
+        code,
+        target_tag: shouldMirrorTarget ? code : current.target_tag,
+      }
+    })
+  }
+
+  const updateSourceField = (field: string, checked: boolean) => {
+    const next = new Set(draftSourceFields)
+    if (checked) next.add(field)
+    else next.delete(field)
+    setSourceFieldsText(Array.from(next).join('\n'))
+  }
+
   const saveDraft = () => {
+    if (draftHasMissingSourceFields) return
     const nextRule: GigaChatRulePack = {
       ...draft,
       code: draft.code.trim(),
-      description: draft.description.trim(),
+      description: '',
       source_fields: splitLines(sourceFieldsText),
       keywords: splitLines(keywordsText),
       filters: draft.filters
@@ -106,6 +145,21 @@ export function RulePackEditor({
     }
     onChange(serializeRulePacks(nextItems))
     resetDraft()
+  }
+
+  const toggleRuleEnabled = (index: number) => {
+    const nextItems = items.map((item, currentIndex) => (
+      currentIndex === index && sourceFieldStatus(item, availableFields).valid ? { ...item, enabled: !item.enabled } : item
+    ))
+    onChange(serializeRulePacks(nextItems))
+  }
+
+  const setAllRulesEnabled = (enabled: boolean) => {
+    const nextItems = items.map((item) => {
+      const canEnable = sourceFieldStatus(item, availableFields).valid
+      return { ...item, enabled: enabled ? canEnable : false }
+    })
+    onChange(serializeRulePacks(nextItems))
   }
 
   const removeItem = (index: number) => {
@@ -135,25 +189,38 @@ export function RulePackEditor({
     <div className='transport-actions'>
       <button type='button' onClick={openCreate}>+ Добавить правило</button>
       {defaultValue ? <button type='button' onClick={restoreDefaults}>Восстановить DRA/EDU defaults</button> : null}
+      <button type='button' onClick={() => setAllRulesEnabled(true)}>Сделать активными все доступные правила</button>
+      <button type='button' onClick={() => setAllRulesEnabled(false)}>Сделать не активными все</button>
       <button type='button' onClick={clearAll}>Сбросить все правила</button>
     </div>
 
     {items.length ? <div className='labeling-rules-list'>
-      {items.map((item, index) => <div key={`${item.code}-${index}`} className='labeling-rule-card'>
-        <div className='labeling-rule-copy'>
-          <div className='labeling-rule-name' title={item.code}>{item.code}</div>
-          <div className='labeling-rule-description' title={item.description || 'Без описания'}>{item.description || 'Без описания'}</div>
-          <div className='labeling-rule-meta'>
-            <span>{item.enabled ? 'Включено' : 'Выключено'}</span>
-            <span>{item.type}</span>
-            <span>{formatRuleAction(item)}</span>
+      {items.map((item, index) => {
+        const status = sourceFieldStatus(item, availableFields)
+        const effectiveEnabled = item.enabled && status.valid
+        return <div key={`${item.code}-${index}`} className={`labeling-rule-card rule-pack-card ${effectiveEnabled ? 'active' : 'inactive'}${status.valid ? '' : ' missing-fields'}`}>
+          <div className='labeling-rule-copy'>
+            <div className='labeling-rule-name' title={item.code}>{item.code}</div>
+            {status.valid ? null : <div className='rule-pack-missing-fields'>Нет колонок: {status.missing.join(', ')}</div>}
+            <div className='labeling-rule-meta'>
+              <button
+                type='button'
+                className={`rule-pack-status-toggle ${effectiveEnabled ? 'active' : 'inactive'}`}
+                onClick={() => toggleRuleEnabled(index)}
+                disabled={!status.valid}
+              >
+                {effectiveEnabled ? 'Активно' : 'Не активно'}
+              </button>
+              <span>{item.type}</span>
+              <span>{formatRuleAction(item)}</span>
+            </div>
+          </div>
+          <div className='labeling-rule-actions'>
+            <button className='labeling-remove-button' onClick={() => openEditor(index)}>Редактировать</button>
+            <button className='labeling-remove-button' onClick={() => removeItem(index)}>Удалить</button>
           </div>
         </div>
-        <div className='labeling-rule-actions'>
-          <button className='labeling-remove-button' onClick={() => openEditor(index)}>Редактировать</button>
-          <button className='labeling-remove-button' onClick={() => removeItem(index)}>Удалить</button>
-        </div>
-      </div>)}
+      })}
     </div> : <div className='lab-muted'>Пока rule packs не добавлены.</div>}
 
     {isEditing ? <div className='sheet-modal-backdrop' onClick={resetDraft}>
@@ -169,7 +236,7 @@ export function RulePackEditor({
         <div className='labeling-edit-modal-form rule-pack-edit-form'>
           <label className='lab-field'>
             <span>Rule code</span>
-            <input type='text' value={draft.code} onChange={(e) => setDraft((current) => ({ ...current, code: e.target.value }))} placeholder='DRA' />
+            <input type='text' value={draft.code} onChange={(e) => updateDraftCode(e.target.value)} placeholder='DRA' />
           </label>
 
           <label className='lab-field'>
@@ -186,28 +253,51 @@ export function RulePackEditor({
             </select>
           </label>
 
-          <label className='lab-checkbox'>
-            <input
-              type='checkbox'
-              checked={draft.enabled}
-              onChange={(e) => setDraft((current) => ({ ...current, enabled: e.target.checked }))}
-            />
-            <span><strong>Правило активно</strong></span>
-          </label>
-
-          <label className='lab-field wide'>
-            <span>Описание</span>
-            <textarea value={draft.description} onChange={(e) => setDraft((current) => ({ ...current, description: e.target.value }))} />
-          </label>
-
           <label className='lab-field wide'>
             <span>Source fields</span>
-            <textarea
+            {availableFields.length ? <div className='rule-source-field-picker'>
+              <div className='rule-source-selected'>
+                {draftSourceFields.length ? draftSourceFields.map((field) => {
+                  const missing = !availableFields.includes(field)
+                  return <button
+                    key={`selected-${field}`}
+                    type='button'
+                    className={missing ? 'missing' : ''}
+                    onClick={() => updateSourceField(field, false)}
+                    title='Нажмите, чтобы убрать поле'
+                  >
+                    {field}
+                  </button>
+                }) : <span className='lab-muted'>Поля пока не выбраны.</span>}
+              </div>
+              <div className='rule-source-options'>
+                {availableFields.map((field) => {
+                  const selected = draftSourceFields.includes(field)
+                  return <button
+                    key={field}
+                    type='button'
+                    className={selected ? 'selected' : ''}
+                    onClick={() => updateSourceField(field, true)}
+                    disabled={selected}
+                  >
+                    {field}
+                  </button>
+                })}
+              </div>
+            </div> : <textarea
               value={sourceFieldsText}
               onChange={(e) => setSourceFieldsText(e.target.value)}
-              placeholder={availableFields.length ? availableFields.join('\n') : 'Во. Описание\nОбр. Результат суммаризации диалога'}
-            />
-            <small className='lab-field-help'>По одному полю на строку. Только эти поля будут анализироваться локальными правилами.</small>
+              placeholder={'Во. Описание\nОбр. Результат суммаризации диалога'}
+            />}
+            <small className={draftHasMissingSourceFields ? 'transport-error' : 'lab-field-help'}>
+              {draftHasEmptySourceFields
+                ? 'Выберите хотя бы одну колонку. Без Source fields правило будет выключено.'
+                : draftHasMissingSourceFields
+                  ? 'В правиле есть поля, которых нет в текущей таблице. Уберите их или выберите существующие колонки.'
+                  : availableFields.length
+                    ? 'Выберите колонки загруженной таблицы, которые будут анализироваться локальными правилами.'
+                    : 'По одному полю на строку. После загрузки Excel здесь появится список колонок.'}
+            </small>
           </label>
 
           <label className='lab-field wide'>
@@ -278,7 +368,7 @@ export function RulePackEditor({
         </div>
 
         <div className='lab-settings-actions'>
-          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim()}>
+          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim() || draftHasMissingSourceFields}>
             Сохранить
           </button>
           <button type='button' onClick={resetDraft}>Отмена</button>

@@ -34,6 +34,7 @@ import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskResultResponse,
   GigaChatLabRowRunResponse,
+  GigaChatRulePack,
   GigaChatSettingsVersionStatus,
   GigaChatRuleEvaluationRow,
   GigaChatTransportName,
@@ -42,6 +43,7 @@ import type {
 } from '../features/gigachat/types'
 
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
+type GigaChatLabTab = 'workspace' | 'settings'
 type LabSetupTab = 'prompts' | 'labels' | 'rules'
 const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   draft: 'Черновая',
@@ -88,6 +90,13 @@ type TokenAccountingState = {
   pricePer1k: number
   totalTokens: number
 }
+
+type RuleGuardIssue = {
+  code: string
+  missingFields: string[]
+}
+
+type PendingRuleGuardAction = (values: Record<string, unknown>) => void | Promise<void>
 
 const TOKEN_ACCOUNTING_STORAGE_KEY = 'gigachat-lab-token-accounting'
 const DEFAULT_RULE_PACK_PROMPT_NOTES = JSON.stringify([
@@ -199,6 +208,41 @@ function stringifyJson(value: unknown) {
 
 function buildSheetRowKey(uploadId: string, sheetName: string, rowIndex: number) {
   return `${uploadId}:${sheetName}:${rowIndex}`
+}
+
+function findRuleGuardIssues(values: Record<string, unknown>, columns: string[]) {
+  if (!columns.length) return [] as RuleGuardIssue[]
+  const available = new Set(columns)
+  return parseRulePacks(values.rule_pack_prompt_notes)
+    .flatMap((rule) => {
+      if (!rule.source_fields.length) {
+        return [{ code: rule.code || 'Без кода', missingFields: ['Source fields не выбраны'] }]
+      }
+      const ruleFields = [
+        ...rule.source_fields,
+        ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
+      ]
+      const missingFields = Array.from(new Set(ruleFields.filter((field) => !available.has(field))))
+      return missingFields.length ? [{ code: rule.code || 'Без кода', missingFields }] : []
+    })
+}
+
+function disableRulesWithMissingFields(values: Record<string, unknown>, columns: string[]) {
+  const available = new Set(columns)
+  const rules = parseRulePacks(values.rule_pack_prompt_notes)
+  const nextRules = rules.map((rule): GigaChatRulePack => {
+    if (!rule.source_fields.length) return rule.enabled ? { ...rule, enabled: false } : rule
+    const ruleFields = [
+      ...rule.source_fields,
+      ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
+    ]
+    const missing = ruleFields.some((field) => !available.has(field))
+    return rule.enabled && missing ? { ...rule, enabled: false } : rule
+  })
+  return {
+    ...values,
+    rule_pack_prompt_notes: JSON.stringify(nextRules, null, 2),
+  }
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -431,6 +475,7 @@ export default function GigaChatPage() {
 
   const [selectedTransport, setSelectedTransport] = useState<GigaChatTransportName>('mtls')
   const [heroCollapsed, setHeroCollapsed] = useState(false)
+  const [activeLabTab, setActiveLabTab] = useState<GigaChatLabTab>('workspace')
   const [settingsCollapsed, setSettingsCollapsed] = useState(false)
   const [activeSetupTab, setActiveSetupTab] = useState<LabSetupTab>('prompts')
   const [uploadCollapsed, setUploadCollapsed] = useState(false)
@@ -469,6 +514,9 @@ export default function GigaChatPage() {
   const [ruleEvaluationError, setRuleEvaluationError] = useState<string | null>(null)
   const [backgroundTaskError, setBackgroundTaskError] = useState<string | null>(null)
   const [processingOverlay, setProcessingOverlay] = useState<ProcessingOverlayState | null>(null)
+  const [ruleGuardIssues, setRuleGuardIssues] = useState<RuleGuardIssue[]>([])
+  const [pendingRuleGuardAction, setPendingRuleGuardAction] = useState<PendingRuleGuardAction | null>(null)
+  const [pendingRuleGuardValues, setPendingRuleGuardValues] = useState<Record<string, unknown> | null>(null)
   const [tokenAccounting, setTokenAccounting] = useState<TokenAccountingState>(() => loadTokenAccountingState())
   const lastAutoPreviewKeyRef = useRef<string | null>(null)
   const lastResolvedPreviewKeyRef = useRef<string | null>(null)
@@ -846,7 +894,7 @@ export default function GigaChatPage() {
   })
 
   const startBackgroundTask = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (valuesForRun?: Record<string, unknown>) => {
       if (!selected?.ready) throw new Error(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке.`)
       if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
       const selectedRows = sheetData.rows
@@ -855,7 +903,7 @@ export default function GigaChatPage() {
       if (!selectedRows.length) throw new Error('Сначала выберите хотя бы одну строку.')
       return startGigaChatBackgroundTask({
         transport: selectedTransport,
-        values: settingValues,
+        values: valuesForRun ?? settingValues,
         columns: finalPromptColumns,
         rows: selectedRows,
         filename: sheetData.filename,
@@ -961,7 +1009,39 @@ export default function GigaChatPage() {
     }))
   }
 
-  const handleRunRow = async (row: Record<string, unknown>, rowIndex: number) => {
+  const runWithRuleGuard = (action: PendingRuleGuardAction) => {
+    if (!sheetData) {
+      void action(settingValues)
+      return
+    }
+    const issues = findRuleGuardIssues(settingValues, sheetData.columns)
+    if (!issues.length) {
+      void action(settingValues)
+      return
+    }
+    setRuleGuardIssues(issues)
+    setPendingRuleGuardValues(disableRulesWithMissingFields(settingValues, sheetData.columns))
+    setPendingRuleGuardAction(() => action)
+  }
+
+  const confirmRuleGuard = () => {
+    if (!pendingRuleGuardAction || !pendingRuleGuardValues) return
+    const action = pendingRuleGuardAction
+    const values = pendingRuleGuardValues
+    setSettingValues(values)
+    setRuleGuardIssues([])
+    setPendingRuleGuardAction(null)
+    setPendingRuleGuardValues(null)
+    void action(values)
+  }
+
+  const cancelRuleGuard = () => {
+    setRuleGuardIssues([])
+    setPendingRuleGuardAction(null)
+    setPendingRuleGuardValues(null)
+  }
+
+  const handleRunRow = async (row: Record<string, unknown>, rowIndex: number, valuesForRun = settingValues) => {
     if (!selected?.ready) {
       setRowRunError(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке. Сначала выберите ready-вариант подключения.`)
       return
@@ -972,7 +1052,7 @@ export default function GigaChatPage() {
     try {
       const data = await runGigaChatWorkbookRow(
         selectedTransport,
-        settingValues,
+        valuesForRun,
         finalPromptColumns,
         row,
         resolvePayloadOverride(),
@@ -991,7 +1071,7 @@ export default function GigaChatPage() {
     }
   }
 
-  const handleRunSelectedRows = async () => {
+  const handleRunSelectedRows = async (valuesForRun = settingValues) => {
     if (!selected?.ready) {
       setBatchRunError(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке. Сначала выберите ready-вариант подключения.`)
       return
@@ -1021,7 +1101,7 @@ export default function GigaChatPage() {
         const rowIndex = rowIndexes[idx]
         const row = sheetData.rows[rowIndex]
         updateProcessingOverlay(idx, rowIndexes.length, `Обрабатываем запись ${idx + 1} из ${rowIndexes.length}`)
-        const data = await runGigaChatWorkbookRow(selectedTransport, settingValues, finalPromptColumns, row, payloadOverride, tokenAccounting.enabled)
+        const data = await runGigaChatWorkbookRow(selectedTransport, valuesForRun, finalPromptColumns, row, payloadOverride, tokenAccounting.enabled)
         accumulateTokenCount(data.request_token_count)
         appendAnnotatedResult(data, rowIndex, row)
         lastResult = data
@@ -1201,23 +1281,32 @@ export default function GigaChatPage() {
         </button>
       </div>
       {!heroCollapsed ? <>
-        <div className='transport-toggle'>
-          <button className={selectedTransport === 'mtls' ? 'active' : ''} onClick={() => setSelectedTransport('mtls')}>mTLS</button>
-          <button className={selectedTransport === 'token' ? 'active' : ''} onClick={() => setSelectedTransport('token')}>Token</button>
-        </div>
         <div className='transport-summary'>
           <div><b>Configured mode:</b> <code>{statusQ.data?.configured_mode ?? '—'}</code></div>
           <div><b>Model:</b> <code>{statusQ.data?.model ?? '—'}</code></div>
           <div><b>Selected transport:</b> <code>{selected?.title ?? selectedTransport}</code></div>
         </div>
-        <div className='transport-actions'>
-          <button onClick={() => selected && probe.mutate(selected.name)} disabled={!selected || probe.isPending}>
-            {probe.isPending ? 'Проверяем соединение...' : `Проверить ${selected?.title ?? ''}`}
-          </button>
-        </div>
       </> : null}
     </section>
 
+    <div className='lab-main-tabs' role='tablist' aria-label='GigaChat Lab tabs'>
+      <button
+        type='button'
+        className={activeLabTab === 'workspace' ? 'active' : ''}
+        onClick={() => setActiveLabTab('workspace')}
+      >
+        Рабочая тетрадь
+      </button>
+      <button
+        type='button'
+        className={activeLabTab === 'settings' ? 'active' : ''}
+        onClick={() => setActiveLabTab('settings')}
+      >
+        Настройки
+      </button>
+    </div>
+
+    {activeLabTab === 'settings' ? <>
     <section className='card transport-result'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
@@ -1325,6 +1414,7 @@ export default function GigaChatPage() {
       </> : null}
     </section>
 
+    </> : <>
     <section className='card transport-result lab-setup-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
@@ -1700,7 +1790,7 @@ export default function GigaChatPage() {
               return [...current, column]
             })
           }}
-          onRunRow={handleRunRow}
+          onRunRow={(row, rowIndex) => runWithRuleGuard((valuesForRun) => handleRunRow(row, rowIndex, valuesForRun))}
           runRowBusyIndex={runRowBusyIndex}
           selectedRowKeys={selectedSheetRowKeys}
           allVisibleRowsSelected={allVisibleRowsSelected}
@@ -1750,8 +1840,8 @@ export default function GigaChatPage() {
               return [...rest, ...keys]
             })
           }}
-          onRunSelectedRows={handleRunSelectedRows}
-          onRunSelectedRowsInBackground={() => startBackgroundTask.mutate()}
+          onRunSelectedRows={() => runWithRuleGuard((valuesForRun) => handleRunSelectedRows(valuesForRun))}
+          onRunSelectedRowsInBackground={() => runWithRuleGuard((valuesForRun) => startBackgroundTask.mutate(valuesForRun))}
           batchBusy={batchBusy}
           busy={batchBusy || runRowBusyIndex !== null || startBackgroundTask.isPending}
           ruleEvaluations={ruleEvaluationMap}
@@ -2212,6 +2302,7 @@ export default function GigaChatPage() {
         {exportValidationRows.isError ? <div className='transport-error'>{formatLabError(exportValidationRows.error as Error, 'validation-файл')}</div> : null}
       </>}
     </section>
+    </>}
 
     <WorkbookSheetPickerModal
       workbook={workbookMeta}
@@ -2225,6 +2316,28 @@ export default function GigaChatPage() {
         selectSheet.mutate({ uploadId: workbookMeta.upload_id, sheetName, rowLimit })
       }}
     />
+
+    {ruleGuardIssues.length ? <div className='sheet-modal-backdrop' onClick={cancelRuleGuard}>
+      <div className='card sheet-modal rule-guard-modal' onClick={(e) => e.stopPropagation()}>
+        <div className='transport-section-head'>
+          <div className='transport-section-title'>
+            <h3>Часть правил будет выключена</h3>
+            <p>В текущей таблице нет колонок для этих правил. Чтобы отправить данные в GigaChat, мы выключим только проблемные правила и продолжим с остальными.</p>
+          </div>
+          <button className='transport-collapse-button' type='button' onClick={cancelRuleGuard}>Отмена</button>
+        </div>
+        <div className='rule-guard-list'>
+          {ruleGuardIssues.map((issue) => <div className='rule-guard-item' key={issue.code}>
+            <strong>{issue.code}</strong>
+            <span>Нет колонок: {issue.missingFields.join(', ')}</span>
+          </div>)}
+        </div>
+        <div className='transport-actions'>
+          <button className='primary' type='button' onClick={confirmRuleGuard}>Продолжить и выключить</button>
+          <button type='button' onClick={cancelRuleGuard}>Не отправлять</button>
+        </div>
+      </div>
+    </div> : null}
 
     {finalPromptModalOpen ? <div className='sheet-modal-backdrop' onClick={() => setFinalPromptModalOpen(false)}>
       <div className='card sheet-modal' onClick={(e) => e.stopPropagation()}>
