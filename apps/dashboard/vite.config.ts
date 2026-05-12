@@ -15,6 +15,12 @@ export default defineConfig({
       clientPort: process.env.VITE_HMR_CLIENT_PORT ? Number(process.env.VITE_HMR_CLIENT_PORT) : undefined,
       protocol: process.env.VITE_HMR_PROTOCOL as 'ws' | 'wss' | undefined,
     },
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     host: process.env.VITE_HOST || '0.0.0.0',

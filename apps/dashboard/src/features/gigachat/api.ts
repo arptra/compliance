@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPostBlob, apiPostForm } from '../../lib/api'
+import { apiGet, apiGetWithProgress, apiPost, apiPostBlob, apiPostForm } from '../../lib/api'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskListResponse,
@@ -62,8 +62,12 @@ export function saveGigaChatLabSettingsVersion(versionId: string, payload: {
   return apiPost<GigaChatLabSettingsVersionResponse>(`/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}`, payload)
 }
 
-export function uploadGigaChatWorkbook(form: FormData) {
-  return apiPostForm<GigaChatWorkbookUploadResponse>('/api/gigachat/lab/workbooks/upload', form)
+export function uploadGigaChatWorkbook(form: FormData, signal?: AbortSignal) {
+  return apiPostForm<GigaChatWorkbookUploadResponse>('/api/gigachat/lab/workbooks/upload', form, { signal })
+}
+
+export function uploadLocalGigaChatWorkbook(filename: string) {
+  return apiPost<GigaChatWorkbookUploadResponse>('/api/gigachat/lab/workbooks/upload-local', { filename })
 }
 
 export function selectGigaChatWorkbookSheet(uploadId: string, sheetName: string, rowLimit = 200) {
@@ -128,6 +132,16 @@ export function getGigaChatBackgroundTaskResult(taskId: string) {
   return apiGet<GigaChatBackgroundTaskResultResponse>(`/api/gigachat/lab/background-tasks/${encodeURIComponent(taskId)}/result`)
 }
 
+export function getGigaChatBackgroundTaskResultWithProgress(
+  taskId: string,
+  onProgress: (loadedBytes: number, totalBytes: number | null) => void,
+) {
+  return apiGetWithProgress<GigaChatBackgroundTaskResultResponse>(
+    `/api/gigachat/lab/background-tasks/${encodeURIComponent(taskId)}/result`,
+    onProgress,
+  )
+}
+
 export function exportGigaChatAnnotatedWorkbook(
   filename: string,
   sheetName: string,
@@ -153,13 +167,14 @@ export function exportGigaChatAnnotatedWorkbook(
     decision_source?: string | null
     source_row: Record<string, unknown>
   }>,
+  onProgress?: (loadedBytes: number, totalBytes: number | null) => void,
 ) {
   return apiPostBlob('/api/gigachat/lab/annotated/export', {
     filename,
     sheet_name: sheetName,
     source_columns: sourceColumns,
     rows,
-  })
+  }, { onProgress })
 }
 
 export function exportGigaChatValidationWorkbook(
@@ -187,11 +202,12 @@ export function exportGigaChatValidationWorkbook(
     decision_source?: string | null
     source_row: Record<string, unknown>
   }>,
+  onProgress?: (loadedBytes: number, totalBytes: number | null) => void,
 ) {
   return apiPostBlob('/api/gigachat/lab/annotated/validation-export', {
     filename,
     sheet_name: sheetName,
     source_columns: sourceColumns,
     rows,
-  })
+  }, { onProgress })
 }

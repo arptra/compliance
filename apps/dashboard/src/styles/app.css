@@ -13,8 +13,6 @@ body { margin: 0; }
 .card { background:white; border:1px solid #e2e8f0; border-radius:8px; padding:12px; }
 .table { width:100%; border-collapse: collapse; background:white; }
 .table th,.table td { border-bottom:1px solid #e2e8f0; padding:8px; text-align:left; vertical-align: top; }
-.startup-loader{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#f8fafc}
-.loader-title{font-size:18px;font-weight:600;color:#1e293b}
 .spinner{width:52px;height:52px;border-radius:999px;border:4px solid #cbd5e1;border-top-color:#2563eb;animation:spin .85s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -339,6 +337,22 @@ body { margin: 0; }
 .giga-processing-widget-copy span {
   color: #cbd5e1;
   font-size: 12px;
+}
+.background-result-lock {
+  position:fixed;
+  inset:0;
+  z-index:120;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:16px;
+  background:rgba(248, 250, 252, 0.86);
+}
+.background-result-lock-card {
+  width:min(560px, 94vw);
+  display:grid;
+  gap:14px;
+  text-align:center;
 }
 .background-task-list {
   display: grid;
@@ -953,6 +967,32 @@ body { margin: 0; }
 .rule-validation-card {
   gap:14px;
 }
+.rule-progress-panel {
+  display:grid;
+  gap:10px;
+  padding:12px;
+  border:1px solid #bfdbfe;
+  border-radius:8px;
+  background:#eff6ff;
+}
+.rule-progress-copy {
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.rule-progress-copy span {
+  color:#475569;
+}
+.export-progress-panel {
+  display:grid;
+  gap:10px;
+  padding:12px;
+  border:1px solid #bbf7d0;
+  border-radius:8px;
+  background:#f0fdf4;
+}
 .rule-validation-summary {
   display:grid;
   grid-template-columns:repeat(3, minmax(0, 1fr));
@@ -988,6 +1028,26 @@ body { margin: 0; }
   border:1px solid #e2e8f0;
   border-radius:8px;
   background:#fff;
+}
+.workbook-table-card {
+  position:relative;
+  overflow:hidden;
+}
+.workbook-rule-lock {
+  position:absolute;
+  inset:0;
+  z-index:20;
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding:84px 16px 16px;
+  background:rgba(248, 250, 252, 0.82);
+}
+.workbook-rule-lock-card {
+  width:min(520px, 92%);
+  display:grid;
+  gap:14px;
+  text-align:center;
 }
 
 @media (max-width: 1100px) {

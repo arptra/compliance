@@ -936,6 +936,22 @@ class GigaChatLabService:
         (upload_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return GigaChatWorkbookUploadResponse(**meta)
 
+    def upload_local_workbook(self, filename: str) -> GigaChatWorkbookUploadResponse:
+        requested_name = Path(filename).name
+        if not requested_name or requested_name != filename:
+            raise ValueError("Local workbook fallback accepts only a file name, not a path.")
+        allowed_dirs = [
+            Path("data/raw"),
+            Path("outputs"),
+            Path("outputs/gigachat_delivery"),
+        ]
+        for directory in allowed_dirs:
+            candidate = directory / requested_name
+            if candidate.is_file():
+                return self.upload_workbook(candidate.name, candidate.read_bytes())
+        searched = ", ".join(str(directory / requested_name) for directory in allowed_dirs)
+        raise FileNotFoundError(f"Local workbook not found. Checked: {searched}")
+
     def load_sheet(self, upload_id: str, req: GigaChatWorkbookSelectSheetRequest) -> GigaChatWorkbookSheetDataResponse:
         upload_dir = self.uploads_dir / upload_id
         meta_path = upload_dir / "meta.json"

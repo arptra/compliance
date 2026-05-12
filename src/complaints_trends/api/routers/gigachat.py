@@ -26,6 +26,7 @@ from ..schemas import (
     GigaChatTransportProbeRequest,
     GigaChatTransportProbeResponse,
     GigaChatTransportStatusResponse,
+    GigaChatWorkbookLocalUploadRequest,
     GigaChatWorkbookSelectSheetRequest,
     GigaChatWorkbookSheetDataResponse,
     GigaChatWorkbookUploadResponse,
@@ -167,6 +168,16 @@ async def upload_workbook(file: UploadFile = File(...), services=Depends(get_ser
     try:
         content = await file.read()
         return services["gigachat_lab"].upload_workbook(file.filename or "upload.xlsx", content)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/upload-local", response_model=GigaChatWorkbookUploadResponse)
+def upload_local_workbook(req: GigaChatWorkbookLocalUploadRequest, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].upload_local_workbook(req.filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

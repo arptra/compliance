@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  getGigaChatBackgroundTaskResult,
+  getGigaChatBackgroundTaskResultWithProgress,
   createGigaChatLabSettingsVersion,
-  evaluateGigaChatRulePacks,
   exportGigaChatAnnotatedWorkbook,
   exportGigaChatValidationWorkbook,
   getGigaChatLabSettingsVersion,
@@ -17,6 +16,7 @@ import {
   saveGigaChatFinalPrompt,
   selectGigaChatWorkbookSheet,
   startGigaChatBackgroundTask,
+  uploadLocalGigaChatWorkbook,
   uploadGigaChatWorkbook,
 } from '../features/gigachat/api'
 import { GigaChatProcessingOverlay } from '../features/gigachat/GigaChatProcessingOverlay'
@@ -34,6 +34,7 @@ import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskResultResponse,
   GigaChatLabRowRunResponse,
+  GigaChatRuleEvaluationResponse,
   GigaChatRulePack,
   GigaChatSettingsVersionStatus,
   GigaChatRuleEvaluationRow,
@@ -45,6 +46,8 @@ import type {
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
 type GigaChatLabTab = 'workspace' | 'settings'
 type LabSetupTab = 'prompts' | 'labels' | 'rules'
+const WORKBOOK_UPLOAD_TIMEOUT_MS = 15_000
+const RULE_EVALUATION_CHUNK_COUNT = 25
 const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   draft: 'Черновая',
   test: 'Тестовая',
@@ -52,6 +55,40 @@ const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   release: 'Релизная',
   archived: 'Архивная',
 }
+
+function nextFrame() {
+  return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} МБ`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} КБ`
+  return `${bytes} Б`
+}
+
+async function evaluateRulePacksWithProgress(
+  values: Record<string, unknown>,
+  rows: Array<Record<string, unknown>>,
+  onProgress: (processed: number, total: number) => void,
+): Promise<GigaChatRuleEvaluationResponse> {
+  const total = rows.length
+  const chunkSize = Math.max(1, Math.ceil(total / RULE_EVALUATION_CHUNK_COUNT))
+  const evaluations: GigaChatRuleEvaluationRow[] = []
+  let rulePacks: GigaChatRuleEvaluationResponse['rule_packs'] = []
+
+  onProgress(0, total)
+  for (let start = 0; start < total; start += chunkSize) {
+    const chunk = rows.slice(start, start + chunkSize)
+    const chunkResult = evaluateRulePacksLocally(values, chunk)
+    if (!rulePacks.length) rulePacks = chunkResult.rule_packs
+    evaluations.push(...chunkResult.evaluations.map((item) => ({ ...item, row_index: item.row_index + start })))
+    onProgress(Math.min(total, start + chunk.length), total)
+    await nextFrame()
+  }
+
+  return { rule_packs: rulePacks, evaluations }
+}
+
 type AnnotatedSheetRow = {
   rowKey: string
   rowIndex: number
@@ -424,6 +461,9 @@ function extractReclassifiedTopic(responseJson: unknown) {
 function formatLabError(error: Error | null | undefined, resourceLabel: string) {
   if (!error) return ''
   const raw = String(error.message || '').trim()
+  if (error.name === 'AbortError' || raw === 'WORKBOOK_UPLOAD_TIMEOUT') {
+    return `Не удалось загрузить ${resourceLabel}: браузер не получил ответ от локального API за ${Math.round(WORKBOOK_UPLOAD_TIMEOUT_MS / 1000)} секунд, fallback по имени файла тоже не сработал.`
+  }
   try {
     const parsed = JSON.parse(raw) as { detail?: string }
     if (parsed?.detail === 'Not Found') {
@@ -512,6 +552,9 @@ export default function GigaChatPage() {
   const [rowRunError, setRowRunError] = useState<string | null>(null)
   const [batchRunError, setBatchRunError] = useState<string | null>(null)
   const [ruleEvaluationError, setRuleEvaluationError] = useState<string | null>(null)
+  const [ruleEvaluationProgress, setRuleEvaluationProgress] = useState<{ processed: number; total: number } | null>(null)
+  const [backgroundResultProgress, setBackgroundResultProgress] = useState<{ loadedBytes: number; totalBytes: number | null } | null>(null)
+  const [exportProgress, setExportProgress] = useState<{ label: string; loadedBytes: number; totalBytes: number | null } | null>(null)
   const [backgroundTaskError, setBackgroundTaskError] = useState<string | null>(null)
   const [processingOverlay, setProcessingOverlay] = useState<ProcessingOverlayState | null>(null)
   const [ruleGuardIssues, setRuleGuardIssues] = useState<RuleGuardIssue[]>([])
@@ -520,6 +563,7 @@ export default function GigaChatPage() {
   const [tokenAccounting, setTokenAccounting] = useState<TokenAccountingState>(() => loadTokenAccountingState())
   const lastAutoPreviewKeyRef = useRef<string | null>(null)
   const lastResolvedPreviewKeyRef = useRef<string | null>(null)
+  const workbookUploadAbortRef = useRef<AbortController | null>(null)
   const annotatedTable = useResizableTable()
   const {
     hoveredCell: hoveredAnnotatedCell,
@@ -629,9 +673,32 @@ export default function GigaChatPage() {
   const uploadWorkbook = useMutation({
     mutationFn: async () => {
       if (!selectedFile) throw new Error('Выберите Excel или CSV файл')
+      try {
+        return await uploadLocalGigaChatWorkbook(selectedFile.name)
+      } catch {
+        // Fall back to browser multipart for files that are not present in local project folders.
+      }
+      workbookUploadAbortRef.current?.abort()
+      const controller = new AbortController()
+      workbookUploadAbortRef.current = controller
+      const timeoutId = window.setTimeout(() => {
+        controller.abort(new DOMException('WORKBOOK_UPLOAD_TIMEOUT', 'AbortError'))
+      }, WORKBOOK_UPLOAD_TIMEOUT_MS)
       const form = new FormData()
       form.append('file', selectedFile)
-      return uploadGigaChatWorkbook(form)
+      try {
+        return await uploadGigaChatWorkbook(form, controller.signal)
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return uploadLocalGigaChatWorkbook(selectedFile.name)
+        }
+        throw error
+      } finally {
+        window.clearTimeout(timeoutId)
+        if (workbookUploadAbortRef.current === controller) {
+          workbookUploadAbortRef.current = null
+        }
+      }
     },
     onSuccess: (data) => {
       setWorkbookMeta(data)
@@ -645,6 +712,9 @@ export default function GigaChatPage() {
       } else {
         setSheetPickerOpen(true)
       }
+    },
+    onError: () => {
+      workbookUploadAbortRef.current = null
     },
   })
 
@@ -711,6 +781,9 @@ export default function GigaChatPage() {
           decision_source: row.decisionSource,
           source_row: row.sourceRow,
         })),
+        (loadedBytes, totalBytes) => {
+          setExportProgress({ label: 'Выгружаем Excel', loadedBytes, totalBytes })
+        },
       )
     },
     onSuccess: ({ blob, filename }) => {
@@ -718,6 +791,7 @@ export default function GigaChatPage() {
       const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'annotated'}_annotated.xlsx`
       downloadBlob(blob, filename || fallbackName)
     },
+    onSettled: () => setExportProgress(null),
   })
 
   const exportValidationRows = useMutation({
@@ -748,6 +822,9 @@ export default function GigaChatPage() {
           decision_source: row.decisionSource,
           source_row: row.sourceRow,
         })),
+        (loadedBytes, totalBytes) => {
+          setExportProgress({ label: 'Готовим validation-файл', loadedBytes, totalBytes })
+        },
       )
     },
     onSuccess: ({ blob, filename }) => {
@@ -755,17 +832,14 @@ export default function GigaChatPage() {
       const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'annotated'}_validation.xlsx`
       downloadBlob(blob, filename || fallbackName)
     },
+    onSettled: () => setExportProgress(null),
   })
 
   const evaluateRulePacks = useMutation({
     mutationFn: async (rows: Array<Record<string, unknown>>) => {
-      try {
-        return await evaluateGigaChatRulePacks(settingValues, rows)
-      } catch (error) {
-        const message = String((error as Error).message || '')
-        if (!message.includes('Not Found')) throw error
-        return evaluateRulePacksLocally(settingValues, rows)
-      }
+      return evaluateRulePacksWithProgress(settingValues, rows, (processed, total) => {
+        setRuleEvaluationProgress({ processed, total })
+      })
     },
     onSuccess: (data) => {
       setRuleEvaluationMap(Object.fromEntries(data.evaluations.map((item) => [item.row_index, item])))
@@ -773,6 +847,9 @@ export default function GigaChatPage() {
     },
     onError: (error) => {
       setRuleEvaluationError(formatLabError(error as Error, 'rule packs'))
+    },
+    onSettled: () => {
+      setRuleEvaluationProgress(null)
     },
   })
 
@@ -882,7 +959,12 @@ export default function GigaChatPage() {
   }
 
   const loadBackgroundTaskResult = useMutation({
-    mutationFn: getGigaChatBackgroundTaskResult,
+    mutationFn: (taskId: string) => {
+      setBackgroundResultProgress({ loadedBytes: 0, totalBytes: null })
+      return getGigaChatBackgroundTaskResultWithProgress(taskId, (loadedBytes, totalBytes) => {
+        setBackgroundResultProgress({ loadedBytes, totalBytes })
+      })
+    },
     onSuccess: (data) => {
       applyBackgroundTaskResult(data)
       setSearchParams((current) => {
@@ -891,6 +973,7 @@ export default function GigaChatPage() {
       }, { replace: true })
     },
     onError: (error) => setBackgroundTaskError(formatLabError(error as Error, 'результат фоновой задачи')),
+    onSettled: () => setBackgroundResultProgress(null),
   })
 
   const startBackgroundTask = useMutation({
@@ -1132,6 +1215,17 @@ export default function GigaChatPage() {
   const selected = transports.find((item) => item.name === selectedTransport) ?? transports[0]
   const hasMultipleSheets = (workbookMeta?.sheet_count ?? 0) > 1
   const selectedSheetName = sheetData?.sheet_name ?? null
+  const ruleEvaluationTotal = ruleEvaluationProgress?.total ?? sheetData?.rows.length ?? 0
+  const ruleEvaluationProcessed = ruleEvaluationProgress?.processed ?? 0
+  const ruleEvaluationRemaining = Math.max(0, ruleEvaluationTotal - ruleEvaluationProcessed)
+  const ruleEvaluationPercent = ruleEvaluationTotal ? Math.round((ruleEvaluationProcessed / ruleEvaluationTotal) * 100) : 0
+  const backgroundLoadedBytes = backgroundResultProgress?.loadedBytes ?? 0
+  const backgroundTotalBytes = backgroundResultProgress?.totalBytes ?? null
+  const backgroundLoadPercent = backgroundTotalBytes ? Math.min(100, Math.round((backgroundLoadedBytes / backgroundTotalBytes) * 100)) : null
+  const exportLoadedBytes = exportProgress?.loadedBytes ?? 0
+  const exportTotalBytes = exportProgress?.totalBytes ?? null
+  const exportPercent = exportTotalBytes ? Math.min(100, Math.round((exportLoadedBytes / exportTotalBytes) * 100)) : null
+  const exportBusy = exportAnnotatedRows.isPending || exportValidationRows.isPending
   const requestSettingsFields = (selectedVersionQ.data?.fields ?? []).filter((field) => !labelingFieldKeys.has(field.key))
   const finalPromptDraftDirty = finalPromptDraftText !== finalPromptBaseText
   const finalPromptDraftValidation = useMemo(() => {
@@ -1270,6 +1364,26 @@ export default function GigaChatPage() {
   }
 
   return <div className='transport-page'>
+    {loadBackgroundTaskResult.isPending ? <div className='background-result-lock' role='status' aria-live='polite'>
+      <div className='card background-result-lock-card'>
+        <div className='spinner workbook-upload-spinner' aria-hidden='true' />
+        <div className='giga-processing-progress-copy'>
+          <div className='giga-processing-progress-title'>Загружаем рабочую тетрадь</div>
+          <div className='lab-muted'>
+            {backgroundLoadPercent !== null
+              ? `Получено ${formatBytes(backgroundLoadedBytes)} из ${formatBytes(backgroundTotalBytes ?? 0)}. Осталось ${formatBytes(Math.max(0, (backgroundTotalBytes ?? 0) - backgroundLoadedBytes))}.`
+              : `Получено ${formatBytes(backgroundLoadedBytes)}. Размер ответа уточняется.`}
+          </div>
+        </div>
+        <div className='giga-processing-progressbar' aria-label='background result loading progress'>
+          <div
+            className='giga-processing-progressbar-fill'
+            style={{ width: `${backgroundLoadPercent ?? Math.min(95, Math.max(8, Math.round(backgroundLoadedBytes / 80_000)))}%` }}
+          />
+        </div>
+      </div>
+    </div> : null}
+
     <section className='transport-hero card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
@@ -1619,6 +1733,16 @@ export default function GigaChatPage() {
           <div className='spinner workbook-upload-spinner' aria-label='uploading workbook' />
           <div><b>Загружаем файл...</b></div>
           <div className='lab-muted'>Во время загрузки выбор файла и кнопка заблокированы.</div>
+          <button
+            type='button'
+            onClick={() => {
+              workbookUploadAbortRef.current?.abort()
+              workbookUploadAbortRef.current = null
+              uploadWorkbook.reset()
+            }}
+          >
+            Отменить загрузку
+          </button>
         </div>
       </div> : null}
 
@@ -1662,6 +1786,16 @@ export default function GigaChatPage() {
       </div>
 
       {!sheetData ? <p>Загрузите Excel и выберите лист, чтобы проверить rule packs.</p> : <>
+        {evaluateRulePacks.isPending ? <div className='rule-progress-panel'>
+          <div className='rule-progress-copy'>
+            <strong>Проверяем правила</strong>
+            <span>{ruleEvaluationProcessed} из {ruleEvaluationTotal} строк обработано, осталось {ruleEvaluationRemaining}</span>
+          </div>
+          <div className='giga-processing-progressbar' aria-label='rule evaluation progress'>
+            <div className='giga-processing-progressbar-fill' style={{ width: `${ruleEvaluationPercent}%` }} />
+          </div>
+        </div> : null}
+
         <div className='rule-validation-summary'>
           <div className='rule-validation-kpi'>
             <span>Строк с rule hits</span>
@@ -1701,7 +1835,6 @@ export default function GigaChatPage() {
           </div>)}
         </div> : <div className='lab-muted'>Пока совпадений нет. Если лист уже выбран, можно нажать “Прогнать правила” или проверить keywords/фильтры во вкладке “Правила”.</div>}
 
-        {evaluateRulePacks.isPending ? <div className='lab-muted'>Пересчитываем локальные rule packs для текущих строк...</div> : null}
         {ruleEvaluationError ? <div className='transport-error'>{ruleEvaluationError}</div> : null}
       </>}
     </section>
@@ -1738,7 +1871,7 @@ export default function GigaChatPage() {
       </>}
     </section>
 
-    <section className='card transport-result'>
+    <section className='card transport-result workbook-table-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Рабочая таблица</h3>
@@ -1748,6 +1881,21 @@ export default function GigaChatPage() {
           {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
         </button>
       </div>
+
+      {evaluateRulePacks.isPending ? <div className='workbook-rule-lock'>
+        <div className='card workbook-rule-lock-card'>
+          <div className='spinner workbook-upload-spinner' aria-hidden='true' />
+          <div className='giga-processing-progress-copy'>
+            <div className='giga-processing-progress-title'>Проверяем правила</div>
+            <div className='lab-muted'>
+              Обработано {ruleEvaluationProcessed} из {ruleEvaluationTotal} строк. Осталось {ruleEvaluationRemaining}.
+            </div>
+          </div>
+          <div className='giga-processing-progressbar' aria-label='workbook lock rule progress'>
+            <div className='giga-processing-progressbar-fill' style={{ width: `${ruleEvaluationPercent}%` }} />
+          </div>
+        </div>
+      </div> : null}
 
       {!workbookCollapsed ? <>
         {!workbookMeta ? <p>Сначала загрузите Excel или CSV файл.</p> : null}
@@ -1864,14 +2012,14 @@ export default function GigaChatPage() {
           <button
             type='button'
             onClick={() => exportAnnotatedRows.mutate()}
-            disabled={exportAnnotatedRows.isPending}
+            disabled={exportBusy}
           >
             {exportAnnotatedRows.isPending ? 'Выгружаем Excel...' : 'Выгрузить в Excel'}
           </button>
           <button
             type='button'
             onClick={() => exportValidationRows.mutate()}
-            disabled={exportValidationRows.isPending}
+            disabled={exportBusy}
           >
             {exportValidationRows.isPending ? 'Готовим validation...' : 'Сделать validation-файл'}
           </button>
@@ -1879,6 +2027,26 @@ export default function GigaChatPage() {
       </div>
 
       {!annotatedRows.length ? <p>Пока здесь пусто. Отправьте одну строку или выбранные строки в GigaChat, и результаты появятся в этой таблице.</p> : <>
+        {exportBusy ? <div className='export-progress-panel'>
+          <div className='rule-progress-copy'>
+            <strong>{exportProgress?.label ?? 'Фоновая выгрузка'}</strong>
+            <span>
+              {exportPercent !== null
+                ? `${formatBytes(exportLoadedBytes)} из ${formatBytes(exportTotalBytes ?? 0)}`
+                : exportLoadedBytes
+                  ? `${formatBytes(exportLoadedBytes)} получено`
+                  : 'Собираем файл на backend...'}
+            </span>
+          </div>
+          <div className='giga-processing-progressbar' aria-label='export progress'>
+            <div
+              className='giga-processing-progressbar-fill'
+              style={{ width: `${exportPercent ?? (exportLoadedBytes ? Math.min(95, Math.max(8, Math.round(exportLoadedBytes / 40_000))) : 8)}%` }}
+            />
+          </div>
+          <div className='lab-muted'>Можно продолжать смотреть страницу, выгрузка идёт в фоне. Кнопки экспорта временно заблокированы.</div>
+        </div> : null}
+
         <div className='annotated-filters'>
           <label className='annotated-filter'>
             <span>Фильтр по классу</span>

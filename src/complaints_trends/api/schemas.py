@@ -152,6 +152,10 @@ class GigaChatWorkbookUploadResponse(BaseModel):
     sheets: list[GigaChatWorkbookSheetPreview] = Field(default_factory=list)
 
 
+class GigaChatWorkbookLocalUploadRequest(BaseModel):
+    filename: str
+
+
 class GigaChatWorkbookSelectSheetRequest(BaseModel):
     sheet_name: str
     row_limit: int = 200
