@@ -32,7 +32,7 @@ soft_stop_port_listener() {
   fi
 
   local pids
-  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ')"
+  pids="$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
   if [[ -z "${pids// /}" ]]; then
     return 0
   fi
