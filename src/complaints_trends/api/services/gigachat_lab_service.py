@@ -84,7 +84,6 @@ class GigaChatLabService:
         "user_prompt_prefix",
         "context_notes",
         "classification_prompt_notes",
-        "tagging_prompt_notes",
         "rule_pack_prompt_notes",
     }
     RULE_FILTER_FIELD_ALIASES: dict[str, list[str]] = {
@@ -100,7 +99,6 @@ class GigaChatLabService:
         {"key": "user_prompt_prefix", "label": "User prompt prefix", "input_type": "textarea", "section": "Промпты", "help_text": "Дополнительный текст перед пользовательским payload."},
         {"key": "context_notes", "label": "Context notes", "input_type": "textarea", "section": "Промпты", "help_text": "Текстовые инструкции про контекст, листы Excel и особенности эксперимента."},
         {"key": "classification_prompt_notes", "label": "Классификации", "input_type": "textarea", "section": "Разметка", "help_text": "Правила корзин, категорий и подкатегорий для классификации."},
-        {"key": "tagging_prompt_notes", "label": "Теги", "input_type": "textarea", "section": "Разметка", "help_text": "Правила тегирования, словари тегов и требования к их формату."},
         {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
     ]
     _background_lock = threading.Lock()
@@ -260,7 +258,6 @@ class GigaChatLabService:
         default_user_prompt_prefix = str(llm.get("user_prompt_prefix", "") or "").strip() or self.DEFAULT_USER_PROMPT_PREFIX
         default_context_notes = str(llm.get("context_notes", "") or "").strip() or self.DEFAULT_CONTEXT_NOTES
         default_classification_notes = str(llm.get("classification_prompt_notes", "") or "").strip() or self._default_classification_rules()
-        default_tagging_notes = str(llm.get("tagging_prompt_notes", "") or "").strip() or self._default_tag_rules()
         default_rule_pack_notes = str(llm.get("rule_pack_prompt_notes", "") or "").strip() or self._default_rule_packs()
         return {
             "model": llm.get("model", "GigaChat"),
@@ -271,7 +268,6 @@ class GigaChatLabService:
             "user_prompt_prefix": default_user_prompt_prefix,
             "context_notes": default_context_notes,
             "classification_prompt_notes": default_classification_notes,
-            "tagging_prompt_notes": default_tagging_notes,
             "rule_pack_prompt_notes": default_rule_pack_notes,
         }
 
@@ -1356,10 +1352,7 @@ class GigaChatLabService:
         context_notes = str(values.get("context_notes", getattr(self.cfg.llm, "context_notes", "")) or "").strip()
 
         class_rules = self._format_rule_lines(values.get("classification_prompt_notes", ""), label="Классификации")
-        tag_rules = self._format_rule_lines(values.get("tagging_prompt_notes", ""), label="Теги")
         rule_pack_rules = self._format_rule_pack_lines(values.get("rule_pack_prompt_notes", ""))
-        parsed_class_rules = self._parse_rule_items(values.get("classification_prompt_notes", ""))
-        parsed_tag_rules = self._parse_rule_items(values.get("tagging_prompt_notes", ""))
         placeholder_row = self._placeholder_row(columns)
 
         prompt_parts: list[str] = []
@@ -1368,11 +1361,10 @@ class GigaChatLabService:
         if user_prompt_prefix:
             prompt_parts.append(user_prompt_prefix)
         prompt_parts.append(class_rules)
-        prompt_parts.append(tag_rules)
         prompt_parts.append(rule_pack_rules)
         prompt_parts.append(
             "Semantic tag review:\n"
-            "- Можно назначать только теги из раздела `Теги` и из действий активных assign_tag rule packs.\n"
+            "- Можно назначать только теги из действий активных assign_tag rule packs.\n"
             "- Local rule hits являются подсказками, но не ограничивают результат: проверь разрешенные теги независимо.\n"
             "- Для каждого итогового тега укажи `tag_decisions`: tag, decision (`confirmed`, `added`, `rejected`, `not_applicable`), "
             "source (`local_rule`, `llm_semantic`), match_type (`exact`, `stem`, `typo`, `synonym`, `semantic`, `rejected`, `none`), evidence, reason.\n"

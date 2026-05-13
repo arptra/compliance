@@ -482,7 +482,7 @@ export default function GigaChatPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const labelingFieldKeys = new Set(['classification_prompt_notes', 'tagging_prompt_notes', 'rule_pack_prompt_notes'])
+  const labelingFieldKeys = new Set(['classification_prompt_notes', 'rule_pack_prompt_notes'])
   const statusQ = useQuery({
     queryKey: ['gigachat-status'],
     queryFn: getGigaChatStatus,
@@ -1639,17 +1639,17 @@ export default function GigaChatPage() {
             </button>
             <button
               type='button'
-              className={activeSetupTab === 'labels' ? 'active' : ''}
-              onClick={() => setActiveSetupTab('labels')}
-            >
-              Классы и теги
-            </button>
-            <button
-              type='button'
               className={activeSetupTab === 'rules' ? 'active' : ''}
               onClick={() => setActiveSetupTab('rules')}
             >
               Правила
+            </button>
+            <button
+              type='button'
+              className={activeSetupTab === 'labels' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('labels')}
+            >
+              Классы
             </button>
           </div>
 
@@ -1665,9 +1665,9 @@ export default function GigaChatPage() {
             />
           </div> : null}
 
-          {activeSetupTab === 'labels' ? <div className='lab-tab-panel labeling-grid two-columns'>
+          {activeSetupTab === 'labels' ? <div className='lab-tab-panel'>
             <LabelingRulesEditor
-              title='Классификации'
+              title='Классы'
               description='Список классов для классификации: корзины, категории, подкатегории и краткие правила, как их выбирать.'
               addLabel='Добавить класс'
               clearLabel='Сбросить все классы'
@@ -1678,20 +1678,6 @@ export default function GigaChatPage() {
               onClear={() => persistSettingValue('classification_prompt_notes', '[]')}
               persistBusy={saveSettings.isPending}
               persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'классы') : null}
-            />
-
-            <LabelingRulesEditor
-              title='Теги'
-              description='Список тегов и краткие описания, когда тег должен присваиваться обращению.'
-              addLabel='Добавить тег'
-              clearLabel='Сбросить все теги'
-              nameLabel='Тег'
-              value={settingValues.tagging_prompt_notes}
-              onChange={(value) => setSettingValues((current) => ({ ...current, tagging_prompt_notes: value }))}
-              onPersist={(value) => persistSettingValue('tagging_prompt_notes', value)}
-              onClear={() => persistSettingValue('tagging_prompt_notes', '[]')}
-              persistBusy={saveSettings.isPending}
-              persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'теги') : null}
             />
           </div> : null}
 
