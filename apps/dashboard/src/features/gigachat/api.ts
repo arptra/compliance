@@ -77,18 +77,27 @@ export function selectGigaChatWorkbookSheet(uploadId: string, sheetName: string,
   })
 }
 
-export function exportGigaChatWorkbookSheet(
-  uploadId: string,
+export function exportGigaChatWorkbookRows(
   filename: string,
   sheetName: string,
+  sourceColumns: string[],
+  rows: Array<{
+    row_index?: number | null
+    source_row: Record<string, unknown>
+    rule_hits?: string[]
+    suggested_actions?: string[]
+    matched_keywords?: string[]
+    matched_fields?: string[]
+    suggested_topics?: string[]
+  }>,
   onProgress?: (loadedBytes: number, totalBytes: number | null) => void,
 ) {
-  return apiPostBlob(`/api/gigachat/lab/workbooks/${encodeURIComponent(uploadId)}/export-sheet`, {
+  return apiPostBlob('/api/gigachat/lab/workbooks/export-rows', {
+    filename,
     sheet_name: sheetName,
-  }, { onProgress }).then((result) => ({
-    ...result,
-    filename: result.filename || `${filename.replace(/\.[^.]+$/u, '') || 'workbook'}_${sheetName || 'sheet'}.xlsx`,
-  }))
+    source_columns: sourceColumns,
+    rows,
+  }, { onProgress })
 }
 
 export function previewGigaChatFinalPrompt(values: Record<string, unknown>, columns: string[]) {

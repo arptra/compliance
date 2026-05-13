@@ -161,8 +161,21 @@ class GigaChatWorkbookSelectSheetRequest(BaseModel):
     row_limit: int = 200
 
 
-class GigaChatWorkbookExportSheetRequest(BaseModel):
-    sheet_name: str
+class GigaChatWorkbookExportRow(BaseModel):
+    row_index: int | None = None
+    source_row: dict[str, Any] = Field(default_factory=dict)
+    rule_hits: list[str] = Field(default_factory=list)
+    suggested_actions: list[str] = Field(default_factory=list)
+    matched_keywords: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
+    suggested_topics: list[str] = Field(default_factory=list)
+
+
+class GigaChatWorkbookRowsExportRequest(BaseModel):
+    filename: str = "workbook.xlsx"
+    sheet_name: str = "data"
+    source_columns: list[str] = Field(default_factory=list)
+    rows: list[GigaChatWorkbookExportRow] = Field(default_factory=list)
 
 
 class GigaChatWorkbookSheetDataResponse(BaseModel):

@@ -45,7 +45,7 @@ from ..schemas import (
     GigaChatLabSettingsVersionSummary,
     GigaChatLabSettingsVersionUpdateRequest,
     GigaChatWorkbookSelectSheetRequest,
-    GigaChatWorkbookExportSheetRequest,
+    GigaChatWorkbookRowsExportRequest,
     GigaChatWorkbookSheetDataResponse,
     GigaChatWorkbookSheetPreview,
     GigaChatWorkbookUploadResponse,
@@ -902,35 +902,43 @@ class GigaChatLabService:
         export_filename = f"{Path(req.filename or 'annotated.xlsx').stem}_validation.xlsx"
         return export_filename, buffer.getvalue()
 
-    def export_workbook_sheet(self, upload_id: str, req: GigaChatWorkbookExportSheetRequest) -> tuple[str, bytes]:
-        upload_dir = self.uploads_dir / upload_id
-        meta_path = upload_dir / "meta.json"
-        if not meta_path.exists():
-            raise FileNotFoundError(f"Workbook upload not found: {upload_id}")
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        filename = str(meta.get("filename", "workbook.xlsx"))
-        file_format = str(meta.get("file_format", "excel"))
-        stored_path = next(upload_dir.glob("source.*"), None)
-        if stored_path is None:
-            raise FileNotFoundError(f"Workbook source file not found for upload: {upload_id}")
+    def export_workbook_rows(self, req: GigaChatWorkbookRowsExportRequest) -> tuple[str, bytes]:
+        source_columns = [str(column).strip() for column in req.source_columns if str(column).strip()]
+        ordered_rows = sorted(
+            list(req.rows),
+            key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
+        )
+        export_rows: list[dict[str, Any]] = []
+        for row in ordered_rows:
+            export_row: dict[str, Any] = {
+                "Row index": "" if row.row_index is None else int(row.row_index) + 1,
+                "Rule hits": ", ".join([str(hit).strip() for hit in row.rule_hits if str(hit).strip()]),
+                "Suggested action": ", ".join([str(item).strip() for item in row.suggested_actions if str(item).strip()]),
+                "Matched keywords": ", ".join([str(item).strip() for item in row.matched_keywords if str(item).strip()]),
+                "Matched fields": ", ".join([str(item).strip() for item in row.matched_fields if str(item).strip()]),
+                "Suggested topic": ", ".join([str(item).strip() for item in row.suggested_topics if str(item).strip()]),
+            }
+            for column in source_columns:
+                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
+            export_rows.append(export_row)
 
-        if file_format == "csv":
-            df = self._read_csv_frame(stored_path)
-            sheet_name = "data"
-        else:
-            sheet_name = req.sheet_name
-            available_sheets = {str(sheet.get("name", "")) for sheet in meta.get("sheets", [])}
-            if sheet_name not in available_sheets:
-                raise ValueError(f"Sheet not found in workbook: {sheet_name}")
-            df = pd.read_excel(stored_path, sheet_name=sheet_name, dtype=object)
-        df = self._drop_empty_unnamed_columns(df)
+        ordered_columns = [
+            "Row index",
+            "Rule hits",
+            "Suggested action",
+            "Matched keywords",
+            "Matched fields",
+            "Suggested topic",
+            *source_columns,
+        ]
+        df = pd.DataFrame(export_rows, columns=ordered_columns)
         df = self._sanitize_for_excel(df)
 
         buffer = BytesIO()
-        safe_sheet_name = self._excel_safe_sheet_name(sheet_name or "data")
+        sheet_name = self._excel_safe_sheet_name(req.sheet_name or "data")
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-            ws = writer.sheets[safe_sheet_name]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.sheets[sheet_name]
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
             for col_idx in range(1, ws.max_column + 1):
@@ -942,7 +950,7 @@ class GigaChatLabService:
                         cell.number_format = "yyyy-mm-dd"
 
         buffer.seek(0)
-        export_filename = f"{Path(filename or 'workbook.xlsx').stem}_{sheet_name or 'sheet'}.xlsx"
+        export_filename = f"{Path(req.filename or 'workbook.xlsx').stem}_{req.sheet_name or 'sheet'}_rows.xlsx"
         return export_filename, buffer.getvalue()
 
     def upload_workbook(self, filename: str, content: bytes) -> GigaChatWorkbookUploadResponse:

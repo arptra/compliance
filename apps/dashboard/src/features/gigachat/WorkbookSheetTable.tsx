@@ -23,9 +23,12 @@ export function WorkbookSheetTable({
   onPickRandomRows,
   onRunSelectedRows,
   onRunSelectedRowsInBackground,
+  onExportRows,
   onSelectRuleHitRows,
   onSelectNoRuleHitRows,
   batchBusy,
+  exportBusy,
+  exportPending,
   busy,
   ruleEvaluations,
   rulePackOptions,
@@ -46,9 +49,12 @@ export function WorkbookSheetTable({
   onPickRandomRows: () => void
   onRunSelectedRows: () => void
   onRunSelectedRowsInBackground?: () => void
+  onExportRows: (rows: Array<{ rowIndex: number; row: Record<string, unknown>; evaluation?: GigaChatRuleEvaluationRow }>) => void
   onSelectRuleHitRows: () => void
   onSelectNoRuleHitRows: () => void
   batchBusy?: boolean
+  exportBusy?: boolean
+  exportPending?: boolean
   busy?: boolean
   ruleEvaluations: Record<number, GigaChatRuleEvaluationRow>
   rulePackOptions: string[]
@@ -90,6 +96,17 @@ export function WorkbookSheetTable({
   )
   const virtualTable = useVirtualTableRows(visibleRows, rowClamp === 'all' ? 148 : 112)
   const tableColumnCount = 7 + data.columns.length
+  const selectedRowsForExport = useMemo(
+    () => data.rows
+      .map((row, idx) => ({ row, idx, evaluation: ruleEvaluations[idx] }))
+      .filter(({ idx }) => selectedRowKeys.includes(`${data.upload_id}:${data.sheet_name}:${idx}`)),
+    [data.rows, data.sheet_name, data.upload_id, ruleEvaluations, selectedRowKeys],
+  )
+  const visibleRowsForExport = useMemo(
+    () => virtualTable.virtualRows.map(({ item }) => item),
+    [virtualTable.virtualRows],
+  )
+  const exportRows = selectedRowsForExport.length ? selectedRowsForExport : visibleRowsForExport
 
   const renderCellValue = (column: string, value: unknown) => {
     const text = String(value ?? '')
@@ -167,6 +184,17 @@ export function WorkbookSheetTable({
       <button type='button' onClick={onPickRandomRows} disabled={Boolean(busy)}>Выбрать случайно</button>
       <button type='button' onClick={onSelectRuleHitRows} disabled={Boolean(busy)}>Выбрать с rule hits</button>
       <button type='button' onClick={onSelectNoRuleHitRows} disabled={Boolean(busy)}>Выбрать без rule hits</button>
+      <button
+        type='button'
+        onClick={() => onExportRows(exportRows.map(({ idx, row, evaluation }) => ({ rowIndex: idx, row, evaluation })))}
+        disabled={!exportRows.length || Boolean(exportBusy)}
+      >
+        {exportPending
+          ? 'Выгружаем Excel...'
+          : selectedRowsForExport.length
+            ? `Выгрузить выбранное в Excel (${selectedRowsForExport.length})`
+            : `Выгрузить видимое в Excel (${visibleRowsForExport.length})`}
+      </button>
       <button type='button' onClick={onRunSelectedRows} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
         {batchBusy ? 'Отправляем выбранные...' : 'Отправить выбранное в GigaChat для классификации'}
       </button>

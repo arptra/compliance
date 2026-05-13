@@ -6,7 +6,7 @@ import {
   createGigaChatLabSettingsVersion,
   exportGigaChatAnnotatedWorkbook,
   exportGigaChatValidationWorkbook,
-  exportGigaChatWorkbookSheet,
+  exportGigaChatWorkbookRows,
   getGigaChatLabSettingsVersion,
   getGigaChatStatus,
   listGigaChatLabSettingsVersions,
@@ -77,6 +77,7 @@ async function evaluateRulePacksWithProgress(
   let rulePacks: GigaChatRuleEvaluationResponse['rule_packs'] = []
 
   onProgress(0, total)
+  await nextFrame()
   for (let start = 0; start < total; start += chunkSize) {
     const chunk = rows.slice(start, start + chunkSize)
     const chunkResult = evaluateRulePacksLocally(values, chunk)
@@ -749,21 +750,31 @@ export default function GigaChatPage() {
     },
   })
 
-  const exportWorkbookSheet = useMutation({
-    mutationFn: async () => {
+  const exportWorkbookRows = useMutation({
+    mutationFn: async (rows: Array<{ rowIndex: number; row: Record<string, unknown>; evaluation?: GigaChatRuleEvaluationRow }>) => {
       if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
-      return exportGigaChatWorkbookSheet(
-        sheetData.upload_id,
+      return exportGigaChatWorkbookRows(
         sheetData.filename,
         sheetData.sheet_name,
-        (loadedBytes, totalBytes) => {
-          setExportProgress({ label: 'Выгружаем рабочую таблицу', loadedBytes, totalBytes })
-        },
+        sheetData.columns,
+        rows.map(({ rowIndex, row, evaluation }) => ({
+          row_index: rowIndex,
+          source_row: row,
+          rule_hits: evaluation?.hits.map((hit) => hit.code) ?? [],
+          suggested_actions: [
+            ...(evaluation?.suggested_tags ?? []).map((item) => `tag:${item}`),
+            ...(evaluation?.suggested_topics ?? []).map((item) => `topic:${item}`),
+          ],
+          matched_keywords: Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_keywords) ?? [])),
+          matched_fields: Array.from(new Set(evaluation?.hits.flatMap((hit) => hit.matched_fields) ?? [])),
+          suggested_topics: evaluation?.suggested_topics ?? [],
+        })),
+        (loadedBytes, totalBytes) => setExportProgress({ label: 'Выгружаем рабочую таблицу', loadedBytes, totalBytes }),
       )
     },
     onSuccess: ({ blob, filename }) => {
       const sourceName = sheetData?.filename ?? 'workbook.xlsx'
-      const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'workbook'}_${sheetData?.sheet_name || 'sheet'}.xlsx`
+      const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'workbook'}_${sheetData?.sheet_name || 'sheet'}_rows.xlsx`
       downloadBlob(blob, filename || fallbackName)
     },
     onSettled: () => setExportProgress(null),
@@ -1235,13 +1246,14 @@ export default function GigaChatPage() {
   const ruleEvaluationProcessed = ruleEvaluationProgress?.processed ?? 0
   const ruleEvaluationRemaining = Math.max(0, ruleEvaluationTotal - ruleEvaluationProcessed)
   const ruleEvaluationPercent = ruleEvaluationTotal ? Math.round((ruleEvaluationProcessed / ruleEvaluationTotal) * 100) : 0
+  const ruleEvaluationBusy = evaluateRulePacks.isPending || Boolean(ruleEvaluationProgress)
   const backgroundLoadedBytes = backgroundResultProgress?.loadedBytes ?? 0
   const backgroundTotalBytes = backgroundResultProgress?.totalBytes ?? null
   const backgroundLoadPercent = backgroundTotalBytes ? Math.min(100, Math.round((backgroundLoadedBytes / backgroundTotalBytes) * 100)) : null
   const exportLoadedBytes = exportProgress?.loadedBytes ?? 0
   const exportTotalBytes = exportProgress?.totalBytes ?? null
   const exportPercent = exportTotalBytes ? Math.min(100, Math.round((exportLoadedBytes / exportTotalBytes) * 100)) : null
-  const exportBusy = exportWorkbookSheet.isPending || exportAnnotatedRows.isPending || exportValidationRows.isPending
+  const exportBusy = exportWorkbookRows.isPending || exportAnnotatedRows.isPending || exportValidationRows.isPending
   const requestSettingsFields = (selectedVersionQ.data?.fields ?? []).filter((field) => !labelingFieldKeys.has(field.key))
   const finalPromptDraftDirty = finalPromptDraftText !== finalPromptBaseText
   const finalPromptDraftValidation = useMemo(() => {
@@ -1376,7 +1388,8 @@ export default function GigaChatPage() {
       setRuleEvaluationError('Сначала загрузите лист Excel, чтобы прогнать rule packs по строкам.')
       return
     }
-    evaluateRulePacks.mutate(sheetData.rows)
+    setRuleEvaluationProgress({ processed: 0, total: sheetData.rows.length })
+    window.setTimeout(() => evaluateRulePacks.mutate(sheetData.rows), 0)
   }
 
   return <div className='transport-page'>
@@ -1787,14 +1800,14 @@ export default function GigaChatPage() {
           <p>Локальный прогон rule packs по текущему листу до GigaChat: здесь видно, какие правила сработали, по каким полям и сколько строк они нашли.</p>
         </div>
         <div className='transport-actions'>
-          <button type='button' onClick={handleEvaluateRules} disabled={!sheetData || evaluateRulePacks.isPending}>
-            {evaluateRulePacks.isPending ? 'Прогоняем правила...' : 'Прогнать правила на текущем листе'}
+          <button type='button' onClick={handleEvaluateRules} disabled={!sheetData || ruleEvaluationBusy}>
+            {ruleEvaluationBusy ? 'Прогоняем правила...' : 'Прогнать правила на текущем листе'}
           </button>
         </div>
       </div>
 
       {!sheetData ? <p>Загрузите Excel и выберите лист, чтобы проверить rule packs.</p> : <>
-        {evaluateRulePacks.isPending ? <div className='rule-progress-panel'>
+        {ruleEvaluationBusy ? <div className='rule-progress-panel'>
           <div className='rule-progress-copy'>
             <strong>Проверяем правила</strong>
             <span>{ruleEvaluationProcessed} из {ruleEvaluationTotal} строк обработано, осталось {ruleEvaluationRemaining}</span>
@@ -1885,24 +1898,12 @@ export default function GigaChatPage() {
           <h3>Рабочая таблица</h3>
           <p>Ниже отображаются колонки выбранного листа, строки для проверки структуры и быстрые действия по отправке одной записи в GigaChat.</p>
         </div>
-        <div className='transport-actions'>
-          <button
-            type='button'
-            onClick={() => {
-              if (!sheetData) return
-              exportWorkbookSheet.mutate()
-            }}
-            disabled={!sheetData || exportBusy}
-          >
-            {exportWorkbookSheet.isPending ? 'Выгружаем Excel...' : 'Выгрузить в Excel'}
-          </button>
-          <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
-            {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
-          </button>
-        </div>
+        <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
+          {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
+        </button>
       </div>
 
-      {evaluateRulePacks.isPending ? <div className='workbook-rule-lock'>
+      {ruleEvaluationBusy ? <div className='workbook-rule-lock'>
         <div className='card workbook-rule-lock-card'>
           <div className='spinner workbook-upload-spinner' aria-hidden='true' />
           <div className='giga-processing-progress-copy'>
@@ -1918,7 +1919,7 @@ export default function GigaChatPage() {
       </div> : null}
 
       {!workbookCollapsed ? <>
-        {exportWorkbookSheet.isPending ? <div className='export-progress-panel'>
+        {exportWorkbookRows.isPending ? <div className='export-progress-panel'>
           <div className='rule-progress-copy'>
             <strong>{exportProgress?.label ?? 'Выгружаем рабочую таблицу'}</strong>
             <span>
@@ -2029,8 +2030,11 @@ export default function GigaChatPage() {
           }}
           onRunSelectedRows={() => runWithRuleGuard((valuesForRun) => handleRunSelectedRows(valuesForRun))}
           onRunSelectedRowsInBackground={() => runWithRuleGuard((valuesForRun) => startBackgroundTask.mutate(valuesForRun))}
+          onExportRows={(rows) => exportWorkbookRows.mutate(rows)}
           batchBusy={batchBusy}
-          busy={batchBusy || runRowBusyIndex !== null || startBackgroundTask.isPending}
+          exportBusy={exportBusy}
+          exportPending={exportWorkbookRows.isPending}
+          busy={ruleEvaluationBusy || batchBusy || runRowBusyIndex !== null || startBackgroundTask.isPending}
           ruleEvaluations={ruleEvaluationMap}
           rulePackOptions={rulePackOptions}
         /> : null}
