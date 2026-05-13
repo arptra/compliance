@@ -26,6 +26,7 @@ from ..schemas import (
     GigaChatTransportProbeRequest,
     GigaChatTransportProbeResponse,
     GigaChatTransportStatusResponse,
+    GigaChatWorkbookExportSheetRequest,
     GigaChatWorkbookLocalUploadRequest,
     GigaChatWorkbookSelectSheetRequest,
     GigaChatWorkbookSheetDataResponse,
@@ -181,6 +182,22 @@ def upload_local_workbook(req: GigaChatWorkbookLocalUploadRequest, services=Depe
 def select_sheet(upload_id: str, req: GigaChatWorkbookSelectSheetRequest, services=Depends(get_service_container)):
     try:
         return services["gigachat_lab"].load_sheet(upload_id, req)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/{upload_id}/export-sheet")
+def export_workbook_sheet(upload_id: str, req: GigaChatWorkbookExportSheetRequest, services=Depends(get_service_container)):
+    try:
+        filename, content = services["gigachat_lab"].export_workbook_sheet(upload_id, req)
+        quoted_name = quote(filename)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_name}"},
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:

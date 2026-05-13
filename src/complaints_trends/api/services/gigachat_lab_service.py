@@ -45,6 +45,7 @@ from ..schemas import (
     GigaChatLabSettingsVersionSummary,
     GigaChatLabSettingsVersionUpdateRequest,
     GigaChatWorkbookSelectSheetRequest,
+    GigaChatWorkbookExportSheetRequest,
     GigaChatWorkbookSheetDataResponse,
     GigaChatWorkbookSheetPreview,
     GigaChatWorkbookUploadResponse,
@@ -899,6 +900,49 @@ class GigaChatLabService:
 
         buffer.seek(0)
         export_filename = f"{Path(req.filename or 'annotated.xlsx').stem}_validation.xlsx"
+        return export_filename, buffer.getvalue()
+
+    def export_workbook_sheet(self, upload_id: str, req: GigaChatWorkbookExportSheetRequest) -> tuple[str, bytes]:
+        upload_dir = self.uploads_dir / upload_id
+        meta_path = upload_dir / "meta.json"
+        if not meta_path.exists():
+            raise FileNotFoundError(f"Workbook upload not found: {upload_id}")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        filename = str(meta.get("filename", "workbook.xlsx"))
+        file_format = str(meta.get("file_format", "excel"))
+        stored_path = next(upload_dir.glob("source.*"), None)
+        if stored_path is None:
+            raise FileNotFoundError(f"Workbook source file not found for upload: {upload_id}")
+
+        if file_format == "csv":
+            df = self._read_csv_frame(stored_path)
+            sheet_name = "data"
+        else:
+            sheet_name = req.sheet_name
+            available_sheets = {str(sheet.get("name", "")) for sheet in meta.get("sheets", [])}
+            if sheet_name not in available_sheets:
+                raise ValueError(f"Sheet not found in workbook: {sheet_name}")
+            df = pd.read_excel(stored_path, sheet_name=sheet_name, dtype=object)
+        df = self._drop_empty_unnamed_columns(df)
+        df = self._sanitize_for_excel(df)
+
+        buffer = BytesIO()
+        safe_sheet_name = self._excel_safe_sheet_name(sheet_name or "data")
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+            ws = writer.sheets[safe_sheet_name]
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
+            for col_idx in range(1, ws.max_column + 1):
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    if isinstance(cell.value, datetime):
+                        cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                    elif isinstance(cell.value, date):
+                        cell.number_format = "yyyy-mm-dd"
+
+        buffer.seek(0)
+        export_filename = f"{Path(filename or 'workbook.xlsx').stem}_{sheet_name or 'sheet'}.xlsx"
         return export_filename, buffer.getvalue()
 
     def upload_workbook(self, filename: str, content: bytes) -> GigaChatWorkbookUploadResponse:

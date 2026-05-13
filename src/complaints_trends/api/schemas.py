@@ -161,6 +161,10 @@ class GigaChatWorkbookSelectSheetRequest(BaseModel):
     row_limit: int = 200
 
 
+class GigaChatWorkbookExportSheetRequest(BaseModel):
+    sheet_name: str
+
+
 class GigaChatWorkbookSheetDataResponse(BaseModel):
     upload_id: str
     filename: str

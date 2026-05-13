@@ -6,6 +6,7 @@ import {
   createGigaChatLabSettingsVersion,
   exportGigaChatAnnotatedWorkbook,
   exportGigaChatValidationWorkbook,
+  exportGigaChatWorkbookSheet,
   getGigaChatLabSettingsVersion,
   getGigaChatStatus,
   listGigaChatLabSettingsVersions,
@@ -748,6 +749,26 @@ export default function GigaChatPage() {
     },
   })
 
+  const exportWorkbookSheet = useMutation({
+    mutationFn: async () => {
+      if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
+      return exportGigaChatWorkbookSheet(
+        sheetData.upload_id,
+        sheetData.filename,
+        sheetData.sheet_name,
+        (loadedBytes, totalBytes) => {
+          setExportProgress({ label: 'Выгружаем рабочую таблицу', loadedBytes, totalBytes })
+        },
+      )
+    },
+    onSuccess: ({ blob, filename }) => {
+      const sourceName = sheetData?.filename ?? 'workbook.xlsx'
+      const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'workbook'}_${sheetData?.sheet_name || 'sheet'}.xlsx`
+      downloadBlob(blob, filename || fallbackName)
+    },
+    onSettled: () => setExportProgress(null),
+  })
+
   const exportAnnotatedRows = useMutation({
     mutationFn: async () => {
       if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
@@ -1220,7 +1241,7 @@ export default function GigaChatPage() {
   const exportLoadedBytes = exportProgress?.loadedBytes ?? 0
   const exportTotalBytes = exportProgress?.totalBytes ?? null
   const exportPercent = exportTotalBytes ? Math.min(100, Math.round((exportLoadedBytes / exportTotalBytes) * 100)) : null
-  const exportBusy = exportAnnotatedRows.isPending || exportValidationRows.isPending
+  const exportBusy = exportWorkbookSheet.isPending || exportAnnotatedRows.isPending || exportValidationRows.isPending
   const requestSettingsFields = (selectedVersionQ.data?.fields ?? []).filter((field) => !labelingFieldKeys.has(field.key))
   const finalPromptDraftDirty = finalPromptDraftText !== finalPromptBaseText
   const finalPromptDraftValidation = useMemo(() => {
@@ -1864,9 +1885,21 @@ export default function GigaChatPage() {
           <h3>Рабочая таблица</h3>
           <p>Ниже отображаются колонки выбранного листа, строки для проверки структуры и быстрые действия по отправке одной записи в GigaChat.</p>
         </div>
-        <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
-          {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
-        </button>
+        <div className='transport-actions'>
+          <button
+            type='button'
+            onClick={() => {
+              if (!sheetData) return
+              exportWorkbookSheet.mutate()
+            }}
+            disabled={!sheetData || exportBusy}
+          >
+            {exportWorkbookSheet.isPending ? 'Выгружаем Excel...' : 'Выгрузить в Excel'}
+          </button>
+          <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
+            {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
+          </button>
+        </div>
       </div>
 
       {evaluateRulePacks.isPending ? <div className='workbook-rule-lock'>
@@ -1885,6 +1918,25 @@ export default function GigaChatPage() {
       </div> : null}
 
       {!workbookCollapsed ? <>
+        {exportWorkbookSheet.isPending ? <div className='export-progress-panel'>
+          <div className='rule-progress-copy'>
+            <strong>{exportProgress?.label ?? 'Выгружаем рабочую таблицу'}</strong>
+            <span>
+              {exportPercent !== null
+                ? `${formatBytes(exportLoadedBytes)} из ${formatBytes(exportTotalBytes ?? 0)}`
+                : exportLoadedBytes
+                  ? `${formatBytes(exportLoadedBytes)} получено`
+                  : 'Собираем файл на backend...'}
+            </span>
+          </div>
+          <div className='giga-processing-progressbar' aria-label='workbook export progress'>
+            <div
+              className='giga-processing-progressbar-fill'
+              style={{ width: `${exportPercent ?? (exportLoadedBytes ? Math.min(95, Math.max(8, Math.round(exportLoadedBytes / 40_000))) : 8)}%` }}
+            />
+          </div>
+          <div className='lab-muted'>Выгрузка полного выбранного листа идёт в фоне, кнопки экспорта временно заблокированы.</div>
+        </div> : null}
         {!workbookMeta ? <p>Сначала загрузите Excel или CSV файл.</p> : null}
         {workbookMeta && !sheetData && !selectSheet.isPending ? <div className='transport-actions'>
           <button
