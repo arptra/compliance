@@ -14,6 +14,7 @@ export function GigaChatSettingsForm({
   busy,
   saveError,
   onChange,
+  onPersist,
   onSave,
 }: {
   fields: GigaChatLabSettingField[]
@@ -21,6 +22,7 @@ export function GigaChatSettingsForm({
   busy: boolean
   saveError?: string | null
   onChange: (key: string, value: unknown) => void
+  onPersist?: (key: string, value: unknown) => void
   onSave: () => void
 }) {
   const grouped = fields.reduce<Record<string, GigaChatLabSettingField[]>>((acc, field) => {
@@ -41,7 +43,10 @@ export function GigaChatSettingsForm({
               <input
                 type='checkbox'
                 checked={Boolean(currentValue)}
-                onChange={(e) => onChange(field.key, e.target.checked)}
+                onChange={(e) => {
+                  onChange(field.key, e.target.checked)
+                  onPersist?.(field.key, e.target.checked)
+                }}
               />
               <span>
                 <b>{field.label}</b>
@@ -54,23 +59,29 @@ export function GigaChatSettingsForm({
             <span>{field.label}</span>
             {field.input_type === 'select' ? <select
               value={String(currentValue ?? '')}
-              onChange={(e) => onChange(field.key, e.target.value)}
+              onChange={(e) => {
+                onChange(field.key, e.target.value)
+                onPersist?.(field.key, e.target.value)
+              }}
             >
               {field.options.map((option) => <option key={`${field.key}-${option.value}`} value={option.value}>{option.label}</option>)}
             </select> : null}
             {field.input_type === 'textarea' ? <textarea
               value={String(renderFieldValue(currentValue))}
               onChange={(e) => onChange(field.key, e.target.value)}
+              onBlur={(e) => onPersist?.(field.key, e.target.value)}
             /> : null}
             {field.input_type === 'text' ? <input
               type='text'
               value={String(renderFieldValue(currentValue))}
               onChange={(e) => onChange(field.key, e.target.value)}
+              onBlur={(e) => onPersist?.(field.key, e.target.value)}
             /> : null}
             {field.input_type === 'number' ? <input
               type='number'
               value={String(renderFieldValue(currentValue))}
               onChange={(e) => onChange(field.key, e.target.value === '' ? '' : Number(e.target.value))}
+              onBlur={(e) => onPersist?.(field.key, e.target.value === '' ? '' : Number(e.target.value))}
             /> : null}
             {field.help_text ? <span className='lab-field-help'>{field.help_text}</span> : null}
           </label>

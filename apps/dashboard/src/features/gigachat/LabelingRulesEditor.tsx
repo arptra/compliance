@@ -40,7 +40,10 @@ export function LabelingRulesEditor({
   nameLabel,
   value,
   onChange,
+  onPersist,
   onClear,
+  persistBusy = false,
+  persistError,
 }: {
   title: string
   description: string
@@ -49,7 +52,10 @@ export function LabelingRulesEditor({
   nameLabel: string
   value: unknown
   onChange: (value: string) => void
+  onPersist?: (value: string) => void
   onClear?: () => void
+  persistBusy?: boolean
+  persistError?: string | null
 }) {
   const items = useMemo(() => parseRules(value), [value])
   const [adding, setAdding] = useState(false)
@@ -65,23 +71,28 @@ export function LabelingRulesEditor({
     setEditingIndex(null)
   }
 
+  const commitRules = (nextValue: string) => {
+    onChange(nextValue)
+    onPersist?.(nextValue)
+  }
+
   const submitItem = () => {
     const name = draftName.trim()
     const descriptionText = draftDescription.trim()
     if (!name && !descriptionText) return
     if (isEditing) {
-      onChange(serializeRules(items.map((item, index) => (
+      commitRules(serializeRules(items.map((item, index) => (
         index === editingIndex ? { name, description: descriptionText } : item
       ))))
       resetDraft()
       return
     }
-    onChange(serializeRules([...items, { name, description: descriptionText }]))
+    commitRules(serializeRules([...items, { name, description: descriptionText }]))
     resetDraft()
   }
 
   const removeItem = (index: number) => {
-    onChange(serializeRules(items.filter((_, idx) => idx !== index)))
+    commitRules(serializeRules(items.filter((_, idx) => idx !== index)))
     if (editingIndex === index) {
       resetDraft()
     }
@@ -115,8 +126,10 @@ export function LabelingRulesEditor({
           return next
         })
       }}>{adding && !isEditing ? 'Скрыть форму' : `+ ${addLabel}`}</button>
-      {onClear ? <button type='button' onClick={onClear}>{clearLabel ?? 'Сбросить все'}</button> : null}
+      {onClear ? <button type='button' onClick={onClear} disabled={persistBusy}>{clearLabel ?? 'Сбросить все'}</button> : null}
     </div>
+    {persistBusy ? <div className='lab-muted'>Сохраняем в файл версии...</div> : null}
+    {persistError ? <div className='transport-error'>{persistError}</div> : null}
 
     {adding && !isEditing ? <div className='labeling-entry-form'>
       <input
@@ -131,8 +144,8 @@ export function LabelingRulesEditor({
         onChange={(e) => setDraftDescription(e.target.value)}
         placeholder='Описание'
       />
-      <button onClick={submitItem} disabled={!draftName.trim() && !draftDescription.trim()}>
-        Добавить
+      <button onClick={submitItem} disabled={(!draftName.trim() && !draftDescription.trim()) || persistBusy}>
+        {persistBusy ? 'Сохраняем...' : 'Добавить'}
       </button>
     </div> : null}
 
@@ -181,8 +194,8 @@ export function LabelingRulesEditor({
         </div>
 
         <div className='lab-settings-actions'>
-          <button className='primary' type='button' onClick={submitItem} disabled={!draftName.trim() && !draftDescription.trim()}>
-            Сохранить
+          <button className='primary' type='button' onClick={submitItem} disabled={(!draftName.trim() && !draftDescription.trim()) || persistBusy}>
+            {persistBusy ? 'Сохраняем...' : 'Сохранить'}
           </button>
           <button type='button' onClick={resetDraft}>Отмена</button>
         </div>

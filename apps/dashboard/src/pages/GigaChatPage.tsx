@@ -637,10 +637,14 @@ export default function GigaChatPage() {
     },
   })
 
-  const persistRulePacks = (value: string) => {
-    const nextValues = { ...settingValues, rule_pack_prompt_notes: value }
+  const persistSettingValue = (key: string, value: unknown) => {
+    const nextValues = { ...settingValues, [key]: value }
     setSettingValues(nextValues)
     saveSettings.mutate(nextValues)
+  }
+
+  const persistRulePacks = (value: string) => {
+    persistSettingValue('rule_pack_prompt_notes', value)
   }
 
   const createSettingsVersion = useMutation({
@@ -1656,6 +1660,7 @@ export default function GigaChatPage() {
               busy={saveSettings.isPending}
               saveError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'настройки') : null}
               onChange={(key, value) => setSettingValues((current) => ({ ...current, [key]: value }))}
+              onPersist={persistSettingValue}
               onSave={() => saveSettings.mutate(undefined)}
             />
           </div> : null}
@@ -1669,7 +1674,10 @@ export default function GigaChatPage() {
               nameLabel='Класс'
               value={settingValues.classification_prompt_notes}
               onChange={(value) => setSettingValues((current) => ({ ...current, classification_prompt_notes: value }))}
-              onClear={() => setSettingValues((current) => ({ ...current, classification_prompt_notes: '[]' }))}
+              onPersist={(value) => persistSettingValue('classification_prompt_notes', value)}
+              onClear={() => persistSettingValue('classification_prompt_notes', '[]')}
+              persistBusy={saveSettings.isPending}
+              persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'классы') : null}
             />
 
             <LabelingRulesEditor
@@ -1680,7 +1688,10 @@ export default function GigaChatPage() {
               nameLabel='Тег'
               value={settingValues.tagging_prompt_notes}
               onChange={(value) => setSettingValues((current) => ({ ...current, tagging_prompt_notes: value }))}
-              onClear={() => setSettingValues((current) => ({ ...current, tagging_prompt_notes: '[]' }))}
+              onPersist={(value) => persistSettingValue('tagging_prompt_notes', value)}
+              onClear={() => persistSettingValue('tagging_prompt_notes', '[]')}
+              persistBusy={saveSettings.isPending}
+              persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'теги') : null}
             />
           </div> : null}
 
