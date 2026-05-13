@@ -17,6 +17,7 @@ export function WorkbookSheetTable({
   onRunRow,
   runRowBusyIndex,
   selectedRowKeys,
+  selectedRowKeySet,
   allVisibleRowsSelected,
   onToggleRowSelection,
   onToggleAllRows,
@@ -43,6 +44,7 @@ export function WorkbookSheetTable({
   onRunRow: (row: Record<string, unknown>, rowIndex: number) => void
   runRowBusyIndex?: number | null
   selectedRowKeys: string[]
+  selectedRowKeySet: Set<string>
   allVisibleRowsSelected: boolean
   onToggleRowSelection: (rowIndex: number) => void
   onToggleAllRows: (checked: boolean) => void
@@ -99,8 +101,8 @@ export function WorkbookSheetTable({
   const selectedRowsForExport = useMemo(
     () => data.rows
       .map((row, idx) => ({ row, idx, evaluation: ruleEvaluations[idx] }))
-      .filter(({ idx }) => selectedRowKeys.includes(`${data.upload_id}:${data.sheet_name}:${idx}`)),
-    [data.rows, data.sheet_name, data.upload_id, ruleEvaluations, selectedRowKeys],
+      .filter(({ idx }) => selectedRowKeySet.has(`${data.upload_id}:${data.sheet_name}:${idx}`)),
+    [data.rows, data.sheet_name, data.upload_id, ruleEvaluations, selectedRowKeySet],
   )
   const visibleRowsForExport = useMemo(
     () => virtualTable.virtualRows.map(({ item }) => item),
@@ -349,7 +351,7 @@ export function WorkbookSheetTable({
             <td className='workbook-row-select-cell'>
                 <input
                   type='checkbox'
-                  checked={selectedRowKeys.includes(`${data.upload_id}:${data.sheet_name}:${idx}`)}
+                  checked={selectedRowKeySet.has(`${data.upload_id}:${data.sheet_name}:${idx}`)}
                   disabled={Boolean(busy)}
                   onChange={() => onToggleRowSelection(idx)}
                 />

@@ -542,6 +542,7 @@ export default function GigaChatPage() {
   const [workbookRowLimit, setWorkbookRowLimit] = useState<WorkbookRowLimit>(10)
   const [includedPromptColumns, setIncludedPromptColumns] = useState<string[]>([])
   const [selectedSheetRowKeys, setSelectedSheetRowKeys] = useState<string[]>([])
+  const selectedSheetRowKeySet = useMemo(() => new Set(selectedSheetRowKeys), [selectedSheetRowKeys])
   const [annotatedRows, setAnnotatedRows] = useState<AnnotatedSheetRow[]>([])
   const [annotatedClassFilter, setAnnotatedClassFilter] = useState<string[]>([])
   const [annotatedTagFilter, setAnnotatedTagFilter] = useState<string[]>([])
@@ -1009,7 +1010,7 @@ export default function GigaChatPage() {
       if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
       const selectedRows = sheetData.rows
         .map((row, index) => ({ row_index: index, source_row: row }))
-        .filter((item) => selectedSheetRowKeys.includes(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, item.row_index)))
+        .filter((item) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, item.row_index)))
       if (!selectedRows.length) throw new Error('Сначала выберите хотя бы одну строку.')
       return startGigaChatBackgroundTask({
         transport: selectedTransport,
@@ -1193,7 +1194,7 @@ export default function GigaChatPage() {
 
     const rowIndexes = sheetData.rows
       .map((_, index) => index)
-      .filter((index) => selectedSheetRowKeys.includes(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
+      .filter((index) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
 
     if (!rowIndexes.length) {
       setBatchRunError('Сначала выберите хотя бы одну строку.')
@@ -1274,7 +1275,7 @@ export default function GigaChatPage() {
     () => (sheetData ? sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)) : []),
     [sheetData],
   )
-  const allVisibleRowsSelected = visibleSheetRowKeys.length > 0 && visibleSheetRowKeys.every((key) => selectedSheetRowKeys.includes(key))
+  const allVisibleRowsSelected = visibleSheetRowKeys.length > 0 && visibleSheetRowKeys.every((key) => selectedSheetRowKeySet.has(key))
   const annotatedClassOptions = useMemo(
     () => Array.from(new Set(annotatedRows.map((row) => row.classification).filter(Boolean))).sort(),
     [annotatedRows],
@@ -1981,26 +1982,36 @@ export default function GigaChatPage() {
           onRunRow={(row, rowIndex) => runWithRuleGuard((valuesForRun) => handleRunRow(row, rowIndex, valuesForRun))}
           runRowBusyIndex={runRowBusyIndex}
           selectedRowKeys={selectedSheetRowKeys}
+          selectedRowKeySet={selectedSheetRowKeySet}
           allVisibleRowsSelected={allVisibleRowsSelected}
           onToggleRowSelection={(rowIndex) => {
             if (!sheetData) return
             const key = buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, rowIndex)
-            setSelectedSheetRowKeys((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
+            setSelectedSheetRowKeys((current) => {
+              const next = new Set(current)
+              if (next.has(key)) next.delete(key)
+              else next.add(key)
+              return Array.from(next)
+            })
           }}
           onToggleAllRows={(checked) => {
             if (!sheetData) return
             const keys = sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index))
+            const keySet = new Set(keys)
             setSelectedSheetRowKeys((current) => {
-              const rest = current.filter((key) => !keys.includes(key))
-              return checked ? [...rest, ...keys] : rest
+              if (!checked) return current.filter((key) => !keySet.has(key))
+              const next = new Set(current)
+              keys.forEach((key) => next.add(key))
+              return Array.from(next)
             })
           }}
           onPickRandomRows={() => {
             if (!sheetData) return
             const keys = sheetData.rows.map((_, index) => buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index))
+            const keySet = new Set(keys)
             const shuffled = [...keys].sort(() => Math.random() - 0.5)
             setSelectedSheetRowKeys((current) => {
-              const rest = current.filter((key) => !keys.includes(key))
+              const rest = current.filter((key) => !keySet.has(key))
               return [...rest, ...shuffled.slice(0, Math.min(5, shuffled.length))]
             })
           }}
