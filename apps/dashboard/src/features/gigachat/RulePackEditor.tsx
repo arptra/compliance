@@ -52,11 +52,17 @@ function emptyRule(): GigaChatRulePack {
 export function RulePackEditor({
   value,
   onChange,
+  onPersist,
+  persistBusy = false,
+  persistError,
   availableFields,
   defaultValue,
 }: {
   value: unknown
   onChange: (value: string) => void
+  onPersist?: (value: string) => void
+  persistBusy?: boolean
+  persistError?: string | null
   availableFields: string[]
   defaultValue?: string
 }) {
@@ -78,6 +84,11 @@ export function RulePackEditor({
     setDraft(emptyRule())
     setSourceFieldsText('')
     setKeywordsText('')
+  }
+
+  const commitRulePacks = (nextValue: string) => {
+    onChange(nextValue)
+    onPersist?.(nextValue)
   }
 
   const openEditor = (index: number | null) => {
@@ -143,7 +154,7 @@ export function RulePackEditor({
     } else if (editingIndex !== null) {
       nextItems[editingIndex] = nextRule
     }
-    onChange(serializeRulePacks(nextItems))
+    commitRulePacks(serializeRulePacks(nextItems))
     resetDraft()
   }
 
@@ -151,7 +162,7 @@ export function RulePackEditor({
     const nextItems = items.map((item, currentIndex) => (
       currentIndex === index && sourceFieldStatus(item, availableFields).valid ? { ...item, enabled: !item.enabled } : item
     ))
-    onChange(serializeRulePacks(nextItems))
+    commitRulePacks(serializeRulePacks(nextItems))
   }
 
   const setAllRulesEnabled = (enabled: boolean) => {
@@ -159,22 +170,22 @@ export function RulePackEditor({
       const canEnable = sourceFieldStatus(item, availableFields).valid
       return { ...item, enabled: enabled ? canEnable : false }
     })
-    onChange(serializeRulePacks(nextItems))
+    commitRulePacks(serializeRulePacks(nextItems))
   }
 
   const removeItem = (index: number) => {
-    onChange(serializeRulePacks(items.filter((_, currentIndex) => currentIndex !== index)))
+    commitRulePacks(serializeRulePacks(items.filter((_, currentIndex) => currentIndex !== index)))
     if (editingIndex === index) resetDraft()
   }
 
   const clearAll = () => {
-    onChange('[]')
+    commitRulePacks('[]')
     resetDraft()
   }
 
   const restoreDefaults = () => {
     if (!defaultValue) return
-    onChange(defaultValue)
+    commitRulePacks(defaultValue)
     resetDraft()
   }
 
@@ -193,6 +204,8 @@ export function RulePackEditor({
       <button type='button' onClick={() => setAllRulesEnabled(false)}>Сделать не активными все</button>
       <button type='button' onClick={clearAll}>Сбросить все правила</button>
     </div>
+    {persistBusy ? <div className='lab-muted'>Сохраняем правила в файл версии...</div> : null}
+    {persistError ? <div className='transport-error'>{persistError}</div> : null}
 
     {items.length ? <div className='labeling-rules-list'>
       {items.map((item, index) => {
@@ -368,8 +381,8 @@ export function RulePackEditor({
         </div>
 
         <div className='lab-settings-actions'>
-          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim() || draftHasMissingSourceFields}>
-            Сохранить
+          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim() || draftHasMissingSourceFields || persistBusy}>
+            {persistBusy ? 'Сохраняем...' : 'Сохранить'}
           </button>
           <button type='button' onClick={resetDraft}>Отмена</button>
         </div>

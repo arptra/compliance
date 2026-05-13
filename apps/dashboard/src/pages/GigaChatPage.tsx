@@ -623,11 +623,11 @@ export default function GigaChatPage() {
   })
 
   const saveSettings = useMutation({
-    mutationFn: () => saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
+    mutationFn: (valuesOverride?: Record<string, unknown>) => saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
       title: selectedVersionQ.data?.version.title,
       description: selectedVersionQ.data?.version.description,
       status: selectedVersionQ.data?.version.status,
-      values: settingValues,
+      values: valuesOverride ?? settingValues,
     }),
     onSuccess: async (data) => {
       setSettingValues(data.values)
@@ -636,6 +636,12 @@ export default function GigaChatPage() {
       await qc.invalidateQueries({ queryKey: ['gigachat-status'] })
     },
   })
+
+  const persistRulePacks = (value: string) => {
+    const nextValues = { ...settingValues, rule_pack_prompt_notes: value }
+    setSettingValues(nextValues)
+    saveSettings.mutate(nextValues)
+  }
 
   const createSettingsVersion = useMutation({
     mutationFn: () => createGigaChatLabSettingsVersion({
@@ -1564,7 +1570,7 @@ export default function GigaChatPage() {
               }}>
                 Создать версию
               </button>
-              <button type='button' onClick={() => saveSettings.mutate()} disabled={saveSettings.isPending}>
+              <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending}>
                 {saveSettings.isPending ? 'Сохраняем...' : 'Сохранить версию'}
               </button>
             </div>
@@ -1650,7 +1656,7 @@ export default function GigaChatPage() {
               busy={saveSettings.isPending}
               saveError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'настройки') : null}
               onChange={(key, value) => setSettingValues((current) => ({ ...current, [key]: value }))}
-              onSave={() => saveSettings.mutate()}
+              onSave={() => saveSettings.mutate(undefined)}
             />
           </div> : null}
 
@@ -1682,6 +1688,9 @@ export default function GigaChatPage() {
             <RulePackEditor
               value={settingValues.rule_pack_prompt_notes}
               onChange={(value) => setSettingValues((current) => ({ ...current, rule_pack_prompt_notes: value }))}
+              onPersist={persistRulePacks}
+              persistBusy={saveSettings.isPending}
+              persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'правила') : null}
               availableFields={sheetData?.columns ?? []}
               defaultValue={DEFAULT_RULE_PACK_PROMPT_NOTES}
             />
