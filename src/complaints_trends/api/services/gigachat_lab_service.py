@@ -112,7 +112,6 @@ class GigaChatLabService:
         self.background_dir = Path("data/background")
         self.versions_dir = Path("data/gigachat_lab/versions")
         self.settings_path = self.base_dir / "settings.json"
-        self.final_prompt_path = self.base_dir / "final_prompt_snapshot.json"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.background_dir.mkdir(parents=True, exist_ok=True)
@@ -497,7 +496,7 @@ class GigaChatLabService:
                 setattr(llm_cfg, key, value)
         return llm_cfg
 
-    def build_final_prompt(self, req: GigaChatFinalPromptRequest, *, save_snapshot: bool = False) -> GigaChatFinalPromptResponse:
+    def build_final_prompt(self, req: GigaChatFinalPromptRequest) -> GigaChatFinalPromptResponse:
         values = dict(self._effective_values()[0])
         for key, value in req.values.items():
             values[key] = self._coerce_setting_value(key, value)
@@ -505,24 +504,13 @@ class GigaChatLabService:
         columns = [str(column) for column in req.columns if str(column).strip()]
         payload = self._compose_final_payload(values, columns)
         generated_at = self._now()
-        saved_path = None
-
-        if save_snapshot:
-            snapshot = {
-                "generated_at": generated_at.isoformat(),
-                "source_columns": columns,
-                "payload": payload,
-            }
-            self.final_prompt_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.save_settings(GigaChatLabSettingsUpdateRequest(values=req.values))
-            saved_path = str(self.final_prompt_path)
 
         return GigaChatFinalPromptResponse(
             generated_at=generated_at,
             source_columns=columns,
             payload=payload,
-            saved=save_snapshot,
-            saved_path=saved_path,
+            saved=False,
+            saved_path=None,
         )
 
     def run_row_prompt(self, req: GigaChatLabRowRunRequest) -> GigaChatLabRowRunResponse:

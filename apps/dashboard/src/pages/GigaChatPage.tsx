@@ -13,7 +13,6 @@ import {
   previewGigaChatFinalPrompt,
   runGigaChatWorkbookRow,
   saveGigaChatLabSettingsVersion,
-  saveGigaChatFinalPrompt,
   selectGigaChatWorkbookSheet,
   startGigaChatBackgroundTask,
   uploadLocalGigaChatWorkbook,
@@ -746,20 +745,6 @@ export default function GigaChatPage() {
       setFinalPromptBaseText(nextBaseText)
       setFinalPromptDraftText(nextBaseText)
       setFinalPromptOverrideText(null)
-    },
-  })
-
-  const saveFinalPrompt = useMutation({
-    mutationFn: () => saveGigaChatFinalPrompt(settingValues, finalPromptColumns),
-    onSuccess: (data) => {
-      setFinalPromptPreview(data)
-      const nextBaseText = stringifyJson(data.payload)
-      setFinalPromptBaseText(nextBaseText)
-      setFinalPromptDraftText(nextBaseText)
-      setFinalPromptOverrideText(null)
-      lastResolvedPreviewKeyRef.current = finalPromptRequestKey
-      setFinalPromptModalOpen(true)
-      void qc.invalidateQueries({ queryKey: ['gigachat-lab-settings'] })
     },
   })
 
@@ -1696,9 +1681,6 @@ export default function GigaChatPage() {
       </> : null}
 
       <div className='lab-settings-actions'>
-        <button onClick={() => saveFinalPrompt.mutate()} disabled={saveFinalPrompt.isPending}>
-          {saveFinalPrompt.isPending ? 'Сохраняем итоговый промпт...' : 'Сохранить итоговый промпт'}
-        </button>
         <button
           onClick={() => {
             setFinalPromptModalOpen(true)
@@ -1718,7 +1700,6 @@ export default function GigaChatPage() {
               ? 'Итоговый промпт синхронизирован с текущими полями формы.'
               : 'Итоговый промпт будет собран автоматически после первого изменения формы.'}
         </span>
-        {saveFinalPrompt.isError ? <span className='transport-error'>{formatLabError(saveFinalPrompt.error as Error, 'итоговый промпт')}</span> : null}
         {previewFinalPrompt.isError ? <span className='transport-error'>{formatLabError(previewFinalPrompt.error as Error, 'итоговый промпт')}</span> : null}
       </div>
     </section>

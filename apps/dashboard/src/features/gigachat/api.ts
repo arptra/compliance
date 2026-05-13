@@ -81,10 +81,6 @@ export function previewGigaChatFinalPrompt(values: Record<string, unknown>, colu
   return apiPost<GigaChatFinalPromptResponse>('/api/gigachat/lab/final-prompt', { values, columns })
 }
 
-export function saveGigaChatFinalPrompt(values: Record<string, unknown>, columns: string[]) {
-  return apiPost<GigaChatFinalPromptResponse>('/api/gigachat/lab/final-prompt/save', { values, columns })
-}
-
 export function evaluateGigaChatRulePacks(values: Record<string, unknown>, rows: Array<Record<string, unknown>>) {
   return apiPost<GigaChatRuleEvaluationResponse>('/api/gigachat/lab/rule-packs/evaluate', { values, rows })
 }

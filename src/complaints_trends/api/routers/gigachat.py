@@ -88,12 +88,7 @@ def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUp
 
 @router.post("/lab/final-prompt", response_model=GigaChatFinalPromptResponse)
 def final_prompt_preview(req: GigaChatFinalPromptRequest, services=Depends(get_service_container)):
-    return services["gigachat_lab"].build_final_prompt(req, save_snapshot=False)
-
-
-@router.post("/lab/final-prompt/save", response_model=GigaChatFinalPromptResponse)
-def save_final_prompt(req: GigaChatFinalPromptRequest, services=Depends(get_service_container)):
-    return services["gigachat_lab"].build_final_prompt(req, save_snapshot=True)
+    return services["gigachat_lab"].build_final_prompt(req)
 
 
 @router.post("/lab/rule-packs/evaluate", response_model=GigaChatRuleEvaluationResponse)
