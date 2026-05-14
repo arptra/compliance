@@ -8,7 +8,7 @@ type ResizeState = {
   startWidth: number
 }
 
-export function useResizableTable(defaultRowClamp: TableRowClamp = 4) {
+export function useResizableTable(defaultRowClamp: TableRowClamp = 2) {
   const [rowClamp, setRowClamp] = useState<TableRowClamp>(defaultRowClamp)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const resizeStateRef = useRef<ResizeState | null>(null)

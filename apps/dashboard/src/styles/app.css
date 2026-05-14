@@ -170,7 +170,8 @@ body { margin: 0; }
 .lab-settings-status { color:#475569; font-size:13px; }
 .lab-settings-actions button,
 .sheet-preview-head button,
-.workbook-upload-row button {
+.workbook-upload-row button,
+.workbook-file-button {
   border:1px solid #cbd5e1;
   background:#fff;
   border-radius:8px;
@@ -179,7 +180,8 @@ body { margin: 0; }
 }
 .lab-settings-actions button:disabled,
 .sheet-preview-head button:disabled,
-.workbook-upload-row button:disabled {
+.workbook-upload-row button:disabled,
+.workbook-file-button.disabled {
   opacity:0.65;
   cursor:default;
 }
@@ -233,8 +235,21 @@ body { margin: 0; }
 
 .workbook-upload-card { position:relative; overflow:hidden; }
 .workbook-upload-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-.workbook-upload-row input[type='file'] {
-  max-width:360px;
+.workbook-file-button {
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  font-weight:700;
+  color:#0f172a;
+  position:relative;
+  overflow:hidden;
+}
+.workbook-file-button input[type='file'] {
+  position:absolute;
+  inline-size:1px;
+  block-size:1px;
+  opacity:0;
+  pointer-events:none;
 }
 .workbook-upload-loader {
   position:absolute;
@@ -561,20 +576,17 @@ body { margin: 0; }
   position:relative;
   padding-right:14px;
 }
-.workbook-column-toggle {
-  opacity:0;
-  pointer-events:none;
-  border:1px solid #cbd5e1;
-  background:#fff;
-  border-radius:8px;
-  padding:6px 8px;
-  font-size:12px;
+.workbook-prompt-column {
   cursor:pointer;
-  transition:opacity .15s ease;
+  transition:background-color .15s ease, box-shadow .15s ease;
 }
-.workbook-table th:hover .workbook-column-toggle {
-  opacity:1;
-  pointer-events:auto;
+.workbook-prompt-column.included:hover {
+  background:#ecfdf5;
+  box-shadow:inset 0 -2px 0 #10b981;
+}
+.workbook-prompt-column.excluded:hover {
+  background:#fff7ed;
+  box-shadow:inset 0 -2px 0 #f97316;
 }
 .table-column-resizer {
   position:absolute;

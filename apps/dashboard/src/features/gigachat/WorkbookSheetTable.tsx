@@ -23,6 +23,7 @@ export function WorkbookSheetTable({
   onToggleAllRows,
   onPickRandomRows,
   onRunSelectedRows,
+  onRunAllRows,
   onRunSelectedRowsInBackground,
   onExportRows,
   onSelectRuleHitRows,
@@ -50,6 +51,7 @@ export function WorkbookSheetTable({
   onToggleAllRows: (checked: boolean) => void
   onPickRandomRows: () => void
   onRunSelectedRows: () => void
+  onRunAllRows: () => void
   onRunSelectedRowsInBackground?: () => void
   onExportRows: (rows: Array<{ rowIndex: number; row: Record<string, unknown>; evaluation?: GigaChatRuleEvaluationRow }>) => void
   onSelectRuleHitRows: () => void
@@ -130,54 +132,6 @@ export function WorkbookSheetTable({
       <div><b>Показано строк:</b> {data.rendered_rows} из {data.total_rows}</div>
     </div>
 
-    <div className='workbook-table-toolbar'>
-      <label className='workbook-row-limit-control'>
-        <span>Показывать строк:</span>
-        <select
-          value={String(rowLimit)}
-          disabled={Boolean(busy)}
-          onChange={(e) => {
-            const value = e.target.value
-            if (value === '10' || value === '20' || value === '100') {
-              onRowLimitChange(Number(value) as 10 | 20 | 100)
-              return
-            }
-            onRowLimitChange('all')
-          }}
-        >
-          <option value='10'>10</option>
-          <option value='20'>20</option>
-          <option value='100'>100</option>
-          <option value='all'>Все</option>
-        </select>
-      </label>
-
-      <label className='workbook-row-limit-control'>
-        <span>Высота строк:</span>
-        <select
-          value={String(rowClamp)}
-          disabled={Boolean(busy)}
-          onChange={(e) => {
-            const value = e.target.value
-            if (value === '2' || value === '4' || value === '8') {
-              setRowClamp(Number(value) as Exclude<TableRowClamp, 'all'>)
-              return
-            }
-            setRowClamp('all')
-          }}
-        >
-          <option value='2'>2 строки</option>
-          <option value='4'>4 строки</option>
-          <option value='8'>8 строк</option>
-          <option value='all'>Полный текст</option>
-        </select>
-      </label>
-
-      {canChooseAnotherSheet ? <div className='transport-actions'>
-        <button onClick={onChooseAnotherSheet}>Выбрать другой лист</button>
-      </div> : null}
-    </div>
-
     <div className='transport-actions workbook-batch-actions'>
       <label className='workbook-select-all'>
         <input type='checkbox' checked={allVisibleRowsSelected} disabled={Boolean(busy)} onChange={(e) => onToggleAllRows(e.target.checked)} />
@@ -199,6 +153,9 @@ export function WorkbookSheetTable({
       </button>
       <button type='button' onClick={onRunSelectedRows} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
         {batchBusy ? 'Отправляем выбранные...' : 'Отправить выбранное в GigaChat для классификации'}
+      </button>
+      <button type='button' onClick={onRunAllRows} disabled={!data.rows.length || Boolean(batchBusy) || Boolean(busy)}>
+        {batchBusy ? 'Отправляем...' : `Отправить все в GigaChat (${data.rows.length})`}
       </button>
       {onRunSelectedRowsInBackground ? <button type='button' onClick={onRunSelectedRowsInBackground} disabled={!selectedRowKeys.length || Boolean(batchBusy) || Boolean(busy)}>
         Запустить фоном
@@ -304,19 +261,15 @@ export function WorkbookSheetTable({
               const included = includedPromptColumns.includes(column)
               return <th
                 key={`head-${column}`}
-                className={included ? '' : 'workbook-column-excluded'}
+                className={`workbook-prompt-column ${included ? 'included' : 'workbook-column-excluded excluded'}`}
                 style={getColumnStyle(column)}
+                title={included ? 'Колонка включена в промпт. Клик по заголовку выключит ее.' : 'Колонка выключена из промпта. Клик по заголовку включит ее.'}
+                onClick={() => {
+                  if (!busy) onTogglePromptColumn(column)
+                }}
               >
                 <div className='workbook-header-cell'>
                   <span>{column}</span>
-                  <button
-                    className='workbook-column-toggle'
-                    onClick={() => onTogglePromptColumn(column)}
-                    type='button'
-                    disabled={Boolean(busy)}
-                  >
-                    {included ? 'Убрать из промпта' : 'Добавить в промпт'}
-                  </button>
                   <button
                     type='button'
                     className='table-column-resizer'
@@ -398,6 +351,53 @@ export function WorkbookSheetTable({
           </tr> : null}
         </tbody>
       </table>
+    </div>
+    <div className='workbook-table-toolbar workbook-table-toolbar-bottom'>
+      <label className='workbook-row-limit-control'>
+        <span>Показывать строк:</span>
+        <select
+          value={String(rowLimit)}
+          disabled={Boolean(busy)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '10' || value === '20' || value === '100') {
+              onRowLimitChange(Number(value) as 10 | 20 | 100)
+              return
+            }
+            onRowLimitChange('all')
+          }}
+        >
+          <option value='10'>10</option>
+          <option value='20'>20</option>
+          <option value='100'>100</option>
+          <option value='all'>Все</option>
+        </select>
+      </label>
+
+      <label className='workbook-row-limit-control'>
+        <span>Высота строк:</span>
+        <select
+          value={String(rowClamp)}
+          disabled={Boolean(busy)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '2' || value === '4' || value === '8') {
+              setRowClamp(Number(value) as Exclude<TableRowClamp, 'all'>)
+              return
+            }
+            setRowClamp('all')
+          }}
+        >
+          <option value='2'>2 строки</option>
+          <option value='4'>4 строки</option>
+          <option value='8'>8 строк</option>
+          <option value='all'>Полный текст</option>
+        </select>
+      </label>
+
+      {canChooseAnotherSheet ? <div className='transport-actions'>
+        <button onClick={onChooseAnotherSheet}>Выбрать другой лист</button>
+      </div> : null}
     </div>
     <CellHoverPopover hoveredCell={hoveredCell} />
   </div>

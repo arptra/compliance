@@ -15,7 +15,7 @@ function splitLines(value: string) {
 
 function formatRuleAction(rule: GigaChatRulePack) {
   return rule.type === 'assign_tag'
-    ? `Tag: ${rule.target_tag || '—'}`
+    ? `Ключевые слова: ${rule.keywords.length ? rule.keywords.join(', ') : '—'}`
     : `Topic: ${rule.target_topic || '—'}`
 }
 

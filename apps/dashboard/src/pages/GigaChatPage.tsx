@@ -683,10 +683,11 @@ export default function GigaChatPage() {
   })
 
   const uploadWorkbook = useMutation({
-    mutationFn: async () => {
-      if (!selectedFile) throw new Error('Выберите Excel или CSV файл')
+    mutationFn: async (fileArg?: File) => {
+      const file = fileArg ?? selectedFile
+      if (!file) throw new Error('Выберите Excel или CSV файл')
       try {
-        return await uploadLocalGigaChatWorkbook(selectedFile.name)
+        return await uploadLocalGigaChatWorkbook(file.name)
       } catch {
         // Fall back to browser multipart for files that are not present in local project folders.
       }
@@ -697,12 +698,12 @@ export default function GigaChatPage() {
         controller.abort(new DOMException('WORKBOOK_UPLOAD_TIMEOUT', 'AbortError'))
       }, WORKBOOK_UPLOAD_TIMEOUT_MS)
       const form = new FormData()
-      form.append('file', selectedFile)
+      form.append('file', file)
       try {
         return await uploadGigaChatWorkbook(form, controller.signal)
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
-          return uploadLocalGigaChatWorkbook(selectedFile.name)
+          return uploadLocalGigaChatWorkbook(file.name)
         }
         throw error
       } finally {
@@ -1182,7 +1183,7 @@ export default function GigaChatPage() {
     }
   }
 
-  const handleRunSelectedRows = async (valuesForRun = settingValues) => {
+  const handleRunRowIndexes = async (rowIndexes: number[], emptyMessage: string, errorContext: string, valuesForRun = settingValues) => {
     if (!selected?.ready) {
       setBatchRunError(`Транспорт ${selected?.title ?? selectedTransport} сейчас не готов к отправке. Сначала выберите ready-вариант подключения.`)
       return
@@ -1192,12 +1193,8 @@ export default function GigaChatPage() {
       return
     }
 
-    const rowIndexes = sheetData.rows
-      .map((_, index) => index)
-      .filter((index) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
-
     if (!rowIndexes.length) {
-      setBatchRunError('Сначала выберите хотя бы одну строку.')
+      setBatchRunError(emptyMessage)
       return
     }
 
@@ -1228,11 +1225,35 @@ export default function GigaChatPage() {
         setRowRunResult(lastResult)
       }
     } catch (error) {
-      setBatchRunError(formatLabError(error as Error, 'выбранные строки'))
+      setBatchRunError(formatLabError(error as Error, errorContext))
     } finally {
       setBatchBusy(false)
       finishProcessingOverlay()
     }
+  }
+
+  const handleRunSelectedRows = async (valuesForRun = settingValues) => {
+    if (!sheetData) {
+      setBatchRunError('Сначала загрузите рабочую таблицу.')
+      return
+    }
+    const rowIndexes = sheetData.rows
+      .map((_, index) => index)
+      .filter((index) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, index)))
+    await handleRunRowIndexes(rowIndexes, 'Сначала выберите хотя бы одну строку.', 'выбранные строки', valuesForRun)
+  }
+
+  const handleRunAllRows = async (valuesForRun = settingValues) => {
+    if (!sheetData) {
+      setBatchRunError('Сначала загрузите рабочую таблицу.')
+      return
+    }
+    await handleRunRowIndexes(
+      sheetData.rows.map((_, index) => index),
+      'В текущем листе нет строк для отправки.',
+      'все строки',
+      valuesForRun,
+    )
   }
 
   const toggleTransportCard = (name: GigaChatTransportName) => {
@@ -1583,7 +1604,7 @@ export default function GigaChatPage() {
                 onChange={(event) => setSelectedSettingsVersionId(event.target.value)}
               >
                 {(versionsQ.data?.versions ?? []).map((version) => <option key={version.version_id} value={version.version_id}>
-                  {version.title} · {VERSION_STATUS_LABELS[version.status]}
+                  {version.title} · {VERSION_STATUS_LABELS[version.status]} · Автор: {version.created_by || '—'}
                 </option>)}
               </select>
             </label>
@@ -1726,7 +1747,7 @@ export default function GigaChatPage() {
           }}
           disabled={previewFinalPrompt.isPending && !finalPromptPreview}
         >
-          {previewFinalPrompt.isPending && !finalPromptPreview ? 'Собираем итоговый...' : 'Показать итоговый'}
+          {previewFinalPrompt.isPending && !finalPromptPreview ? 'Собираем итоговый...' : 'Показать итоговый промпт'}
         </button>
         <span className='lab-settings-status'>
           {previewFinalPrompt.isPending && !finalPromptSynchronized
@@ -1770,16 +1791,20 @@ export default function GigaChatPage() {
 
       {!uploadCollapsed ? <>
         <div className='workbook-upload-row'>
-          <input
-            key={fileInputVersion}
-            type='file'
-            accept='.xlsx,.xls,.xlsm,.csv,.zip'
-            disabled={uploadWorkbook.isPending}
-            onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-          />
-          <button onClick={() => uploadWorkbook.mutate()} disabled={!selectedFile || uploadWorkbook.isPending}>
-            {uploadWorkbook.isPending ? 'Загружаем...' : 'Загрузить'}
-          </button>
+          <label className={`workbook-file-button ${uploadWorkbook.isPending ? 'disabled' : ''}`}>
+            <input
+              key={fileInputVersion}
+              type='file'
+              accept='.xlsx,.xls,.xlsm,.csv,.zip'
+              disabled={uploadWorkbook.isPending}
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null
+                setSelectedFile(file)
+                if (file) uploadWorkbook.mutate(file)
+              }}
+            />
+            <span>{uploadWorkbook.isPending ? 'Загружаем файл...' : 'Выбрать Excel / CSV / ZIP'}</span>
+          </label>
           {selectedFile ? <span className='lab-muted'>Выбран файл: <code>{selectedFile.name}</code></span> : <span className='lab-muted'>Файл пока не выбран.</span>}
         </div>
 
@@ -1896,7 +1921,7 @@ export default function GigaChatPage() {
     <section className='card transport-result workbook-table-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
-          <h3>Рабочая таблица</h3>
+          <h3>Таблица с тегами</h3>
           <p>Ниже отображаются колонки выбранного листа, строки для проверки структуры и быстрые действия по отправке одной записи в GigaChat.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
@@ -2040,6 +2065,7 @@ export default function GigaChatPage() {
             })
           }}
           onRunSelectedRows={() => runWithRuleGuard((valuesForRun) => handleRunSelectedRows(valuesForRun))}
+          onRunAllRows={() => runWithRuleGuard((valuesForRun) => handleRunAllRows(valuesForRun))}
           onRunSelectedRowsInBackground={() => runWithRuleGuard((valuesForRun) => startBackgroundTask.mutate(valuesForRun))}
           onExportRows={(rows) => exportWorkbookRows.mutate(rows)}
           batchBusy={batchBusy}
