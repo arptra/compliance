@@ -1027,7 +1027,7 @@ export default function GigaChatPage() {
 
       const allowLocalFallback = canUseLocalWorkbookFallback()
 
-      if (file.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+      if (!allowLocalFallback || file.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
         return uploadWorkbookInChunks(file, setWorkbookUploadProgress, controller.signal)
       }
 
