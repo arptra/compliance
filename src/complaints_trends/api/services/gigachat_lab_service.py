@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import shutil
 import threading
 import traceback
 import uuid
@@ -45,9 +46,14 @@ from ..schemas import (
     GigaChatLabSettingsVersionSummary,
     GigaChatLabSettingsVersionUpdateRequest,
     GigaChatWorkbookSelectSheetRequest,
+    GigaChatWorkbookChunkedUploadCompleteResponse,
+    GigaChatWorkbookChunkedUploadStartRequest,
+    GigaChatWorkbookChunkedUploadStartResponse,
+    GigaChatWorkbookChunkUploadResponse,
     GigaChatWorkbookRowsExportRequest,
     GigaChatWorkbookSheetDataResponse,
     GigaChatWorkbookSheetPreview,
+    GigaChatWorkbookUploadTaskResponse,
     GigaChatWorkbookUploadResponse,
 )
 
@@ -55,6 +61,10 @@ try:
     from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE as _OPENPYXL_ILLEGAL_RE
 except Exception:  # pragma: no cover
     _OPENPYXL_ILLEGAL_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
+
+
+class _WorkbookUploadCancelled(Exception):
+    pass
 
 
 class GigaChatLabService:
@@ -105,18 +115,26 @@ class GigaChatLabService:
     _background_lock = threading.Lock()
     _background_cancel_flags: dict[str, threading.Event] = {}
     _background_threads: dict[str, threading.Thread] = {}
+    _upload_task_lock = threading.Lock()
+    _upload_cancel_flags: dict[str, threading.Event] = {}
+    _upload_task_threads: dict[str, threading.Thread] = {}
 
-    def __init__(self, cfg: ProjectConfig) -> None:
+    def __init__(self, cfg: ProjectConfig, catalog_service: Any | None = None, lake_service: Any | None = None) -> None:
         self.cfg = cfg
+        self.catalog = catalog_service
+        self.lake = lake_service
         self.base_dir = Path(cfg.analysis.pattern_monitoring.interim_dir) / "gigachat_lab"
         self.uploads_dir = self.base_dir / "uploads"
+        self.chunked_uploads_dir = self.base_dir / "chunked_uploads"
         self.background_dir = Path("data/background")
         self.versions_dir = Path("data/gigachat_lab/versions")
         self.settings_path = self.base_dir / "settings.json"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.chunked_uploads_dir.mkdir(parents=True, exist_ok=True)
         self.background_dir.mkdir(parents=True, exist_ok=True)
         self.versions_dir.mkdir(parents=True, exist_ok=True)
+        self._seed_catalog_settings_versions()
 
     @staticmethod
     def _now() -> datetime:
@@ -323,6 +341,20 @@ class GigaChatLabService:
         safe = self._version_id_from_title(version_id)
         return self.versions_dir / f"{safe}.json"
 
+    @staticmethod
+    def _user_context(user: dict[str, Any] | None = None, *, user_id: str | None = None, workspace_id: str | None = None) -> dict[str, str]:
+        if user:
+            return {
+                "user_id": str(user.get("id") or user_id or "anonymous"),
+                "workspace_id": str(user.get("workspace_id") or workspace_id or "default"),
+                "display_name": str(user.get("display_name") or user.get("email") or user_id or "anonymous"),
+            }
+        return {
+            "user_id": str(user_id or "anonymous"),
+            "workspace_id": str(workspace_id or "default"),
+            "display_name": str(user_id or "anonymous"),
+        }
+
     def _default_version_payload(self) -> dict[str, Any]:
         values, saved_at = self._effective_values()
         now = saved_at or self._now().isoformat()
@@ -332,13 +364,51 @@ class GigaChatLabService:
             "description": "Базовая версия из дефолтных и legacy-настроек Lab.",
             "status": "release",
             "created_by": "system",
+            "owner_user_id": "system",
+            "workspace_id": "default",
+            "visibility": "public",
             "created_at": now,
             "updated_at": saved_at,
             "base_version_id": None,
             "values": values,
         }
 
-    def _read_version_payload(self, version_id: str) -> dict[str, Any]:
+    def _seed_catalog_settings_versions(self) -> None:
+        if not self.catalog:
+            return
+        default_payload = self._default_version_payload()
+        if not self.catalog.lab_settings_version_exists("default"):
+            self.catalog.save_lab_settings_version(default_payload)
+        for path in sorted(self.versions_dir.glob("*.json")):
+            with suppress(Exception):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                version_id = str(payload.get("version_id") or path.stem)
+                if self.catalog.lab_settings_version_exists(version_id):
+                    continue
+                payload["version_id"] = version_id
+                payload.setdefault("workspace_id", "default")
+                payload.setdefault("owner_user_id", "system")
+                payload.setdefault("visibility", "public")
+                payload.setdefault("created_by", payload.get("created_by") or "system")
+                payload.setdefault("updated_by", payload.get("updated_by") or payload.get("created_by") or "")
+                payload.setdefault("metadata", {"migrated_from": str(path)})
+                self.catalog.save_lab_settings_version(payload)
+
+    def _read_version_payload(self, version_id: str, *, user: dict[str, Any] | None = None, user_id: str | None = None, workspace_id: str | None = None) -> dict[str, Any]:
+        if self.catalog:
+            context = self._user_context(user, user_id=user_id, workspace_id=workspace_id)
+            payload = self.catalog.get_lab_settings_version(
+                version_id,
+                user_id=context["user_id"],
+                workspace_id=context["workspace_id"],
+            )
+            if payload:
+                return payload
+            if version_id == "default":
+                return self._default_version_payload()
+            raise FileNotFoundError(f"Settings version not found: {version_id}")
         if version_id == "default" and not self._version_path(version_id).exists():
             return self._default_version_payload()
         path = self._version_path(version_id)
@@ -353,22 +423,30 @@ class GigaChatLabService:
         version_id = str(payload.get("version_id") or "")
         if not version_id:
             raise ValueError("version_id is required")
+        if self.catalog:
+            self.catalog.save_lab_settings_version(payload)
+            return
         self._version_path(version_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _version_summary_from_payload(self, payload: dict[str, Any], *, is_default: bool = False) -> GigaChatLabSettingsVersionSummary:
+    def _version_summary_from_payload(self, payload: dict[str, Any], *, is_default: bool = False, user_id: str | None = None) -> GigaChatLabSettingsVersionSummary:
         version_id = str(payload.get("version_id") or "default")
         path = self._version_path(version_id)
+        owner_user_id = str(payload.get("owner_user_id") or "")
+        resolved_is_default = is_default or version_id == "default" or bool(payload.get("is_default"))
         return GigaChatLabSettingsVersionSummary(
             version_id=version_id,
             title=str(payload.get("title") or version_id),
             description=str(payload.get("description") or ""),
             status=payload.get("status") or "draft",
+            visibility=payload.get("visibility") or "private",
             created_by=str(payload.get("created_by") or ""),
+            owner_user_id=owner_user_id,
             created_at=datetime.fromisoformat(payload["created_at"]) if payload.get("created_at") else None,
             updated_at=datetime.fromisoformat(payload["updated_at"]) if payload.get("updated_at") else None,
             base_version_id=payload.get("base_version_id"),
-            path=str(path) if path.exists() else None,
-            is_default=is_default,
+            path=str(payload.get("path") or (str(path) if path.exists() else None)) if not self.catalog else "sqlite:data/app.sqlite",
+            is_default=resolved_is_default,
+            can_edit=bool(payload.get("can_edit")) if "can_edit" in payload else (bool(user_id) and owner_user_id == user_id and not resolved_is_default),
         )
 
     def _values_from_version_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -381,7 +459,16 @@ class GigaChatLabService:
                     values[key] = self._coerce_setting_value(key, value)
         return values
 
-    def list_settings_versions(self) -> GigaChatLabSettingsVersionsResponse:
+    def list_settings_versions(self, *, user: dict[str, Any] | None = None) -> GigaChatLabSettingsVersionsResponse:
+        if self.catalog:
+            context = self._user_context(user)
+            versions = [
+                self._version_summary_from_payload(payload, user_id=context["user_id"])
+                for payload in self.catalog.list_lab_settings_versions(user_id=context["user_id"], workspace_id=context["workspace_id"])
+            ]
+            if not versions:
+                versions.append(self._version_summary_from_payload(self._default_version_payload(), is_default=True, user_id=context["user_id"]))
+            return GigaChatLabSettingsVersionsResponse(versions=versions)
         versions: list[GigaChatLabSettingsVersionSummary] = []
         for path in sorted(self.versions_dir.glob("*.json")):
             with suppress(Exception):
@@ -392,56 +479,76 @@ class GigaChatLabService:
         versions.sort(key=lambda item: (not item.is_default, item.title.lower()))
         return GigaChatLabSettingsVersionsResponse(versions=versions)
 
-    def get_settings_version(self, version_id: str) -> GigaChatLabSettingsVersionResponse:
-        payload = self._read_version_payload(version_id)
+    def get_settings_version(self, version_id: str, *, user: dict[str, Any] | None = None) -> GigaChatLabSettingsVersionResponse:
+        context = self._user_context(user)
+        payload = self._read_version_payload(version_id, user=user)
         values = self._values_from_version_payload(payload)
         return GigaChatLabSettingsVersionResponse(
-            version=self._version_summary_from_payload(payload, is_default=version_id == "default"),
+            version=self._version_summary_from_payload(payload, is_default=version_id == "default", user_id=context["user_id"]),
             fields=self._fields_from_values(values),
             values=values,
         )
 
-    def create_settings_version(self, req: GigaChatLabSettingsVersionCreateRequest) -> GigaChatLabSettingsVersionResponse:
-        version_id = self._version_id_from_title(req.version_id or req.title)
-        if self._version_path(version_id).exists():
+    def create_settings_version(self, req: GigaChatLabSettingsVersionCreateRequest, *, user: dict[str, Any] | None = None) -> GigaChatLabSettingsVersionResponse:
+        context = self._user_context(user)
+        base_id = self._version_id_from_title(req.version_id or req.title)
+        version_id = base_id
+        if self.catalog:
+            suffix = 2
+            while self.catalog.lab_settings_version_exists(version_id):
+                version_id = f"{base_id}_{suffix}"
+                suffix += 1
+        elif self._version_path(version_id).exists():
             raise ValueError(f"Settings version already exists: {version_id}")
-        base_payload = self._read_version_payload(req.base_version_id or "default")
+        base_payload = self._read_version_payload(req.base_version_id or "default", user=user)
         now = self._now().isoformat()
+        created_by = req.created_by.strip() or context["display_name"]
         payload = {
             "version_id": version_id,
+            "workspace_id": context["workspace_id"],
+            "owner_user_id": context["user_id"],
             "title": req.title.strip() or version_id,
             "description": req.description,
             "status": req.status,
-            "created_by": req.created_by,
+            "visibility": req.visibility,
+            "created_by": created_by,
+            "updated_by": created_by,
             "created_at": now,
             "updated_at": now,
             "base_version_id": req.base_version_id or "default",
             "values": self._values_from_version_payload(base_payload),
         }
         self._write_version_payload(payload)
-        return self.get_settings_version(version_id)
+        return self.get_settings_version(version_id, user=user)
 
-    def save_settings_version(self, version_id: str, req: GigaChatLabSettingsVersionUpdateRequest) -> GigaChatLabSettingsVersionResponse:
+    def save_settings_version(self, version_id: str, req: GigaChatLabSettingsVersionUpdateRequest, *, user: dict[str, Any] | None = None) -> GigaChatLabSettingsVersionResponse:
+        context = self._user_context(user)
         if version_id == "default" and not self._version_path(version_id).exists():
             payload = self._default_version_payload()
             payload["created_at"] = self._now().isoformat()
         else:
-            payload = self._read_version_payload(version_id)
+            payload = self._read_version_payload(version_id, user=user)
+        if self.catalog:
+            is_owner = str(payload.get("owner_user_id") or "") == context["user_id"]
+            if version_id == "default" or not is_owner:
+                raise PermissionError("Only the owner can update this settings version.")
         if req.title is not None:
             payload["title"] = req.title
         if req.description is not None:
             payload["description"] = req.description
         if req.status is not None:
             payload["status"] = req.status
+        if req.visibility is not None:
+            payload["visibility"] = req.visibility
         values = self._values_from_version_payload(payload)
         for key, value in req.values.items():
             if key in values:
                 values[key] = self._coerce_setting_value(key, value)
         payload["values"] = values
-        payload["updated_by"] = req.updated_by or payload.get("updated_by") or payload.get("created_by") or ""
+        payload["updated_by"] = req.updated_by or context["display_name"] or payload.get("updated_by") or payload.get("created_by") or ""
         payload["updated_at"] = self._now().isoformat()
         self._write_version_payload(payload)
-        return self.get_settings_version(str(payload["version_id"]))
+        return self.get_settings_version(str(payload["version_id"]), user=user)
 
     def _coerce_setting_value(self, key: str, value: Any) -> Any:
         meta = next((x for x in self.FIELD_DEFS if x["key"] == key), None)
@@ -953,26 +1060,391 @@ class GigaChatLabService:
         export_filename = f"{Path(req.filename or 'workbook.xlsx').stem}_{req.sheet_name or 'sheet'}_rows.xlsx"
         return export_filename, buffer.getvalue()
 
-    def upload_workbook(self, filename: str, content: bytes) -> GigaChatWorkbookUploadResponse:
+    def start_chunked_workbook_upload(
+        self,
+        req: GigaChatWorkbookChunkedUploadStartRequest,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> GigaChatWorkbookChunkedUploadStartResponse:
+        if self.catalog and (not user_id or not workspace_id):
+            user = self.catalog.get_or_create_dev_user()
+            user_id = user_id or str(user.get("id") or "dev")
+            workspace_id = workspace_id or str(user.get("workspace_id") or "default")
+        filename = Path(req.filename or "upload.xlsx").name or "upload.xlsx"
+        total_size = max(0, int(req.total_size))
+        chunk_size = max(1024 * 1024, min(int(req.chunk_size or 0), 64 * 1024 * 1024))
+        total_chunks = max(1, int(req.total_chunks or math.ceil(total_size / chunk_size) or 1))
+        session_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        session_dir = self.chunked_uploads_dir / session_id
+        (session_dir / "chunks").mkdir(parents=True, exist_ok=True)
+        payload = {
+            "session_id": session_id,
+            "filename": filename,
+            "total_size": total_size,
+            "chunk_size": chunk_size,
+            "total_chunks": total_chunks,
+            "received_chunks": [],
+            "received_bytes": 0,
+            "user_id": user_id or "anonymous",
+            "workspace_id": workspace_id or "default",
+            "created_at": self._now().isoformat(),
+        }
+        self._write_chunk_session(payload)
+        return GigaChatWorkbookChunkedUploadStartResponse(
+            session_id=session_id,
+            filename=filename,
+            chunk_size=chunk_size,
+            total_chunks=total_chunks,
+        )
+
+    def receive_chunked_workbook_chunk(
+        self,
+        session_id: str,
+        chunk_index: int,
+        content: bytes,
+    ) -> GigaChatWorkbookChunkUploadResponse:
+        with self._upload_task_lock:
+            session = self._read_chunk_session(session_id)
+            if session.get("status") == "cancelled":
+                raise ValueError("Upload session was cancelled.")
+            total_chunks = int(session["total_chunks"])
+            if chunk_index < 0 or chunk_index >= total_chunks:
+                raise ValueError(f"Chunk index is out of range: {chunk_index}")
+            chunk_dir = self.chunked_uploads_dir / session_id / "chunks"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            chunk_path = chunk_dir / f"{chunk_index:08d}.part"
+            already_received = chunk_path.exists()
+            chunk_path.write_bytes(content)
+            received = set(int(item) for item in session.get("received_chunks", []))
+            received.add(chunk_index)
+            session["received_chunks"] = sorted(received)
+            if already_received:
+                session["received_bytes"] = sum((chunk_dir / f"{idx:08d}.part").stat().st_size for idx in received)
+            else:
+                session["received_bytes"] = int(session.get("received_bytes") or 0) + len(content)
+            self._write_chunk_session(session)
+        return GigaChatWorkbookChunkUploadResponse(
+            session_id=session_id,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            received_chunks=len(session["received_chunks"]),
+            received_bytes=int(session["received_bytes"]),
+            total_size=int(session.get("total_size") or 0),
+        )
+
+    def complete_chunked_workbook_upload(self, session_id: str) -> GigaChatWorkbookChunkedUploadCompleteResponse:
+        session = self._read_chunk_session(session_id)
+        if session.get("status") == "cancelled":
+            raise ValueError("Upload session was cancelled.")
+        received = set(int(item) for item in session.get("received_chunks", []))
+        total_chunks = int(session["total_chunks"])
+        missing = [idx for idx in range(total_chunks) if idx not in received]
+        if missing:
+            raise ValueError(f"Upload is incomplete. Missing chunks: {missing[:10]}")
+        task_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        task = {
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": "queued",
+            "phase": "queued",
+            "message": "Файл загружен, задача поставлена в очередь",
+            "progress": 0.45,
+            "total_size": int(session.get("total_size") or 0),
+            "received_bytes": int(session.get("received_bytes") or 0),
+            "total_chunks": total_chunks,
+            "received_chunks": len(received),
+            "error": None,
+            "workbook": None,
+            "created_at": self._now().isoformat(),
+            "updated_at": self._now().isoformat(),
+        }
+        self._write_upload_task(task)
+        cancel_flag = threading.Event()
+        worker = threading.Thread(target=self._run_chunked_upload_task, args=(task_id, cancel_flag), daemon=True)
+        with self._upload_task_lock:
+            self._upload_cancel_flags[task_id] = cancel_flag
+            self._upload_task_threads[task_id] = worker
+        worker.start()
+        return GigaChatWorkbookChunkedUploadCompleteResponse(task_id=task_id, session_id=session_id, status="queued")
+
+    def cancel_chunked_workbook_upload_session(self, session_id: str) -> dict[str, Any]:
+        with self._upload_task_lock:
+            session = self._read_chunk_session(session_id)
+            session["status"] = "cancelled"
+            session["cancelled_at"] = self._now().isoformat()
+            self._write_chunk_session(session)
+        with suppress(Exception):
+            self._cleanup_chunk_session_files(session_id)
+        return {"session_id": session_id, "status": "cancelled"}
+
+    def get_workbook_upload_task(self, task_id: str) -> GigaChatWorkbookUploadTaskResponse:
+        task = self._read_upload_task(task_id)
+        workbook = task.get("workbook")
+        return GigaChatWorkbookUploadTaskResponse(
+            task_id=str(task["task_id"]),
+            session_id=str(task["session_id"]),
+            status=task["status"],
+            phase=str(task.get("phase") or ""),
+            message=str(task.get("message") or ""),
+            progress=float(task.get("progress") or 0),
+            total_size=int(task.get("total_size") or 0),
+            received_bytes=int(task.get("received_bytes") or 0),
+            total_chunks=int(task.get("total_chunks") or 0),
+            received_chunks=int(task.get("received_chunks") or 0),
+            error=task.get("error"),
+            workbook=GigaChatWorkbookUploadResponse(**workbook) if isinstance(workbook, dict) else None,
+        )
+
+    def cancel_workbook_upload_task(self, task_id: str) -> GigaChatWorkbookUploadTaskResponse:
+        with self._upload_task_lock:
+            task = self._read_upload_task(task_id)
+            if task.get("status") not in {"completed", "failed", "cancelled"}:
+                flag = self._upload_cancel_flags.get(task_id)
+                if flag:
+                    flag.set()
+                task.update({
+                    "status": "cancelled",
+                    "phase": "cancelled",
+                    "message": "Загрузка отменена пользователем",
+                    "error": None,
+                })
+                self._write_upload_task(task)
+                with suppress(Exception):
+                    self._cleanup_chunk_session_files(str(task.get("session_id") or ""))
+        return self.get_workbook_upload_task(task_id)
+
+    def _run_chunked_upload_task(self, task_id: str, cancel_flag: threading.Event) -> None:
+        task = self._read_upload_task(task_id)
+        session = self._read_chunk_session(str(task["session_id"]))
+        session_id = str(session["session_id"])
         upload_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
         upload_dir = self.uploads_dir / upload_id
         upload_dir.mkdir(parents=True, exist_ok=True)
-        display_filename = filename
-        source_content = content
-        ext = (Path(filename).suffix or ".xlsx").lower()
-        if ext == ".zip":
-            inner_name, source_content = self._extract_supported_file_from_zip(filename, content)
-            ext = (Path(inner_name).suffix or ".xlsx").lower()
-            display_filename = f"{filename} -> {inner_name}"
+        suffix = (Path(str(session["filename"])).suffix or ".xlsx").lower()
+        assembled_path = upload_dir / f"source{suffix}"
+        try:
+            self._raise_if_upload_cancelled(task_id, cancel_flag)
+            self._update_upload_task(task_id, status="running", phase="assembling", progress=0.50, message="Собираем файл из загруженных частей")
+            chunk_dir = self.chunked_uploads_dir / session_id / "chunks"
+            with assembled_path.open("wb") as target:
+                for idx in range(int(session["total_chunks"])):
+                    self._raise_if_upload_cancelled(task_id, cancel_flag)
+                    chunk_path = chunk_dir / f"{idx:08d}.part"
+                    if not chunk_path.exists():
+                        raise FileNotFoundError(f"Missing upload chunk: {idx}")
+                    with chunk_path.open("rb") as source:
+                        while True:
+                            self._raise_if_upload_cancelled(task_id, cancel_flag)
+                            block = source.read(1024 * 1024)
+                            if not block:
+                                break
+                            target.write(block)
+            self._raise_if_upload_cancelled(task_id, cancel_flag)
+            self._update_upload_task(task_id, phase="parsing", progress=0.62, message="Читаем структуру Excel/CSV и готовим превью")
+            workbook = self._finalize_workbook_upload(
+                upload_id=upload_id,
+                original_filename=str(session["filename"]),
+                display_filename=str(session["filename"]),
+                stored_path=assembled_path,
+                user_id=str(session.get("user_id") or "anonymous"),
+                workspace_id=str(session.get("workspace_id") or "default"),
+                progress_callback=lambda phase, progress, message: self._update_upload_task_checked(task_id, cancel_flag, phase=phase, progress=progress, message=message),
+            )
+            self._raise_if_upload_cancelled(task_id, cancel_flag)
+            self._update_upload_task(
+                task_id,
+                status="completed",
+                phase="completed",
+                progress=1,
+                message="Файл готов",
+                workbook=workbook.model_dump(mode="json"),
+            )
+        except _WorkbookUploadCancelled:
+            with suppress(Exception):
+                if self.lake:
+                    self.lake.delete_file_artifacts(
+                        file_id=upload_id,
+                        workspace_id=str(session.get("workspace_id") or "default"),
+                    )
+                elif self.catalog:
+                    self.catalog.delete_file(upload_id)
+            self._update_upload_task(
+                task_id,
+                status="cancelled",
+                phase="cancelled",
+                message="Загрузка отменена пользователем",
+                error=None,
+            )
+            with suppress(Exception):
+                shutil.rmtree(upload_dir)
+        except Exception as exc:
+            self._update_upload_task(
+                task_id,
+                status="failed",
+                phase="failed",
+                progress=float(task.get("progress") or 0),
+                message="Не удалось обработать файл",
+                error=f"{exc}\n{traceback.format_exc()}",
+            )
+        finally:
+            with suppress(Exception):
+                self._cleanup_chunk_session_files(session_id)
+            with self._upload_task_lock:
+                self._upload_cancel_flags.pop(task_id, None)
+                self._upload_task_threads.pop(task_id, None)
 
-        stored_path = upload_dir / f"source{ext}"
-        stored_path.write_bytes(source_content)
+    def _chunk_session_path(self, session_id: str) -> Path:
+        return self.chunked_uploads_dir / session_id / "session.json"
 
+    def _upload_task_path(self, task_id: str) -> Path:
+        return self.chunked_uploads_dir / "tasks" / f"{task_id}.json"
+
+    def _cleanup_chunk_session_files(self, session_id: str) -> None:
+        if session_id:
+            shutil.rmtree(self.chunked_uploads_dir / session_id / "chunks")
+
+    def _read_chunk_session(self, session_id: str) -> dict[str, Any]:
+        path = self._chunk_session_path(session_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Chunked upload session not found: {session_id}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _write_chunk_session(self, payload: dict[str, Any]) -> None:
+        session_id = str(payload["session_id"])
+        path = self._chunk_session_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _read_upload_task(self, task_id: str) -> dict[str, Any]:
+        path = self._upload_task_path(task_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Workbook upload task not found: {task_id}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _write_upload_task(self, payload: dict[str, Any]) -> None:
+        path = self._upload_task_path(str(payload["task_id"]))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload["updated_at"] = self._now().isoformat()
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _update_upload_task(self, task_id: str, **updates: Any) -> None:
+        task = self._read_upload_task(task_id)
+        if task.get("status") == "cancelled" and updates.get("status") not in {"cancelled", None}:
+            return
+        task.update(updates)
+        self._write_upload_task(task)
+
+    def _update_upload_task_checked(self, task_id: str, cancel_flag: threading.Event, **updates: Any) -> None:
+        self._raise_if_upload_cancelled(task_id, cancel_flag)
+        self._update_upload_task(task_id, **updates)
+        self._raise_if_upload_cancelled(task_id, cancel_flag)
+
+    def _raise_if_upload_cancelled(self, task_id: str, cancel_flag: threading.Event) -> None:
+        if cancel_flag.is_set():
+            raise _WorkbookUploadCancelled()
+        try:
+            task = self._read_upload_task(task_id)
+        except Exception:
+            return
+        if task.get("status") == "cancelled":
+            cancel_flag.set()
+            raise _WorkbookUploadCancelled()
+
+    def _finalize_workbook_upload(
+        self,
+        *,
+        upload_id: str,
+        original_filename: str,
+        display_filename: str,
+        stored_path: Path,
+        user_id: str,
+        workspace_id: str,
+        progress_callback: Any | None = None,
+    ) -> GigaChatWorkbookUploadResponse:
+        if stored_path.suffix.lower() == ".zip":
+            archive_path = stored_path.with_name("archive.zip")
+            stored_path.rename(archive_path)
+            inner_name, source_content = self._extract_supported_file_from_zip(original_filename, archive_path.read_bytes())
+            inner_ext = (Path(inner_name).suffix or ".xlsx").lower()
+            stored_path = archive_path.with_name(f"source{inner_ext}")
+            stored_path.write_bytes(source_content)
+            display_filename = f"{original_filename} -> {inner_name}"
+
+        progress_callback and progress_callback("parsing", 0.64, "Читаем листы и первые строки")
         meta = self._inspect_workbook(stored_path, display_filename)
-        (upload_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        if self.catalog:
+            self.catalog.create_file(
+                file_id=upload_id,
+                workspace_id=workspace_id,
+                uploaded_by_user_id=user_id,
+                original_filename=original_filename,
+                display_filename=display_filename,
+                storage_path=str(stored_path),
+                file_format=str(meta.get("file_format", "excel")),
+                sheet_count=int(meta.get("sheet_count", 0)),
+                metadata=meta,
+            )
+        if self.lake:
+            try:
+                progress_callback and progress_callback("ingesting", 0.78, "Пишем parquet-слой и проверяем дубли")
+                lake_result = self.lake.ingest_workbook(
+                    file_id=upload_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    stored_path=stored_path,
+                    display_filename=display_filename,
+                    file_format=str(meta.get("file_format", "excel")),
+                    sheets=list(meta.get("sheets", [])),
+                )
+                input_rows_by_sheet = {
+                    str(artifact.get("metadata", {}).get("sheet_name") or ""): int(artifact.get("metadata", {}).get("input_rows") or 0)
+                    for artifact in lake_result.get("artifacts", [])
+                    if isinstance(artifact, dict)
+                }
+                for sheet in meta.get("sheets", []):
+                    if not isinstance(sheet, dict):
+                        continue
+                    input_rows = input_rows_by_sheet.get(str(sheet.get("name") or ""))
+                    if input_rows is not None:
+                        sheet["rows_total"] = input_rows
+            except Exception as exc:
+                if self.catalog:
+                    self.catalog.update_file_status(upload_id, "ingest_failed")
+                meta["lake_error"] = str(exc)
+        (stored_path.parent / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
         return GigaChatWorkbookUploadResponse(**meta)
 
-    def upload_local_workbook(self, filename: str) -> GigaChatWorkbookUploadResponse:
+    def upload_workbook(
+        self,
+        filename: str,
+        content: bytes,
+        *,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> GigaChatWorkbookUploadResponse:
+        upload_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        upload_dir = self.uploads_dir / upload_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        if self.catalog and (not user_id or not workspace_id):
+            user = self.catalog.get_or_create_dev_user()
+            user_id = user_id or str(user.get("id") or "dev")
+            workspace_id = workspace_id or str(user.get("workspace_id") or "default")
+        user_id = user_id or "anonymous"
+        workspace_id = workspace_id or "default"
+        ext = (Path(filename).suffix or ".xlsx").lower()
+        stored_path = upload_dir / f"source{ext}"
+        stored_path.write_bytes(content)
+        return self._finalize_workbook_upload(
+            upload_id=upload_id,
+            original_filename=filename,
+            display_filename=filename,
+            stored_path=stored_path,
+            user_id=user_id,
+            workspace_id=workspace_id,
+        )
+
+    def upload_local_workbook(self, filename: str, *, user_id: str | None = None, workspace_id: str | None = None) -> GigaChatWorkbookUploadResponse:
         requested_name = Path(filename).name
         if not requested_name or requested_name != filename:
             raise ValueError("Local workbook fallback accepts only a file name, not a path.")
@@ -984,7 +1456,7 @@ class GigaChatLabService:
         for directory in allowed_dirs:
             candidate = directory / requested_name
             if candidate.is_file():
-                return self.upload_workbook(candidate.name, candidate.read_bytes())
+                return self.upload_workbook(candidate.name, candidate.read_bytes(), user_id=user_id, workspace_id=workspace_id)
         searched = ", ".join(str(directory / requested_name) for directory in allowed_dirs)
         raise FileNotFoundError(f"Local workbook not found. Checked: {searched}")
 
@@ -1000,6 +1472,38 @@ class GigaChatLabService:
         if stored_path is None:
             raise FileNotFoundError(f"Workbook source file not found for upload: {upload_id}")
 
+        meta_sheets = [sheet for sheet in meta.get("sheets", []) if isinstance(sheet, dict)]
+        meta_sheet = next((sheet for sheet in meta_sheets if str(sheet.get("name", "")) == (req.sheet_name if file_format != "csv" else "data")), None)
+        source_total_rows = int(meta_sheet.get("rows_total") or 0) if meta_sheet else 0
+        source_preview_rows = len(meta_sheet.get("preview_rows") or []) if meta_sheet else 0
+
+        if self.lake:
+            lake_sheet = self.lake.load_raw_sheet(upload_id, req.sheet_name if file_format != "csv" else "data", req.row_limit)
+            if lake_sheet is not None:
+                lake_total_rows = int(lake_sheet.get("total_rows") or 0)
+                lake_has_complete_source_rows = lake_total_rows > 0 and source_total_rows > 0 and lake_total_rows >= source_total_rows
+                if lake_has_complete_source_rows:
+                    return GigaChatWorkbookSheetDataResponse(
+                        upload_id=upload_id,
+                        filename=filename,
+                        file_format="csv" if file_format == "csv" else "excel",
+                        sheet_name=req.sheet_name if file_format != "csv" else "data",
+                        total_rows=lake_total_rows,
+                        rendered_rows=int(lake_sheet["rendered_rows"]),
+                        columns=list(lake_sheet["columns"]),
+                        rows=list(lake_sheet["rows"]),
+                    )
+                if lake_total_rows <= 0 and source_total_rows <= 0 and source_preview_rows <= 0:
+                    return GigaChatWorkbookSheetDataResponse(
+                        upload_id=upload_id,
+                        filename=filename,
+                        file_format="csv" if file_format == "csv" else "excel",
+                        sheet_name=req.sheet_name if file_format != "csv" else "data",
+                        total_rows=0,
+                        rendered_rows=0,
+                        columns=list(lake_sheet["columns"]),
+                        rows=[],
+                    )
         if file_format == "csv":
             df = self._read_csv_frame(stored_path)
             sheet_name = "data"
@@ -1039,14 +1543,17 @@ class GigaChatLabService:
                 "sheets": [sheet.model_dump()],
             }
 
-        excel = pd.ExcelFile(stored_path)
-        sheets = [
-            self._build_sheet_preview(
-                sheet_name,
-                self._drop_empty_unnamed_columns(pd.read_excel(excel, sheet_name=sheet_name, dtype=object)),
-            ).model_dump()
-            for sheet_name in excel.sheet_names
-        ]
+        if suffix == ".xls":
+            excel = pd.ExcelFile(stored_path)
+            sheets = [
+                self._build_sheet_preview(
+                    sheet_name,
+                    self._drop_empty_unnamed_columns(pd.read_excel(excel, sheet_name=sheet_name, dtype=object)),
+                ).model_dump()
+                for sheet_name in excel.sheet_names
+            ]
+        else:
+            sheets = self._inspect_excel_workbook_fast(stored_path)
         return {
             "upload_id": stored_path.parent.name,
             "filename": filename,
@@ -1054,6 +1561,52 @@ class GigaChatLabService:
             "sheet_count": len(sheets),
             "sheets": sheets,
         }
+
+    def _inspect_excel_workbook_fast(self, stored_path: Path) -> list[dict[str, Any]]:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(stored_path, read_only=True, data_only=True)
+        sheets: list[dict[str, Any]] = []
+        try:
+            for worksheet in workbook.worksheets:
+                rows_iter = worksheet.iter_rows(values_only=True)
+                try:
+                    raw_header = next(rows_iter)
+                except StopIteration:
+                    raw_header = []
+                columns = self._normalize_excel_header(raw_header)
+                preview_rows: list[dict[str, Any]] = []
+                for raw_row in rows_iter:
+                    if len(preview_rows) >= 5:
+                        break
+                    values = list(raw_row[:len(columns)])
+                    if len(values) < len(columns):
+                        values.extend([None] * (len(columns) - len(values)))
+                    preview_rows.append({column: self._normalize_cell(value) for column, value in zip(columns, values)})
+                row_total = int(worksheet.max_row - 1) if worksheet.max_row else 0
+                sheets.append(GigaChatWorkbookSheetPreview(
+                    name=str(worksheet.title),
+                    rows_total=max(0, row_total),
+                    column_count=len(columns),
+                    columns=columns,
+                    preview_rows=preview_rows,
+                ).model_dump())
+        finally:
+            workbook.close()
+        return sheets
+
+    @staticmethod
+    def _normalize_excel_header(raw_header: Any) -> list[str]:
+        seen: dict[str, int] = {}
+        columns: list[str] = []
+        for idx, value in enumerate(list(raw_header or []), start=1):
+            name = str(value).strip() if value is not None else ""
+            if not name:
+                name = f"Column {idx}"
+            count = seen.get(name, 0)
+            seen[name] = count + 1
+            columns.append(name if count == 0 else f"{name}_{count + 1}")
+        return columns
 
     @classmethod
     def _extract_supported_file_from_zip(cls, filename: str, content: bytes) -> tuple[str, bytes]:

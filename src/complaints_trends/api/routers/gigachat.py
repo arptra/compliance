@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Response, UploadFile
 
 from ..deps import get_service_container
 from ..schemas import (
@@ -27,6 +27,11 @@ from ..schemas import (
     GigaChatTransportProbeResponse,
     GigaChatTransportStatusResponse,
     GigaChatWorkbookLocalUploadRequest,
+    GigaChatWorkbookChunkedUploadCompleteResponse,
+    GigaChatWorkbookChunkedUploadStartRequest,
+    GigaChatWorkbookChunkedUploadStartResponse,
+    GigaChatWorkbookChunkUploadResponse,
+    GigaChatWorkbookUploadTaskResponse,
     GigaChatWorkbookRowsExportRequest,
     GigaChatWorkbookSelectSheetRequest,
     GigaChatWorkbookSheetDataResponse,
@@ -34,6 +39,10 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/gigachat", tags=["gigachat"])
+
+
+def _optional_user(services: dict, authorization: str | None) -> dict:
+    return services["catalog"].user_from_authorization(authorization) or services["catalog"].get_or_create_dev_user()
 
 
 @router.get("/status", response_model=GigaChatTransportStatusResponse)
@@ -47,42 +56,50 @@ def probe(req: GigaChatTransportProbeRequest, services=Depends(get_service_conta
 
 
 @router.get("/lab/settings", response_model=GigaChatLabSettingsResponse)
-def lab_settings(services=Depends(get_service_container)):
+def lab_settings(authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    user = _optional_user(services, authorization)
     return services["gigachat_lab"].get_settings()
 
 
 @router.post("/lab/settings", response_model=GigaChatLabSettingsResponse)
-def save_lab_settings(req: GigaChatLabSettingsUpdateRequest, services=Depends(get_service_container)):
+def save_lab_settings(req: GigaChatLabSettingsUpdateRequest, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    user = _optional_user(services, authorization)
     return services["gigachat_lab"].save_settings(req)
 
 
 @router.get("/lab/settings/versions", response_model=GigaChatLabSettingsVersionsResponse)
-def list_lab_settings_versions(services=Depends(get_service_container)):
-    return services["gigachat_lab"].list_settings_versions()
+def list_lab_settings_versions(authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    user = _optional_user(services, authorization)
+    return services["gigachat_lab"].list_settings_versions(user=user)
 
 
 @router.post("/lab/settings/versions", response_model=GigaChatLabSettingsVersionResponse)
-def create_lab_settings_version(req: GigaChatLabSettingsVersionCreateRequest, services=Depends(get_service_container)):
+def create_lab_settings_version(req: GigaChatLabSettingsVersionCreateRequest, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:
-        return services["gigachat_lab"].create_settings_version(req)
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].create_settings_version(req, user=user)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/lab/settings/versions/{version_id}", response_model=GigaChatLabSettingsVersionResponse)
-def get_lab_settings_version(version_id: str, services=Depends(get_service_container)):
+def get_lab_settings_version(version_id: str, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:
-        return services["gigachat_lab"].get_settings_version(version_id)
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].get_settings_version(version_id, user=user)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/lab/settings/versions/{version_id}", response_model=GigaChatLabSettingsVersionResponse)
-def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUpdateRequest, services=Depends(get_service_container)):
+def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUpdateRequest, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:
-        return services["gigachat_lab"].save_settings_version(version_id, req)
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].save_settings_version(version_id, req, user=user)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -160,22 +177,93 @@ def export_validation(req: GigaChatAnnotatedExportRequest, services=Depends(get_
 
 
 @router.post("/lab/workbooks/upload", response_model=GigaChatWorkbookUploadResponse)
-async def upload_workbook(file: UploadFile = File(...), services=Depends(get_service_container)):
+async def upload_workbook(file: UploadFile = File(...), authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:
         content = await file.read()
-        return services["gigachat_lab"].upload_workbook(file.filename or "upload.xlsx", content)
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].upload_workbook(
+            file.filename or "upload.xlsx",
+            content,
+            user_id=str(user["id"]),
+            workspace_id=str(user.get("workspace_id") or "default"),
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/lab/workbooks/upload-local", response_model=GigaChatWorkbookUploadResponse)
-def upload_local_workbook(req: GigaChatWorkbookLocalUploadRequest, services=Depends(get_service_container)):
+def upload_local_workbook(req: GigaChatWorkbookLocalUploadRequest, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:
-        return services["gigachat_lab"].upload_local_workbook(req.filename)
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].upload_local_workbook(
+            req.filename,
+            user_id=str(user["id"]),
+            workspace_id=str(user.get("workspace_id") or "default"),
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/chunked/start", response_model=GigaChatWorkbookChunkedUploadStartResponse)
+def start_chunked_workbook_upload(req: GigaChatWorkbookChunkedUploadStartRequest, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    try:
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].start_chunked_workbook_upload(
+            req,
+            user_id=str(user["id"]),
+            workspace_id=str(user.get("workspace_id") or "default"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/chunked/{session_id}/chunks/{chunk_index}", response_model=GigaChatWorkbookChunkUploadResponse)
+async def upload_workbook_chunk(session_id: str, chunk_index: int, file: UploadFile = File(...), services=Depends(get_service_container)):
+    try:
+        content = await file.read()
+        return services["gigachat_lab"].receive_chunked_workbook_chunk(session_id, chunk_index, content)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/chunked/{session_id}/complete", response_model=GigaChatWorkbookChunkedUploadCompleteResponse)
+def complete_chunked_workbook_upload(session_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].complete_chunked_workbook_upload(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/chunked/{session_id}/cancel", response_model=dict)
+def cancel_chunked_workbook_upload(session_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].cancel_chunked_workbook_upload_session(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/lab/workbooks/chunked/tasks/{task_id}", response_model=GigaChatWorkbookUploadTaskResponse)
+def get_workbook_upload_task(task_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].get_workbook_upload_task(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/lab/workbooks/chunked/tasks/{task_id}/cancel", response_model=GigaChatWorkbookUploadTaskResponse)
+def cancel_workbook_upload_task(task_id: str, services=Depends(get_service_container)):
+    try:
+        return services["gigachat_lab"].cancel_workbook_upload_task(task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/lab/workbooks/{upload_id}/select-sheet", response_model=GigaChatWorkbookSheetDataResponse)

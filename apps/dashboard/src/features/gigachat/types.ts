@@ -59,18 +59,22 @@ export type GigaChatLabSettingsResponse = {
 }
 
 export type GigaChatSettingsVersionStatus = 'draft' | 'test' | 'working' | 'release' | 'archived'
+export type GigaChatSettingsVersionVisibility = 'public' | 'private'
 
 export type GigaChatLabSettingsVersionSummary = {
   version_id: string
   title: string
   description: string
   status: GigaChatSettingsVersionStatus
+  visibility: GigaChatSettingsVersionVisibility
   created_by: string
+  owner_user_id: string
   created_at?: string | null
   updated_at?: string | null
   base_version_id?: string | null
   path?: string | null
   is_default: boolean
+  can_edit: boolean
 }
 
 export type GigaChatLabSettingsVersionsResponse = {
@@ -97,6 +101,45 @@ export type GigaChatWorkbookUploadResponse = {
   file_format: 'excel' | 'csv'
   sheet_count: number
   sheets: GigaChatWorkbookSheetPreview[]
+}
+
+export type GigaChatWorkbookChunkedUploadStartResponse = {
+  session_id: string
+  filename: string
+  chunk_size: number
+  total_chunks: number
+  received_chunks: number
+  received_bytes: number
+}
+
+export type GigaChatWorkbookChunkUploadResponse = {
+  session_id: string
+  chunk_index: number
+  total_chunks: number
+  received_chunks: number
+  received_bytes: number
+  total_size: number
+}
+
+export type GigaChatWorkbookChunkedUploadCompleteResponse = {
+  task_id: string
+  session_id: string
+  status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
+}
+
+export type GigaChatWorkbookUploadTaskResponse = {
+  task_id: string
+  session_id: string
+  status: 'queued' | 'running' | 'completed' | 'cancelled' | 'failed'
+  phase: string
+  message: string
+  progress: number
+  total_size: number
+  received_bytes: number
+  total_chunks: number
+  received_chunks: number
+  error?: string | null
+  workbook?: GigaChatWorkbookUploadResponse | null
 }
 
 export type GigaChatWorkbookSheetDataResponse = {

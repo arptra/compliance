@@ -22,6 +22,8 @@ from .services.calibrator_service import CalibratorService
 from .services.quality_service import QualityService
 from .services.audit_service import AuditService
 from .services.gigachat_lab_service import GigaChatLabService
+from .services.catalog_service import CatalogService
+from .services.parquet_lake_service import ParquetLakeService
 from .services.taxonomy_label_service import TaxonomyLabelService
 from .services.report_service import ReportService
 from .services.preparation_service import PreparationService
@@ -49,7 +51,9 @@ def get_services(config_path: str) -> dict:
     monitor = PatternMonitorService(loader, feedback_service=feedback, calibrator_service=calibrator, registry_service=model_registry, labels=labels)
     quality = QualityService(feedback, model_registry, labels=labels)
     audit = AuditService(feedback_db, loader, feedback)
-    gigachat_lab = GigaChatLabService(cfg)
+    catalog = CatalogService(Path("data/app.sqlite"))
+    record_lake = ParquetLakeService(Path("data/lake"), catalog)
+    gigachat_lab = GigaChatLabService(cfg, catalog_service=catalog, lake_service=record_lake)
     gigachat_connection = GigaChatConnectionService(cfg, lab_service=gigachat_lab)
     return {
         "cfg": cfg,
@@ -62,6 +66,8 @@ def get_services(config_path: str) -> dict:
         "feedback_dataset": feedback_dataset,
         "quality": quality,
         "audit": audit,
+        "catalog": catalog,
+        "record_lake": record_lake,
         "gigachat_lab": gigachat_lab,
         "gigachat_connection": gigachat_connection,
         "labels": labels,

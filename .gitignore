@@ -22,3 +22,8 @@ exports/*
 certs/*
 !certs/.gitkeep
 /apps/dashboard/node_modules/
+.run/
+.venv311/
+data/app.sqlite*
+data/auth.secret
+data/lake/

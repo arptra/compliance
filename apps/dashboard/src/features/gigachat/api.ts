@@ -13,7 +13,11 @@ import type {
   GigaChatTransportName,
   GigaChatTransportProbeResponse,
   GigaChatTransportStatusResponse,
+  GigaChatWorkbookChunkedUploadCompleteResponse,
+  GigaChatWorkbookChunkedUploadStartResponse,
+  GigaChatWorkbookChunkUploadResponse,
   GigaChatWorkbookSheetDataResponse,
+  GigaChatWorkbookUploadTaskResponse,
   GigaChatWorkbookUploadResponse,
 } from './types'
 
@@ -46,6 +50,7 @@ export function createGigaChatLabSettingsVersion(payload: {
   version_id?: string | null
   description: string
   status: GigaChatSettingsVersionStatus
+  visibility: 'public' | 'private'
   created_by: string
   base_version_id: string
 }) {
@@ -56,6 +61,7 @@ export function saveGigaChatLabSettingsVersion(versionId: string, payload: {
   title?: string
   description?: string
   status?: GigaChatSettingsVersionStatus
+  visibility?: 'public' | 'private'
   updated_by?: string
   values: Record<string, unknown>
 }) {
@@ -68,6 +74,52 @@ export function uploadGigaChatWorkbook(form: FormData, signal?: AbortSignal) {
 
 export function uploadLocalGigaChatWorkbook(filename: string) {
   return apiPost<GigaChatWorkbookUploadResponse>('/api/gigachat/lab/workbooks/upload-local', { filename })
+}
+
+export function startGigaChatWorkbookChunkedUpload(payload: {
+  filename: string
+  total_size: number
+  chunk_size: number
+  total_chunks: number
+}) {
+  return apiPost<GigaChatWorkbookChunkedUploadStartResponse>('/api/gigachat/lab/workbooks/chunked/start', payload)
+}
+
+export function uploadGigaChatWorkbookChunk(sessionId: string, chunkIndex: number, chunk: Blob, signal?: AbortSignal) {
+  const form = new FormData()
+  form.append('file', chunk, `chunk-${chunkIndex}`)
+  return apiPostForm<GigaChatWorkbookChunkUploadResponse>(
+    `/api/gigachat/lab/workbooks/chunked/${encodeURIComponent(sessionId)}/chunks/${chunkIndex}`,
+    form,
+    { signal },
+  )
+}
+
+export function completeGigaChatWorkbookChunkedUpload(sessionId: string) {
+  return apiPost<GigaChatWorkbookChunkedUploadCompleteResponse>(
+    `/api/gigachat/lab/workbooks/chunked/${encodeURIComponent(sessionId)}/complete`,
+    {},
+  )
+}
+
+export function cancelGigaChatWorkbookChunkedUploadSession(sessionId: string) {
+  return apiPost<{ session_id: string; status: 'cancelled' }>(
+    `/api/gigachat/lab/workbooks/chunked/${encodeURIComponent(sessionId)}/cancel`,
+    {},
+  )
+}
+
+export function getGigaChatWorkbookUploadTask(taskId: string) {
+  return apiGet<GigaChatWorkbookUploadTaskResponse>(
+    `/api/gigachat/lab/workbooks/chunked/tasks/${encodeURIComponent(taskId)}`,
+  )
+}
+
+export function cancelGigaChatWorkbookUploadTask(taskId: string) {
+  return apiPost<GigaChatWorkbookUploadTaskResponse>(
+    `/api/gigachat/lab/workbooks/chunked/tasks/${encodeURIComponent(taskId)}/cancel`,
+    {},
+  )
 }
 
 export function selectGigaChatWorkbookSheet(uploadId: string, sheetName: string, rowLimit = 200) {

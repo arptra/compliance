@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  completeGigaChatWorkbookChunkedUpload,
+  cancelGigaChatWorkbookChunkedUploadSession,
+  cancelGigaChatWorkbookUploadTask,
   getGigaChatBackgroundTaskResultWithProgress,
+  getGigaChatWorkbookUploadTask,
   createGigaChatLabSettingsVersion,
   exportGigaChatAnnotatedWorkbook,
   exportGigaChatValidationWorkbook,
@@ -16,6 +20,8 @@ import {
   saveGigaChatLabSettingsVersion,
   selectGigaChatWorkbookSheet,
   startGigaChatBackgroundTask,
+  startGigaChatWorkbookChunkedUpload,
+  uploadGigaChatWorkbookChunk,
   uploadLocalGigaChatWorkbook,
   uploadGigaChatWorkbook,
 } from '../features/gigachat/api'
@@ -30,6 +36,8 @@ import { GigaChatTransportCard } from '../features/gigachat/GigaChatTransportCar
 import { CellHoverPopover, useCellHoverPopover } from '../features/gigachat/useCellHoverPopover'
 import { useResizableTable, type TableRowClamp } from '../features/gigachat/useResizableTable'
 import { useVirtualTableRows } from '../features/gigachat/useVirtualTableRows'
+import { GIGACHAT_LAKE_IMPORT_STORAGE_KEY, type GigaChatLakeImportPayload } from '../features/records/api'
+import { useAuth } from '../features/auth/AuthContext'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskResultResponse,
@@ -37,9 +45,11 @@ import type {
   GigaChatRuleEvaluationResponse,
   GigaChatRulePack,
   GigaChatSettingsVersionStatus,
+  GigaChatSettingsVersionVisibility,
   GigaChatRuleEvaluationRow,
   GigaChatTransportName,
   GigaChatWorkbookSheetDataResponse,
+  GigaChatWorkbookUploadTaskResponse,
   GigaChatWorkbookUploadResponse,
 } from '../features/gigachat/types'
 
@@ -47,6 +57,10 @@ type WorkbookRowLimit = 10 | 20 | 100 | 'all'
 type GigaChatLabTab = 'workspace' | 'settings'
 type LabSetupTab = 'prompts' | 'labels' | 'rules'
 const WORKBOOK_UPLOAD_TIMEOUT_MS = 15_000
+const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024
+const CHUNKED_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+const CHUNKED_UPLOAD_CONCURRENCY = 4
+const CHUNKED_UPLOAD_POLL_MS = 1000
 const RULE_EVALUATION_CHUNK_COUNT = 25
 const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   draft: 'Черновая',
@@ -54,6 +68,17 @@ const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   working: 'Рабочая',
   release: 'Релизная',
   archived: 'Архивная',
+}
+const VERSION_VISIBILITY_LABELS: Record<GigaChatSettingsVersionVisibility, string> = {
+  private: 'Приватная',
+  public: 'Публичная',
+}
+const WORKBOOK_UPLOAD_TASK_STATUS_LABELS: Record<GigaChatWorkbookUploadTaskResponse['status'], string> = {
+  queued: 'В очереди',
+  running: 'В работе',
+  completed: 'Готово',
+  cancelled: 'Отменено',
+  failed: 'Ошибка',
 }
 
 function nextFrame() {
@@ -64,6 +89,10 @@ function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} МБ`
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} КБ`
   return `${bytes} Б`
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }
 
 async function evaluateRulePacksWithProgress(
@@ -123,10 +152,30 @@ type ProcessingOverlayState = {
   currentLabel: string
 }
 
+type WorkbookUploadProgressState = {
+  phase: string
+  message: string
+  progress: number
+  uploadedBytes: number
+  totalBytes: number
+  receivedChunks: number
+  totalChunks: number
+  taskId?: string
+  sessionId?: string
+  filename?: string
+}
+
 type TokenAccountingState = {
   enabled: boolean
   pricePer1k: number
   totalTokens: number
+}
+
+type BackgroundWorkbookUpload = {
+  taskId: string
+  sessionId: string
+  filename: string
+  createdAt: string
 }
 
 type RuleGuardIssue = {
@@ -137,6 +186,7 @@ type RuleGuardIssue = {
 type PendingRuleGuardAction = (values: Record<string, unknown>) => void | Promise<void>
 
 const TOKEN_ACCOUNTING_STORAGE_KEY = 'gigachat-lab-token-accounting'
+const WORKBOOK_UPLOAD_BACKGROUND_STORAGE_KEY = 'gigachat-lab-background-workbook-uploads'
 const DEFAULT_RULE_PACK_PROMPT_NOTES = JSON.stringify([
   {
     code: 'DRA',
@@ -310,6 +360,25 @@ function loadTokenAccountingState(): TokenAccountingState {
   }
 }
 
+function loadBackgroundWorkbookUploads(): BackgroundWorkbookUpload[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(WORKBOOK_UPLOAD_BACKGROUND_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as Array<Partial<BackgroundWorkbookUpload>>
+    return parsed
+      .map((item) => ({
+        taskId: String(item.taskId || '').trim(),
+        sessionId: String(item.sessionId || '').trim(),
+        filename: String(item.filename || 'Фоновая загрузка').trim(),
+        createdAt: String(item.createdAt || new Date().toISOString()),
+      }))
+      .filter((item) => item.taskId)
+  } catch {
+    return []
+  }
+}
+
 function extractClassification(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return ''
   const record = responseJson as Record<string, unknown>
@@ -479,10 +548,112 @@ function formatLabError(error: Error | null | undefined, resourceLabel: string) 
   return `Не удалось загрузить ${resourceLabel}: ${raw}`
 }
 
+async function uploadWorkbookInChunks(
+  file: File,
+  onProgress: (state: WorkbookUploadProgressState) => void,
+  signal?: AbortSignal,
+): Promise<GigaChatWorkbookUploadResponse> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNKED_UPLOAD_CHUNK_BYTES))
+  const started = await startGigaChatWorkbookChunkedUpload({
+    filename: file.name,
+    total_size: file.size,
+    chunk_size: CHUNKED_UPLOAD_CHUNK_BYTES,
+    total_chunks: totalChunks,
+  })
+  let nextChunkIndex = 0
+  let uploadedBytes = 0
+
+  onProgress({
+    phase: 'uploading',
+    message: 'Отправляем файл частями',
+    progress: 0,
+    uploadedBytes: 0,
+    totalBytes: file.size,
+    receivedChunks: 0,
+    totalChunks,
+    sessionId: started.session_id,
+    filename: file.name,
+  })
+
+  const uploadNextChunk = async () => {
+    while (nextChunkIndex < totalChunks) {
+      if (signal?.aborted) throw new DOMException('UPLOAD_ABORTED', 'AbortError')
+      const chunkIndex = nextChunkIndex
+      nextChunkIndex += 1
+      const chunkStart = chunkIndex * CHUNKED_UPLOAD_CHUNK_BYTES
+      const chunkEnd = Math.min(file.size, chunkStart + CHUNKED_UPLOAD_CHUNK_BYTES)
+      const chunk = file.slice(chunkStart, chunkEnd)
+      const result = await uploadGigaChatWorkbookChunk(started.session_id, chunkIndex, chunk, signal)
+      uploadedBytes += chunk.size
+      const uploadRatio = file.size ? Math.min(1, uploadedBytes / file.size) : result.received_chunks / totalChunks
+      onProgress({
+        phase: 'uploading',
+        message: `Загружено ${result.received_chunks} из ${totalChunks} частей`,
+        progress: uploadRatio * 0.45,
+        uploadedBytes,
+        totalBytes: file.size,
+        receivedChunks: result.received_chunks,
+        totalChunks,
+        sessionId: started.session_id,
+        filename: file.name,
+      })
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(CHUNKED_UPLOAD_CONCURRENCY, totalChunks) }, () => uploadNextChunk()))
+
+  onProgress({
+    phase: 'queued',
+    message: 'Файл загружен, запускаем обработку на backend',
+    progress: 0.46,
+    uploadedBytes: file.size,
+    totalBytes: file.size,
+    receivedChunks: totalChunks,
+    totalChunks,
+    sessionId: started.session_id,
+    filename: file.name,
+  })
+  const completed = await completeGigaChatWorkbookChunkedUpload(started.session_id)
+  onProgress({
+    phase: 'background',
+    message: 'Файл ушел в backend-задачу, можно скрыть загрузку в фон',
+    progress: 0.47,
+    uploadedBytes: file.size,
+    totalBytes: file.size,
+    receivedChunks: totalChunks,
+    totalChunks,
+    taskId: completed.task_id,
+    sessionId: completed.session_id,
+    filename: file.name,
+  })
+
+  while (true) {
+    if (signal?.aborted) throw new DOMException('UPLOAD_ABORTED', 'AbortError')
+    const task = await getGigaChatWorkbookUploadTask(completed.task_id)
+    onProgress({
+      phase: task.phase,
+      message: task.message || 'Backend обрабатывает файл',
+      progress: Math.max(0, Math.min(1, task.progress)),
+      uploadedBytes: task.received_bytes || file.size,
+      totalBytes: task.total_size || file.size,
+      receivedChunks: task.received_chunks || totalChunks,
+      totalChunks: task.total_chunks || totalChunks,
+      taskId: completed.task_id,
+      sessionId: completed.session_id,
+      filename: file.name,
+    })
+    if (task.status === 'completed' && task.workbook) return task.workbook
+    if (task.status === 'cancelled') throw new DOMException('UPLOAD_CANCELLED', 'AbortError')
+    if (task.status === 'failed') throw new Error(task.error || 'Backend не смог обработать файл.')
+    await sleep(CHUNKED_UPLOAD_POLL_MS)
+  }
+}
+
 export default function GigaChatPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const { user } = useAuth()
   const labelingFieldKeys = new Set(['classification_prompt_notes', 'rule_pack_prompt_notes'])
   const statusQ = useQuery({
     queryKey: ['gigachat-status'],
@@ -497,6 +668,7 @@ export default function GigaChatPage() {
     versionId: '',
     description: '',
     status: 'draft' as GigaChatSettingsVersionStatus,
+    visibility: 'private' as GigaChatSettingsVersionVisibility,
     createdBy: '',
     baseVersionId: 'default',
   })
@@ -513,12 +685,15 @@ export default function GigaChatPage() {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+  const selectedVersionCanEdit = selectedVersionQ.data?.version.can_edit ?? false
+  const currentUserDisplayName = user?.display_name || user?.email || ''
 
   const [selectedTransport, setSelectedTransport] = useState<GigaChatTransportName>('mtls')
   const [heroCollapsed, setHeroCollapsed] = useState(false)
   const [activeLabTab, setActiveLabTab] = useState<GigaChatLabTab>('workspace')
   const [settingsCollapsed, setSettingsCollapsed] = useState(false)
-  const [activeSetupTab, setActiveSetupTab] = useState<LabSetupTab>('prompts')
+  const [versionInfoOpen, setVersionInfoOpen] = useState(false)
+  const [activeSetupTab, setActiveSetupTab] = useState<LabSetupTab>('rules')
   const [uploadCollapsed, setUploadCollapsed] = useState(false)
   const [workbookCollapsed, setWorkbookCollapsed] = useState(false)
   const [resultCollapsed, setResultCollapsed] = useState(false)
@@ -529,6 +704,9 @@ export default function GigaChatPage() {
   const [settingValues, setSettingValues] = useState<Record<string, unknown>>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileInputVersion, setFileInputVersion] = useState(0)
+  const [workbookUploadProgress, setWorkbookUploadProgress] = useState<WorkbookUploadProgressState | null>(null)
+  const [workbookUploadOverlayHidden, setWorkbookUploadOverlayHidden] = useState(false)
+  const [backgroundWorkbookUploads, setBackgroundWorkbookUploads] = useState<BackgroundWorkbookUpload[]>(() => loadBackgroundWorkbookUploads())
   const [workbookMeta, setWorkbookMeta] = useState<GigaChatWorkbookUploadResponse | null>(null)
   const [sheetData, setSheetData] = useState<GigaChatWorkbookSheetDataResponse | null>(null)
   const [sheetPickerOpen, setSheetPickerOpen] = useState(false)
@@ -578,8 +756,72 @@ export default function GigaChatPage() {
   }, [])
 
   useEffect(() => {
+    const raw = window.sessionStorage.getItem(GIGACHAT_LAKE_IMPORT_STORAGE_KEY)
+    if (!raw) return
+    try {
+      const payload = JSON.parse(raw) as Partial<GigaChatLakeImportPayload>
+      const columns = Array.isArray(payload.columns)
+        ? payload.columns.map((column) => String(column)).filter(Boolean)
+        : []
+      const rows = Array.isArray(payload.rows)
+        ? payload.rows.map((row) => {
+          const record = row && typeof row === 'object' && !Array.isArray(row) ? row as Record<string, unknown> : {}
+          return Object.fromEntries(columns.map((column) => [column, record[column] ?? '']))
+        })
+        : []
+      if (!columns.length || !rows.length) return
+      const importedSheet: GigaChatWorkbookSheetDataResponse = {
+        upload_id: String(payload.upload_id || `lake-import-${Date.now()}`),
+        filename: String(payload.filename || 'parquet_selection.csv'),
+        file_format: 'csv',
+        sheet_name: String(payload.sheet_name || 'Parquet selection'),
+        total_rows: rows.length,
+        rendered_rows: rows.length,
+        columns,
+        rows,
+      }
+      setWorkbookMeta({
+        upload_id: importedSheet.upload_id,
+        filename: importedSheet.filename,
+        file_format: importedSheet.file_format,
+        sheet_count: 1,
+        sheets: [{
+          name: importedSheet.sheet_name,
+          rows_total: importedSheet.total_rows,
+          column_count: importedSheet.columns.length,
+          columns: importedSheet.columns,
+          preview_rows: importedSheet.rows.slice(0, 5),
+        }],
+      })
+      setSheetData(importedSheet)
+      setSelectedFile(null)
+      setFileInputVersion((current) => current + 1)
+      setIncludedPromptColumns([...columns])
+      setSelectedSheetRowKeys([])
+      setAnnotatedRows([])
+      setRuleEvaluationMap({})
+      setWorkbookRowLimit('all')
+      setActiveLabTab('workspace')
+      setUploadCollapsed(true)
+      setWorkbookCollapsed(false)
+      window.setTimeout(() => document.getElementById('gigachat-workbook-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    } finally {
+      window.sessionStorage.removeItem(GIGACHAT_LAKE_IMPORT_STORAGE_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
     window.localStorage.setItem(TOKEN_ACCOUNTING_STORAGE_KEY, JSON.stringify(tokenAccounting))
   }, [tokenAccounting])
+
+  useEffect(() => {
+    window.localStorage.setItem(WORKBOOK_UPLOAD_BACKGROUND_STORAGE_KEY, JSON.stringify(backgroundWorkbookUploads))
+  }, [backgroundWorkbookUploads])
+
+  useEffect(() => {
+    if (!currentUserDisplayName) return
+    setVersionDraft((current) => current.createdBy ? current : { ...current, createdBy: currentUserDisplayName })
+  }, [currentUserDisplayName])
 
   useEffect(() => {
     const transports = statusQ.data?.transports ?? []
@@ -612,6 +854,11 @@ export default function GigaChatPage() {
   }, [selectedSettingsVersionId, versionsQ.data])
 
   useEffect(() => {
+    setVersionInfoOpen(false)
+    setActiveSetupTab('rules')
+  }, [selectedSettingsVersionId])
+
+  useEffect(() => {
     if (!selectedVersionQ.data?.fields?.length) return
     const values = fieldsToValues(selectedVersionQ.data.fields)
     if (!hasRulePacks(values.rule_pack_prompt_notes)) {
@@ -625,12 +872,19 @@ export default function GigaChatPage() {
   })
 
   const saveSettings = useMutation({
-    mutationFn: (valuesOverride?: Record<string, unknown>) => saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
-      title: selectedVersionQ.data?.version.title,
-      description: selectedVersionQ.data?.version.description,
-      status: selectedVersionQ.data?.version.status,
-      values: valuesOverride ?? settingValues,
-    }),
+    mutationFn: (valuesOverride?: Record<string, unknown>) => {
+      if (!selectedVersionCanEdit) {
+        throw new Error('Эту версию может сохранять только ее владелец. Создайте свою версию на основе текущей.')
+      }
+      return saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
+        title: selectedVersionQ.data?.version.title,
+        description: selectedVersionQ.data?.version.description,
+        status: selectedVersionQ.data?.version.status,
+        visibility: selectedVersionQ.data?.version.visibility,
+        updated_by: currentUserDisplayName,
+        values: valuesOverride ?? settingValues,
+      })
+    },
     onSuccess: async (data) => {
       setSettingValues(data.values)
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
@@ -640,6 +894,7 @@ export default function GigaChatPage() {
   })
 
   const persistSettingValue = (key: string, value: unknown) => {
+    if (!selectedVersionCanEdit) return
     const nextValues = { ...settingValues, [key]: value }
     setSettingValues(nextValues)
     saveSettings.mutate(nextValues)
@@ -655,6 +910,7 @@ export default function GigaChatPage() {
       version_id: versionDraft.versionId || null,
       description: versionDraft.description,
       status: versionDraft.status,
+      visibility: versionDraft.visibility,
       created_by: versionDraft.createdBy,
       base_version_id: versionDraft.baseVersionId,
     }),
@@ -662,7 +918,7 @@ export default function GigaChatPage() {
       setSelectedSettingsVersionId(data.version.version_id)
       setSettingValues(data.values)
       setVersionCreateOpen(false)
-      setVersionDraft((current) => ({ ...current, title: '', versionId: '', description: '' }))
+      setVersionDraft((current) => ({ ...current, title: '', versionId: '', description: '', visibility: 'private', createdBy: currentUserDisplayName }))
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
     },
   })
@@ -682,18 +938,87 @@ export default function GigaChatPage() {
     },
   })
 
+  const activateUploadedWorkbook = (data: GigaChatWorkbookUploadResponse) => {
+    setWorkbookMeta(data)
+    setSheetData(null)
+    setSelectedFile(null)
+    setFileInputVersion((current) => current + 1)
+    setWorkbookCollapsed(false)
+    if (data.sheet_count <= 1 && data.sheets[0]) {
+      const rowLimit = workbookRowLimit === 'all' ? data.sheets[0].rows_total : workbookRowLimit
+      selectSheet.mutate({ uploadId: data.upload_id, sheetName: data.sheets[0].name, rowLimit })
+    } else {
+      setSheetPickerOpen(true)
+    }
+  }
+
+  const addBackgroundWorkbookUpload = (task: BackgroundWorkbookUpload) => {
+    setBackgroundWorkbookUploads((current) => {
+      const filtered = current.filter((item) => item.taskId !== task.taskId)
+      return [task, ...filtered].slice(0, 12)
+    })
+  }
+
+  const backgroundUploadTasksQ = useQuery({
+    queryKey: ['gigachat-workbook-background-uploads', backgroundWorkbookUploads.map((item) => item.taskId).join('|')],
+    enabled: backgroundWorkbookUploads.length > 0,
+    queryFn: async () => Promise.all(backgroundWorkbookUploads.map(async (item) => {
+      try {
+        const task = await getGigaChatWorkbookUploadTask(item.taskId)
+        return { item, task, error: null as string | null }
+      } catch (error) {
+        return { item, task: null as GigaChatWorkbookUploadTaskResponse | null, error: (error as Error).message }
+      }
+    })),
+    refetchInterval: backgroundWorkbookUploads.length ? 2000 : false,
+  })
+
+  const backgroundUploadTaskMap = useMemo(() => {
+    const entries = backgroundUploadTasksQ.data ?? []
+    return new Map(entries.map((entry) => [entry.item.taskId, entry]))
+  }, [backgroundUploadTasksQ.data])
+
+  const sendCurrentUploadToBackground = () => {
+    const taskId = workbookUploadProgress?.taskId
+    if (!taskId) return
+    addBackgroundWorkbookUpload({
+      taskId,
+      sessionId: workbookUploadProgress.sessionId || '',
+      filename: workbookUploadProgress.filename || selectedFile?.name || 'Фоновая загрузка',
+      createdAt: new Date().toISOString(),
+    })
+    setWorkbookUploadOverlayHidden(true)
+    setUploadCollapsed(true)
+  }
+
   const uploadWorkbook = useMutation({
     mutationFn: async (fileArg?: File) => {
       const file = fileArg ?? selectedFile
       if (!file) throw new Error('Выберите Excel или CSV файл')
+      workbookUploadAbortRef.current?.abort()
+      const controller = new AbortController()
+      workbookUploadAbortRef.current = controller
+      setWorkbookUploadOverlayHidden(false)
+      setWorkbookUploadProgress({
+        phase: 'starting',
+        message: 'Готовим загрузку файла',
+        progress: 0,
+        uploadedBytes: 0,
+        totalBytes: file.size,
+        receivedChunks: 0,
+        totalChunks: Math.max(1, Math.ceil(file.size / CHUNKED_UPLOAD_CHUNK_BYTES)),
+        filename: file.name,
+      })
+
+      if (file.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+        return uploadWorkbookInChunks(file, setWorkbookUploadProgress, controller.signal)
+      }
+
       try {
         return await uploadLocalGigaChatWorkbook(file.name)
       } catch {
         // Fall back to browser multipart for files that are not present in local project folders.
       }
-      workbookUploadAbortRef.current?.abort()
-      const controller = new AbortController()
-      workbookUploadAbortRef.current = controller
       const timeoutId = window.setTimeout(() => {
         controller.abort(new DOMException('WORKBOOK_UPLOAD_TIMEOUT', 'AbortError'))
       }, WORKBOOK_UPLOAD_TIMEOUT_MS)
@@ -714,22 +1039,49 @@ export default function GigaChatPage() {
       }
     },
     onSuccess: (data) => {
-      setWorkbookMeta(data)
-      setSheetData(null)
-      setSelectedFile(null)
-      setFileInputVersion((current) => current + 1)
-      setWorkbookCollapsed(false)
-      if (data.sheet_count <= 1 && data.sheets[0]) {
-        const rowLimit = workbookRowLimit === 'all' ? data.sheets[0].rows_total : workbookRowLimit
-        selectSheet.mutate({ uploadId: data.upload_id, sheetName: data.sheets[0].name, rowLimit })
+      setWorkbookUploadProgress(null)
+      if (workbookUploadOverlayHidden) {
+        setSelectedFile(null)
+        setFileInputVersion((current) => current + 1)
       } else {
-        setSheetPickerOpen(true)
+        activateUploadedWorkbook(data)
       }
+      setWorkbookUploadOverlayHidden(false)
     },
     onError: () => {
       workbookUploadAbortRef.current = null
+      setWorkbookUploadOverlayHidden(false)
+    },
+    onSettled: () => {
+      setWorkbookUploadProgress(null)
     },
   })
+
+  const cancelWorkbookUploadTaskMutation = useMutation({
+    mutationFn: cancelGigaChatWorkbookUploadTask,
+    onSuccess: async (task) => {
+      setBackgroundWorkbookUploads((current) => current.filter((item) => item.taskId !== task.task_id))
+      await backgroundUploadTasksQ.refetch()
+    },
+  })
+
+  const cancelCurrentWorkbookUpload = async () => {
+    const progress = workbookUploadProgress
+    workbookUploadAbortRef.current?.abort()
+    workbookUploadAbortRef.current = null
+    try {
+      if (progress?.taskId) {
+        await cancelGigaChatWorkbookUploadTask(progress.taskId)
+        setBackgroundWorkbookUploads((current) => current.filter((item) => item.taskId !== progress.taskId))
+      } else if (progress?.sessionId) {
+        await cancelGigaChatWorkbookChunkedUploadSession(progress.sessionId)
+      }
+    } finally {
+      setWorkbookUploadOverlayHidden(false)
+      setWorkbookUploadProgress(null)
+      uploadWorkbook.reset()
+    }
+  }
 
   const finalPromptColumns = useMemo(
     () => (sheetData ? sheetData.columns.filter((column) => includedPromptColumns.includes(column)) : []),
@@ -1275,6 +1627,7 @@ export default function GigaChatPage() {
   const exportLoadedBytes = exportProgress?.loadedBytes ?? 0
   const exportTotalBytes = exportProgress?.totalBytes ?? null
   const exportPercent = exportTotalBytes ? Math.min(100, Math.round((exportLoadedBytes / exportTotalBytes) * 100)) : null
+  const uploadPercent = workbookUploadProgress ? Math.min(100, Math.max(3, Math.round(workbookUploadProgress.progress * 100))) : null
   const exportBusy = exportWorkbookRows.isPending || exportAnnotatedRows.isPending || exportValidationRows.isPending
   const requestSettingsFields = (selectedVersionQ.data?.fields ?? []).filter((field) => !labelingFieldKeys.has(field.key))
   const finalPromptDraftDirty = finalPromptDraftText !== finalPromptBaseText
@@ -1604,22 +1957,25 @@ export default function GigaChatPage() {
                 onChange={(event) => setSelectedSettingsVersionId(event.target.value)}
               >
                 {(versionsQ.data?.versions ?? []).map((version) => <option key={version.version_id} value={version.version_id}>
-                  {version.title} · {VERSION_STATUS_LABELS[version.status]} · Автор: {version.created_by || '—'}
+                  {version.title} · {VERSION_STATUS_LABELS[version.status]} · {VERSION_VISIBILITY_LABELS[version.visibility]} · Автор: {version.created_by || '—'}
                 </option>)}
               </select>
             </label>
             <div className='settings-version-actions'>
               <button type='button' onClick={() => {
-                setVersionDraft((current) => ({ ...current, baseVersionId: selectedSettingsVersionId }))
+                setVersionDraft((current) => ({ ...current, baseVersionId: selectedSettingsVersionId, createdBy: current.createdBy || currentUserDisplayName }))
                 setVersionCreateOpen((current) => !current)
               }}>
                 Создать версию
               </button>
-              <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending}>
+              <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending || !selectedVersionCanEdit}>
                 {saveSettings.isPending ? 'Сохраняем...' : 'Сохранить версию'}
               </button>
             </div>
           </div>
+          {!selectedVersionCanEdit ? <div className='lab-muted'>
+            Эта версия доступна для просмотра и использования. Чтобы менять настройки, создайте свою версию на основе текущей.
+          </div> : null}
 
           {versionCreateOpen ? <div className='settings-version-create'>
             <label className='lab-field'>
@@ -1641,9 +1997,16 @@ export default function GigaChatPage() {
               </select>
             </label>
             <label className='lab-field'>
+              <span>Видимость</span>
+              <select value={versionDraft.visibility} onChange={(e) => setVersionDraft((current) => ({ ...current, visibility: e.target.value as GigaChatSettingsVersionVisibility }))}>
+                <option value='private'>Приватная — только я</option>
+                <option value='public'>Публичная — видят все пользователи</option>
+              </select>
+            </label>
+            <label className='lab-field'>
               <span>Создать на основе</span>
               <select value={versionDraft.baseVersionId} onChange={(e) => setVersionDraft((current) => ({ ...current, baseVersionId: e.target.value }))}>
-                {(versionsQ.data?.versions ?? []).map((version) => <option key={version.version_id} value={version.version_id}>{version.title}</option>)}
+                {(versionsQ.data?.versions ?? []).map((version) => <option key={version.version_id} value={version.version_id}>{version.title} · {VERSION_VISIBILITY_LABELS[version.visibility]}</option>)}
               </select>
             </label>
             <label className='lab-field wide'>
@@ -1659,31 +2022,46 @@ export default function GigaChatPage() {
             </div>
           </div> : null}
 
-          <div className='lab-settings-meta'>
-            <div><b>Профиль:</b> <code>{selectedVersionQ.data.version.title}</code></div>
-            <div><b>Статус:</b> {VERSION_STATUS_LABELS[selectedVersionQ.data.version.status]}</div>
-            <div><b>Автор:</b> {selectedVersionQ.data.version.created_by || '—'}</div>
-            <div><b>Основана на:</b> <code>{selectedVersionQ.data.version.base_version_id || '—'}</code></div>
-            <div><b>Создана:</b> {selectedVersionQ.data.version.created_at ? new Date(selectedVersionQ.data.version.created_at).toLocaleString() : '—'}</div>
-            <div><b>Последнее сохранение:</b> {selectedVersionQ.data.version.updated_at ? new Date(selectedVersionQ.data.version.updated_at).toLocaleString() : 'еще не сохраняли'}</div>
-            <div className='lab-field wide'><b>Описание:</b> {selectedVersionQ.data.version.description || '—'}</div>
-            <div className='lab-field wide'><b>Файл:</b> <code>{selectedVersionQ.data.version.path || 'виртуальная default-версия'}</code></div>
+          <div className='settings-info-panel'>
+            <div className='settings-info-head'>
+              <div>
+                <b>Информация</b>
+                <span>
+                  {selectedVersionQ.data.version.title} · {VERSION_STATUS_LABELS[selectedVersionQ.data.version.status]} · {VERSION_VISIBILITY_LABELS[selectedVersionQ.data.version.visibility]}
+                </span>
+              </div>
+              <button type='button' onClick={() => setVersionInfoOpen((current) => !current)}>
+                {versionInfoOpen ? 'Свернуть' : 'Развернуть'}
+              </button>
+            </div>
+            {versionInfoOpen ? <div className='lab-settings-meta'>
+              <div><b>Профиль:</b> <code>{selectedVersionQ.data.version.title}</code></div>
+              <div><b>Статус:</b> {VERSION_STATUS_LABELS[selectedVersionQ.data.version.status]}</div>
+              <div><b>Видимость:</b> {VERSION_VISIBILITY_LABELS[selectedVersionQ.data.version.visibility]}</div>
+              <div><b>Автор:</b> {selectedVersionQ.data.version.created_by || '—'}</div>
+              <div><b>Владелец:</b> <code>{selectedVersionQ.data.version.owner_user_id || '—'}</code></div>
+              <div><b>Основана на:</b> <code>{selectedVersionQ.data.version.base_version_id || '—'}</code></div>
+              <div><b>Создана:</b> {selectedVersionQ.data.version.created_at ? new Date(selectedVersionQ.data.version.created_at).toLocaleString() : '—'}</div>
+              <div><b>Последнее сохранение:</b> {selectedVersionQ.data.version.updated_at ? new Date(selectedVersionQ.data.version.updated_at).toLocaleString() : 'еще не сохраняли'}</div>
+              <div className='lab-field wide'><b>Описание:</b> {selectedVersionQ.data.version.description || '—'}</div>
+              <div className='lab-field wide'><b>Файл:</b> <code>{selectedVersionQ.data.version.path || 'виртуальная default-версия'}</code></div>
+            </div> : null}
           </div>
 
           <div className='lab-setup-tabs' role='tablist' aria-label='GigaChat Lab settings tabs'>
-            <button
-              type='button'
-              className={activeSetupTab === 'prompts' ? 'active' : ''}
-              onClick={() => setActiveSetupTab('prompts')}
-            >
-              Промпты
-            </button>
             <button
               type='button'
               className={activeSetupTab === 'rules' ? 'active' : ''}
               onClick={() => setActiveSetupTab('rules')}
             >
               Правила
+            </button>
+            <button
+              type='button'
+              className={activeSetupTab === 'prompts' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('prompts')}
+            >
+              Промпты
             </button>
             <button
               type='button'
@@ -1760,6 +2138,73 @@ export default function GigaChatPage() {
       </div>
     </section>
 
+    {backgroundWorkbookUploads.length ? <section className='card transport-result background-upload-panel'>
+      <div className='transport-section-head'>
+        <div className='transport-section-title'>
+          <h3>Фоновые загрузки</h3>
+          <p>Файлы, которые уже переданы backend и сейчас собираются, читаются или пишутся в parquet. Готовый файл можно открыть в Lab отсюда.</p>
+        </div>
+        <button type='button' className='transport-collapse-button' onClick={() => backgroundUploadTasksQ.refetch()} disabled={backgroundUploadTasksQ.isFetching}>
+          {backgroundUploadTasksQ.isFetching ? 'Обновляем...' : 'Обновить'}
+        </button>
+      </div>
+      <div className='background-upload-list'>
+        {backgroundWorkbookUploads.map((upload) => {
+          const entry = backgroundUploadTaskMap.get(upload.taskId)
+          const task = entry?.task
+          const percent = Math.min(100, Math.max(0, Math.round((task?.progress ?? 0) * 100)))
+          const status = task?.status ?? 'queued'
+          const canOpen = task?.status === 'completed' && Boolean(task.workbook)
+          return <article key={upload.taskId} className='background-upload-card'>
+            <div className='background-upload-head'>
+              <div>
+                <strong>{upload.filename}</strong>
+                <span>Создана: {new Date(upload.createdAt).toLocaleString()} · ID: <code>{upload.taskId}</code></span>
+              </div>
+              <span className={`background-task-status ${status}`}>{WORKBOOK_UPLOAD_TASK_STATUS_LABELS[status]}</span>
+            </div>
+            <div className='giga-processing-progressbar' aria-label='workbook background upload progress'>
+              <div className='giga-processing-progressbar-fill' style={{ width: `${percent || 3}%` }} />
+            </div>
+            <div className='lab-muted'>
+              {entry?.error
+                ? entry.error
+                : task
+                  ? `${percent}% · ${task.message || 'Backend обрабатывает файл'}`
+                  : 'Ждем статус backend-задачи...'}
+            </div>
+            <div className='transport-actions'>
+              <button
+                type='button'
+                className='primary'
+                disabled={!canOpen}
+                onClick={() => {
+                  if (!task?.workbook) return
+                  activateUploadedWorkbook(task.workbook)
+                  setBackgroundWorkbookUploads((current) => current.filter((item) => item.taskId !== upload.taskId))
+                }}
+              >
+                Открыть в Lab
+              </button>
+              {status === 'queued' || status === 'running' ? <button
+                type='button'
+                disabled={cancelWorkbookUploadTaskMutation.isPending}
+                onClick={() => cancelWorkbookUploadTaskMutation.mutate(upload.taskId)}
+              >
+                {cancelWorkbookUploadTaskMutation.isPending ? 'Отменяем...' : 'Отменить'}
+              </button> : null}
+              <button
+                type='button'
+                onClick={() => setBackgroundWorkbookUploads((current) => current.filter((item) => item.taskId !== upload.taskId))}
+              >
+                Убрать из списка
+              </button>
+            </div>
+          </article>
+        })}
+      </div>
+    </section> : null}
+
     <section className='card transport-result workbook-upload-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
@@ -1771,21 +2216,41 @@ export default function GigaChatPage() {
         </button>
       </div>
 
-      {uploadWorkbook.isPending ? <div className='workbook-upload-loader'>
+      {uploadWorkbook.isPending && !workbookUploadOverlayHidden ? <div className='workbook-upload-loader'>
         <div className='card workbook-upload-loader-card'>
           <div className='spinner workbook-upload-spinner' aria-label='uploading workbook' />
-          <div><b>Загружаем файл...</b></div>
-          <div className='lab-muted'>Во время загрузки выбор файла и кнопка заблокированы.</div>
-          <button
-            type='button'
-            onClick={() => {
-              workbookUploadAbortRef.current?.abort()
-              workbookUploadAbortRef.current = null
-              uploadWorkbook.reset()
-            }}
-          >
-            Отменить загрузку
-          </button>
+          <div className='workbook-upload-loader-title'>{workbookUploadProgress?.message || 'Загружаем файл...'}</div>
+          <div className='giga-processing-progressbar' aria-label='workbook upload progress'>
+            <div className='giga-processing-progressbar-fill' style={{ width: `${uploadPercent ?? 8}%` }} />
+          </div>
+          <div className='lab-muted'>
+            {workbookUploadProgress
+              ? `${uploadPercent ?? 0}% · ${formatBytes(workbookUploadProgress.uploadedBytes)} из ${formatBytes(workbookUploadProgress.totalBytes)} · ${workbookUploadProgress.receivedChunks} из ${workbookUploadProgress.totalChunks} частей`
+              : 'Во время загрузки выбор файла и кнопка заблокированы.'}
+          </div>
+          <div className='lab-muted'>
+            Большие файлы отправляются частями, затем backend собирает их и пишет parquet в фоне.
+          </div>
+          <div className='transport-actions workbook-upload-loader-actions'>
+            <button
+              type='button'
+              className='primary'
+              onClick={sendCurrentUploadToBackground}
+              disabled={!workbookUploadProgress?.taskId}
+              title={workbookUploadProgress?.taskId ? 'Скрыть загрузку и продолжить работу. Задача останется в фоновых загрузках.' : 'Будет доступно после передачи всех частей файла на backend.'}
+            >
+              В фон
+            </button>
+            <button
+              type='button'
+              onClick={() => void cancelCurrentWorkbookUpload()}
+            >
+              Отменить загрузку
+            </button>
+          </div>
+          {!workbookUploadProgress?.taskId ? <div className='lab-muted'>
+            Кнопка “В фон” включится после того, как файл полностью передан backend.
+          </div> : null}
         </div>
       </div> : null}
 
@@ -2082,7 +2547,7 @@ export default function GigaChatPage() {
       </> : null}
     </section>
 
-    <section className='card transport-result'>
+    <section className='card transport-result annotated-table-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Размеченная таблица</h3>

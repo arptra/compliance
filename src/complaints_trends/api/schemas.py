@@ -32,6 +32,84 @@ class MetaConfigResponse(BaseModel):
     prepare_service_columns: list[str] = Field(default_factory=list)
 
 
+class AuthUser(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    first_name: str = ""
+    last_name: str = ""
+    role: str = "user"
+    workspace_id: str = "default"
+    workspace_role: str = "user"
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: str = ""
+
+
+class AuthLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthProfileUpdateRequest(BaseModel):
+    first_name: str = ""
+    last_name: str = ""
+    display_name: str = ""
+
+
+class AuthPasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    user: AuthUser
+
+
+class RecordFilter(BaseModel):
+    column: str
+    op: Literal["eq", "ne", "contains", "in", "between", "gte", "lte"] = "eq"
+    value: Any = None
+
+
+class RecordSearchRequest(BaseModel):
+    stage: Literal["raw", "rules", "gigachat"] = "raw"
+    filters: list[RecordFilter] = Field(default_factory=list)
+    columns: list[str] = Field(default_factory=list)
+    limit: int = 100
+    offset: int = 0
+
+
+class RecordSearchResponse(BaseModel):
+    stage: str
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    engine: str = ""
+
+
+class RecordDeleteRequest(BaseModel):
+    stage: Literal["raw", "rules", "gigachat"] = "raw"
+    record_ids: list[str] = Field(default_factory=list)
+
+
+class RecordClearRequest(BaseModel):
+    stage: Literal["raw", "rules", "gigachat"] = "raw"
+
+
+class RecordMutationResponse(BaseModel):
+    stage: str
+    deleted_rows: int = 0
+    affected_files: int = 0
+    message: str = ""
+
+
 class GigaChatTransportArtifact(BaseModel):
     label: str
     path: str
@@ -101,12 +179,15 @@ class GigaChatLabSettingsVersionSummary(BaseModel):
     title: str
     description: str = ""
     status: Literal["draft", "test", "working", "release", "archived"] = "draft"
+    visibility: Literal["public", "private"] = "private"
     created_by: str = ""
+    owner_user_id: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
     base_version_id: str | None = None
     path: str | None = None
     is_default: bool = False
+    can_edit: bool = False
 
 
 class GigaChatLabSettingsVersionsResponse(BaseModel):
@@ -124,6 +205,7 @@ class GigaChatLabSettingsVersionCreateRequest(BaseModel):
     version_id: str | None = None
     description: str = ""
     status: Literal["draft", "test", "working", "release", "archived"] = "draft"
+    visibility: Literal["public", "private"] = "private"
     created_by: str = ""
     base_version_id: str = "default"
 
@@ -132,6 +214,7 @@ class GigaChatLabSettingsVersionUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
     status: Literal["draft", "test", "working", "release", "archived"] | None = None
+    visibility: Literal["public", "private"] | None = None
     updated_by: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
 
@@ -150,6 +233,52 @@ class GigaChatWorkbookUploadResponse(BaseModel):
     file_format: Literal["excel", "csv"]
     sheet_count: int = 0
     sheets: list[GigaChatWorkbookSheetPreview] = Field(default_factory=list)
+
+
+class GigaChatWorkbookChunkedUploadStartRequest(BaseModel):
+    filename: str
+    total_size: int = 0
+    chunk_size: int = 8 * 1024 * 1024
+    total_chunks: int = 0
+
+
+class GigaChatWorkbookChunkedUploadStartResponse(BaseModel):
+    session_id: str
+    filename: str
+    chunk_size: int
+    total_chunks: int
+    received_chunks: int = 0
+    received_bytes: int = 0
+
+
+class GigaChatWorkbookChunkUploadResponse(BaseModel):
+    session_id: str
+    chunk_index: int
+    total_chunks: int
+    received_chunks: int
+    received_bytes: int
+    total_size: int = 0
+
+
+class GigaChatWorkbookChunkedUploadCompleteResponse(BaseModel):
+    task_id: str
+    session_id: str
+    status: Literal["queued", "running", "completed", "cancelled", "failed"] = "queued"
+
+
+class GigaChatWorkbookUploadTaskResponse(BaseModel):
+    task_id: str
+    session_id: str
+    status: Literal["queued", "running", "completed", "cancelled", "failed"]
+    phase: str = ""
+    message: str = ""
+    progress: float = 0
+    total_size: int = 0
+    received_bytes: int = 0
+    total_chunks: int = 0
+    received_chunks: int = 0
+    error: str | None = None
+    workbook: GigaChatWorkbookUploadResponse | None = None
 
 
 class GigaChatWorkbookLocalUploadRequest(BaseModel):
