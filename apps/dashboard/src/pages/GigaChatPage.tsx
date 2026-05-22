@@ -95,6 +95,21 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }
 
+function canUseLocalWorkbookFallback() {
+  const localHosts = new Set(['localhost', '127.0.0.1', '::1'])
+  const pageHost = window.location.hostname
+  let apiHost = pageHost
+  const configuredBase = import.meta.env.VITE_API_BASE_URL || ''
+  if (configuredBase) {
+    try {
+      apiHost = new URL(configuredBase, window.location.href).hostname
+    } catch {
+      apiHost = ''
+    }
+  }
+  return localHosts.has(pageHost) && localHosts.has(apiHost)
+}
+
 async function evaluateRulePacksWithProgress(
   values: Record<string, unknown>,
   rows: Array<Record<string, unknown>>,
@@ -532,7 +547,7 @@ function formatLabError(error: Error | null | undefined, resourceLabel: string) 
   if (!error) return ''
   const raw = String(error.message || '').trim()
   if (error.name === 'AbortError' || raw === 'WORKBOOK_UPLOAD_TIMEOUT') {
-    return `Не удалось загрузить ${resourceLabel}: браузер не получил ответ от локального API за ${Math.round(WORKBOOK_UPLOAD_TIMEOUT_MS / 1000)} секунд, fallback по имени файла тоже не сработал.`
+    return `Не удалось загрузить ${resourceLabel}: браузер не получил ответ от API за ${Math.round(WORKBOOK_UPLOAD_TIMEOUT_MS / 1000)} секунд. Для больших файлов загрузка должна идти частями; если ошибка повторится, проверьте доступность API и лимиты прокси.`
   }
   try {
     const parsed = JSON.parse(raw) as { detail?: string }
@@ -1010,15 +1025,20 @@ export default function GigaChatPage() {
         filename: file.name,
       })
 
+      const allowLocalFallback = canUseLocalWorkbookFallback()
+
       if (file.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
         return uploadWorkbookInChunks(file, setWorkbookUploadProgress, controller.signal)
       }
 
-      try {
-        return await uploadLocalGigaChatWorkbook(file.name)
-      } catch {
-        // Fall back to browser multipart for files that are not present in local project folders.
+      if (allowLocalFallback) {
+        try {
+          return await uploadLocalGigaChatWorkbook(file.name)
+        } catch {
+          // Fall back to browser multipart for files that are not present in local project folders.
+        }
       }
+
       const timeoutId = window.setTimeout(() => {
         controller.abort(new DOMException('WORKBOOK_UPLOAD_TIMEOUT', 'AbortError'))
       }, WORKBOOK_UPLOAD_TIMEOUT_MS)
@@ -1027,7 +1047,7 @@ export default function GigaChatPage() {
       try {
         return await uploadGigaChatWorkbook(form, controller.signal)
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (allowLocalFallback && error instanceof DOMException && error.name === 'AbortError') {
           return uploadLocalGigaChatWorkbook(file.name)
         }
         throw error
