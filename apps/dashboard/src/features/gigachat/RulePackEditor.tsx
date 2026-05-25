@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import type { GigaChatRulePack, GigaChatRulePackFilter } from './types'
+import { createGigaChatLabSettingsVersion, exportGigaChatRulePacks, importGigaChatRulePacks } from './api'
+import type { GigaChatLabSettingsVersionResponse, GigaChatRulePack, GigaChatRulePackFilter } from './types'
 import { parseRulePacks } from './rulePackMatcher'
 
 function serializeRulePacks(items: GigaChatRulePack[]) {
@@ -17,6 +18,17 @@ function formatRuleAction(rule: GigaChatRulePack) {
   return rule.type === 'assign_tag'
     ? `Ключевые слова: ${rule.keywords.length ? rule.keywords.join(', ') : '—'}`
     : `Topic: ${rule.target_topic || '—'}`
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 function sourceFieldStatus(rule: GigaChatRulePack, availableFields: string[]) {
@@ -57,6 +69,11 @@ export function RulePackEditor({
   persistError,
   availableFields,
   defaultValue,
+  versionId,
+  canEdit = false,
+  currentVersionTitle,
+  currentUserDisplayName,
+  onImportComplete,
 }: {
   value: unknown
   onChange: (value: string) => void
@@ -65,9 +82,20 @@ export function RulePackEditor({
   persistError?: string | null
   availableFields: string[]
   defaultValue?: string
+  versionId?: string
+  canEdit?: boolean
+  currentVersionTitle?: string
+  currentUserDisplayName?: string
+  onImportComplete?: (data: GigaChatLabSettingsVersionResponse) => void | Promise<void>
 }) {
   const items = useMemo(() => parseRulePacks(value), [value])
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [exchangeOpen, setExchangeOpen] = useState(false)
+  const [exchangeMode, setExchangeMode] = useState<'import' | 'export'>('import')
+  const [exchangeBusy, setExchangeBusy] = useState(false)
+  const [exchangeError, setExchangeError] = useState<string | null>(null)
+  const [exchangeMessage, setExchangeMessage] = useState<string | null>(null)
+  const [exchangeInputVersion, setExchangeInputVersion] = useState(0)
   const [draft, setDraft] = useState<GigaChatRulePack>(emptyRule())
   const [sourceFieldsText, setSourceFieldsText] = useState('')
   const [keywordsText, setKeywordsText] = useState('')
@@ -189,6 +217,74 @@ export function RulePackEditor({
     resetDraft()
   }
 
+  const openExchange = () => {
+    setExchangeOpen(true)
+    setExchangeError(null)
+    setExchangeMessage(null)
+  }
+
+  const closeExchange = () => {
+    if (exchangeBusy) return
+    setExchangeOpen(false)
+    setExchangeError(null)
+    setExchangeMessage(null)
+  }
+
+  const exportRules = async () => {
+    if (!versionId) return
+    setExchangeBusy(true)
+    setExchangeError(null)
+    setExchangeMessage(null)
+    try {
+      const { blob, filename } = await exportGigaChatRulePacks(versionId)
+      downloadBlob(blob, filename || 'rule_packs.xlsx')
+      setExchangeMessage('Выгрузка готова. Excel скачан из текущей версии в базе.')
+    } catch (error) {
+      setExchangeError((error as Error).message || 'Не удалось выгрузить правила.')
+    } finally {
+      setExchangeBusy(false)
+    }
+  }
+
+  const importRules = async (file: File | null | undefined) => {
+    if (!file || !versionId) return
+    setExchangeBusy(true)
+    setExchangeError(null)
+    setExchangeMessage(null)
+    try {
+      let targetVersionId = versionId
+      let createdCopyTitle = ''
+      if (!canEdit) {
+        const baseTitle = (currentVersionTitle || versionId || 'Правила').trim()
+        const timestamp = new Date().toLocaleString()
+        createdCopyTitle = `${baseTitle} · импорт правил`
+        const created = await createGigaChatLabSettingsVersion({
+          title: createdCopyTitle,
+          version_id: null,
+          description: `Приватная копия для импорта правил из Excel. Создана ${timestamp}.`,
+          status: 'draft',
+          visibility: 'private',
+          created_by: currentUserDisplayName || '',
+          base_version_id: versionId,
+        })
+        targetVersionId = created.version.version_id
+      }
+      const data = await importGigaChatRulePacks(targetVersionId, file)
+      const imported = parseRulePacks(data.values.rule_pack_prompt_notes).length
+      await onImportComplete?.(data)
+      setExchangeInputVersion((current) => current + 1)
+      setExchangeMessage(
+        canEdit
+          ? `Правила загружены и сохранены в версии. Импортировано: ${imported}.`
+          : `Создана приватная версия "${createdCopyTitle}", правила загружены туда. Импортировано: ${imported}.`,
+      )
+    } catch (error) {
+      setExchangeError((error as Error).message || 'Не удалось загрузить правила.')
+    } finally {
+      setExchangeBusy(false)
+    }
+  }
+
   const isEditing = editingIndex !== null
 
   return <section className='labeling-panel rule-pack-panel'>
@@ -199,6 +295,7 @@ export function RulePackEditor({
 
     <div className='transport-actions'>
       <button type='button' onClick={openCreate}>+ Добавить правило</button>
+      <button type='button' onClick={openExchange}>Загрузить/выгрузить правила</button>
       {defaultValue ? <button type='button' onClick={restoreDefaults}>Восстановить DRA/EDU defaults</button> : null}
       <button type='button' onClick={() => setAllRulesEnabled(true)}>Сделать активными все доступные правила</button>
       <button type='button' onClick={() => setAllRulesEnabled(false)}>Сделать не активными все</button>
@@ -386,6 +483,82 @@ export function RulePackEditor({
           </button>
           <button type='button' onClick={resetDraft}>Отмена</button>
         </div>
+      </div>
+    </div> : null}
+
+    {exchangeOpen ? <div className='sheet-modal-backdrop' onClick={closeExchange}>
+      <div className='card sheet-modal rule-pack-exchange-modal' onClick={(e) => e.stopPropagation()}>
+        <div className='transport-section-head'>
+          <div className='transport-section-title'>
+            <h3>Загрузка и выгрузка правил</h3>
+            <p>Excel работает с текущей версией настроек. Основные колонки: название тега, ключевые слова и колонка.</p>
+          </div>
+          <button className='transport-collapse-button' type='button' onClick={closeExchange} disabled={exchangeBusy}>Закрыть</button>
+        </div>
+
+        <div className='rule-pack-exchange-tabs' role='tablist' aria-label='Rule packs import export'>
+          <button
+            type='button'
+            className={exchangeMode === 'import' ? 'active' : ''}
+            onClick={() => {
+              setExchangeMode('import')
+              setExchangeError(null)
+              setExchangeMessage(null)
+            }}
+          >
+            Загрузка
+          </button>
+          <button
+            type='button'
+            className={exchangeMode === 'export' ? 'active' : ''}
+            onClick={() => {
+              setExchangeMode('export')
+              setExchangeError(null)
+              setExchangeMessage(null)
+            }}
+          >
+            Выгрузка
+          </button>
+        </div>
+
+        <div className='rule-pack-exchange-fields'>
+          <div>
+            <b>Название тега</b>
+            <span>Код правила или тег: DRA, IPOTEKA, EDU_RECLASS_TRANCH.</span>
+          </div>
+          <div>
+            <b>Колонка</b>
+            <span>Колонка или список колонок, где ищутся ключевые слова.</span>
+          </div>
+          <div>
+            <b>Ключевые слова</b>
+            <span>Список ключей через перенос строки или запятую.</span>
+          </div>
+        </div>
+
+        {exchangeMode === 'import' ? <div className='rule-pack-exchange-panel'>
+          <p>{canEdit
+            ? 'Загрузка заменит текущий список правил в этой версии и сразу сохранит его в базе.'
+            : 'Текущая версия доступна только для просмотра. При загрузке будет создана приватная черновая копия, и правила сохранятся в нее.'}</p>
+          <label className={`rule-pack-file-button ${exchangeBusy ? 'disabled' : ''}`}>
+            <span>{exchangeBusy ? 'Загружаем...' : canEdit ? 'Выбрать Excel с правилами' : 'Выбрать Excel и создать копию'}</span>
+            <input
+              key={exchangeInputVersion}
+              type='file'
+              accept='.xlsx,.xls,.xlsm,.csv'
+              disabled={!versionId || exchangeBusy}
+              onChange={(event) => importRules(event.target.files?.[0])}
+            />
+          </label>
+        </div> : <div className='rule-pack-exchange-panel'>
+          <p>Выгрузка берет текущие правила из базы по выбранной версии и скачивает Excel.</p>
+          <button type='button' onClick={exportRules} disabled={!versionId || exchangeBusy}>
+            {exchangeBusy ? 'Готовим Excel...' : 'Выгрузить текущие правила из базы'}
+          </button>
+        </div>}
+
+        {exchangeMessage ? <div className='transport-success'>{exchangeMessage}</div> : null}
+        {exchangeError ? <div className='transport-error'>{exchangeError}</div> : null}
       </div>
     </div> : null}
   </section>

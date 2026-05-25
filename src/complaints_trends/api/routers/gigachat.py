@@ -104,6 +104,42 @@ def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUp
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/lab/settings/versions/{version_id}/rule-packs/export")
+def export_rule_packs(version_id: str, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    try:
+        user = _optional_user(services, authorization)
+        filename, content = services["gigachat_lab"].export_rule_packs_workbook(version_id, user=user)
+        quoted_name = quote(filename)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted_name}"},
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/settings/versions/{version_id}/rule-packs/import", response_model=GigaChatLabSettingsVersionResponse)
+async def import_rule_packs(version_id: str, file: UploadFile = File(...), authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    try:
+        content = await file.read()
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].import_rule_packs_workbook(
+            version_id,
+            file.filename or "rules.xlsx",
+            content,
+            user=user,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/lab/final-prompt", response_model=GigaChatFinalPromptResponse)
 def final_prompt_preview(req: GigaChatFinalPromptRequest, services=Depends(get_service_container)):
     return services["gigachat_lab"].build_final_prompt(req)

@@ -294,17 +294,6 @@ function fieldsToValues(fields: Array<{ key: string; value: unknown }>) {
   return Object.fromEntries(fields.map((field) => [field.key, field.value]))
 }
 
-function hasRulePacks(value: unknown) {
-  const text = String(value ?? '').trim()
-  if (!text) return false
-  try {
-    const parsed = JSON.parse(text) as unknown
-    return Array.isArray(parsed) && parsed.length > 0
-  } catch {
-    return false
-  }
-}
-
 function stringifyJson(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
@@ -876,9 +865,6 @@ export default function GigaChatPage() {
   useEffect(() => {
     if (!selectedVersionQ.data?.fields?.length) return
     const values = fieldsToValues(selectedVersionQ.data.fields)
-    if (!hasRulePacks(values.rule_pack_prompt_notes)) {
-      values.rule_pack_prompt_notes = DEFAULT_RULE_PACK_PROMPT_NOTES
-    }
     setSettingValues(values)
   }, [selectedVersionQ.data])
 
@@ -2129,6 +2115,16 @@ export default function GigaChatPage() {
               persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'правила') : null}
               availableFields={sheetData?.columns ?? []}
               defaultValue={DEFAULT_RULE_PACK_PROMPT_NOTES}
+              versionId={selectedSettingsVersionId}
+              canEdit={selectedVersionCanEdit}
+              currentVersionTitle={selectedVersionQ.data?.version.title}
+              currentUserDisplayName={currentUserDisplayName}
+              onImportComplete={async (data) => {
+                setSelectedSettingsVersionId(data.version.version_id)
+                setSettingValues(data.values)
+                await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
+                await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', data.version.version_id] })
+              }}
             />
           </div> : null}
         </> : null}

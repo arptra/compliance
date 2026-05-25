@@ -550,6 +550,152 @@ class GigaChatLabService:
         self._write_version_payload(payload)
         return self.get_settings_version(str(payload["version_id"]), user=user)
 
+    def export_rule_packs_workbook(self, version_id: str, *, user: dict[str, Any] | None = None) -> tuple[str, bytes]:
+        payload = self._read_version_payload(version_id, user=user)
+        values = self._values_from_version_payload(payload)
+        rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
+        columns = [
+            "Название правила",
+            "Поле поиска",
+            "Ключевые слова",
+            "Активно",
+            "Тип действия",
+            "Target tag",
+            "Target topic",
+            "Описание",
+            "Фильтры JSON",
+        ]
+        rows = []
+        for rule_pack in rule_packs:
+            rows.append(
+                {
+                    "Название правила": rule_pack.code,
+                    "Поле поиска": "\n".join(rule_pack.source_fields),
+                    "Ключевые слова": "\n".join(rule_pack.keywords),
+                    "Активно": "yes" if rule_pack.enabled else "no",
+                    "Тип действия": rule_pack.type,
+                    "Target tag": rule_pack.target_tag or "",
+                    "Target topic": rule_pack.target_topic or "",
+                    "Описание": rule_pack.description or "",
+                    "Фильтры JSON": json.dumps([item.model_dump() for item in rule_pack.filters], ensure_ascii=False),
+                }
+            )
+
+        df = pd.DataFrame(rows, columns=columns)
+        guide = pd.DataFrame(
+            [
+                {"Поле": "Название тега", "Описание": "Код/название rule pack или тега, например DRA или IPOTEKA. Также принимается колонка Название правила."},
+                {"Поле": "Колонка", "Описание": "Одна или несколько колонок, где ищутся ключевые слова. Также принимается колонка Поле поиска."},
+                {"Поле": "Ключевые слова", "Описание": "Один или несколько ключей. Можно писать через перенос строки или запятую, * работает как wildcard."},
+            ]
+        )
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="rules")
+            guide.to_excel(writer, index=False, sheet_name="README")
+            worksheet = writer.sheets["rules"]
+            for index, width in enumerate([28, 36, 48, 12, 18, 22, 42, 56, 42], start=1):
+                worksheet.column_dimensions[chr(64 + index)].width = width
+
+        title = str(payload.get("title") or version_id or "rules")
+        safe_title = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ_-]+", "_", title).strip("_") or "rules"
+        return f"{safe_title}_rule_packs.xlsx", buffer.getvalue()
+
+    def import_rule_packs_workbook(
+        self,
+        version_id: str,
+        filename: str,
+        content: bytes,
+        *,
+        user: dict[str, Any] | None = None,
+    ) -> GigaChatLabSettingsVersionResponse:
+        context = self._user_context(user)
+        suffix = Path(filename or "rules.xlsx").suffix.lower()
+        if suffix == ".csv":
+            df = pd.read_csv(BytesIO(content), dtype=str, keep_default_na=False)
+        elif suffix in {".xlsx", ".xls", ".xlsm"}:
+            df = pd.read_excel(BytesIO(content), sheet_name=0, dtype=str, keep_default_na=False)
+        else:
+            raise ValueError("Загрузите Excel-файл с правилами: .xlsx, .xls, .xlsm или .csv.")
+
+        df = self._drop_empty_unnamed_columns(df).fillna("")
+        column_map = {self._normalize_rule_pack_import_header(column): column for column in df.columns}
+
+        def find_column(*aliases: str) -> str | None:
+            for alias in aliases:
+                column = column_map.get(self._normalize_rule_pack_import_header(alias))
+                if column is not None:
+                    return str(column)
+            return None
+
+        name_column = find_column(
+            "Название правила",
+            "Название тега",
+            "Rule name",
+            "Rule code",
+            "Tag name",
+            "Code",
+            "Name",
+            "Правило",
+            "Тег",
+        )
+        fields_column = find_column("Поле поиска", "Поля поиска", "Source field", "Source fields", "Field", "Fields", "Колонка", "Колонки")
+        keywords_column = find_column("Ключевые слова", "Keywords", "Keyword", "Ключи", "Ключевое слово")
+        if not name_column or not fields_column or not keywords_column:
+            raise ValueError("В Excel должны быть колонки: Название правила, Поле поиска, Ключевые слова.")
+
+        enabled_column = find_column("Активно", "Enabled", "Active")
+        type_column = find_column("Тип действия", "Type", "Action type")
+        target_tag_column = find_column("Target tag", "Тег", "Tag")
+        target_topic_column = find_column("Target topic", "Topic", "Тема")
+        description_column = find_column("Описание", "Description")
+        filters_column = find_column("Фильтры JSON", "Filters JSON", "Filters")
+
+        rule_packs: list[GigaChatRulePack] = []
+        for row_index, row in df.iterrows():
+            code = self._cell_text(row.get(name_column))
+            source_fields = self._split_rule_list(row.get(fields_column))
+            keywords = self._split_rule_list(row.get(keywords_column))
+            if not code and not source_fields and not keywords:
+                continue
+            if not code:
+                raise ValueError(f"Строка {row_index + 2}: заполните название правила.")
+            if not source_fields:
+                raise ValueError(f"Строка {row_index + 2}: заполните поле поиска.")
+            if not keywords:
+                raise ValueError(f"Строка {row_index + 2}: заполните ключевые слова.")
+
+            target_tag = self._cell_text(row.get(target_tag_column)) if target_tag_column else ""
+            target_topic = self._cell_text(row.get(target_topic_column)) if target_topic_column else ""
+            rule_type = self._cell_text(row.get(type_column)).lower() if type_column else ""
+            if rule_type not in {"assign_tag", "reclass_topic"}:
+                rule_type = "reclass_topic" if target_topic else "assign_tag"
+
+            filters = self._parse_rule_pack_import_filters(row.get(filters_column) if filters_column else "")
+            rule_packs.append(
+                GigaChatRulePack(
+                    code=code,
+                    description=self._cell_text(row.get(description_column)) if description_column else "",
+                    enabled=self._parse_rule_pack_import_bool(row.get(enabled_column), default=True) if enabled_column else True,
+                    type=rule_type,
+                    source_fields=source_fields,
+                    keywords=keywords,
+                    filters=filters,
+                    target_tag=(target_tag or code) if rule_type == "assign_tag" else None,
+                    target_topic=target_topic if rule_type == "reclass_topic" else None,
+                )
+            )
+
+        if not rule_packs:
+            raise ValueError("В файле не найдено ни одного правила.")
+
+        serialized = json.dumps([item.model_dump() for item in rule_packs], ensure_ascii=False, indent=2)
+        req = GigaChatLabSettingsVersionUpdateRequest(
+            updated_by=context["display_name"],
+            values={"rule_pack_prompt_notes": serialized},
+        )
+        return self.save_settings_version(version_id, req, user=user)
+
     def _coerce_setting_value(self, key: str, value: Any) -> Any:
         meta = next((x for x in self.FIELD_DEFS if x["key"] == key), None)
         if meta is None:
@@ -1707,6 +1853,56 @@ class GigaChatLabService:
         text = str(raw).replace("\r", "\n")
         parts = [part.strip() for chunk in text.split("\n") for part in chunk.split(",")]
         return [part for part in parts if part]
+
+    @staticmethod
+    def _normalize_rule_pack_import_header(raw: Any) -> str:
+        text = str(raw or "").strip().lower().replace("ё", "е")
+        return re.sub(r"[^0-9a-zа-я]+", "", text)
+
+    @classmethod
+    def _cell_text(cls, value: Any) -> str:
+        normalized = cls._normalize_cell(value)
+        if normalized is None:
+            return ""
+        if isinstance(normalized, float) and normalized.is_integer():
+            return str(int(normalized))
+        return str(normalized).strip()
+
+    @classmethod
+    def _parse_rule_pack_import_bool(cls, value: Any, *, default: bool = True) -> bool:
+        text = cls._cell_text(value).strip().lower()
+        if not text:
+            return default
+        if text in {"1", "true", "yes", "y", "on", "да", "активно", "активен"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "нет", "неактивно", "не активен"}:
+            return False
+        return default
+
+    @classmethod
+    def _parse_rule_pack_import_filters(cls, value: Any) -> list[GigaChatRulePackFilter]:
+        text = cls._cell_text(value)
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return []
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if not isinstance(parsed, list):
+            return []
+        filters: list[GigaChatRulePackFilter] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            field = cls._cell_text(item.get("field"))
+            op = cls._cell_text(item.get("op") or "eq").lower()
+            filter_value = cls._cell_text(item.get("value"))
+            if not field or not filter_value or op not in {"eq", "ne"}:
+                continue
+            filters.append(GigaChatRulePackFilter(field=field, op=op, value=filter_value))
+        return filters
 
     @classmethod
     def _parse_rule_pack_items(cls, raw: Any) -> list[GigaChatRulePack]:

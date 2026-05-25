@@ -68,6 +68,19 @@ export function saveGigaChatLabSettingsVersion(versionId: string, payload: {
   return apiPost<GigaChatLabSettingsVersionResponse>(`/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}`, payload)
 }
 
+export function exportGigaChatRulePacks(versionId: string) {
+  return apiPostBlob(`/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}/rule-packs/export`, {})
+}
+
+export function importGigaChatRulePacks(versionId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return apiPostForm<GigaChatLabSettingsVersionResponse>(
+    `/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}/rule-packs/import`,
+    form,
+  )
+}
+
 export function uploadGigaChatWorkbook(form: FormData, signal?: AbortSignal) {
   return apiPostForm<GigaChatWorkbookUploadResponse>('/api/gigachat/lab/workbooks/upload', form, { signal })
 }
