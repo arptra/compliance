@@ -68,6 +68,8 @@ class _WorkbookUploadCancelled(Exception):
 
 
 class GigaChatLabService:
+    MATCH_WORD_CHARS = r"0-9A-Za-zА-Яа-яЁё"
+
     DEFAULT_SYSTEM_PROMPT = (
         "Ты обязан вернуть только валидный JSON без markdown, без пояснений вне JSON и без служебного текста. "
         "Размечай одно клиентское обращение за раз, используй все доступные поля строки и не выдумывай факты, классы или теги."
@@ -179,15 +181,15 @@ class GigaChatLabService:
                 "type": "assign_tag",
                 "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
                 "keywords": [
-                    "умер",
-                    "погиб",
-                    "смерт",
-                    "гибел",
-                    "наследни",
-                    "наследств",
-                    "каникул",
-                    "реструктуриз",
-                    "пристав",
+                    "умер*",
+                    "погиб*",
+                    "смерт*",
+                    "гибел*",
+                    "наследни*",
+                    "наследств*",
+                    "каникул*",
+                    "реструктуриз*",
+                    "пристав*",
                     "участник СВО",
                     "участника СВО",
                     "участником СВО",
@@ -195,8 +197,8 @@ class GigaChatLabService:
                     "судебное решение",
                     "по решению суда",
                     "исполнительное производство",
-                    "военн",
-                    "банкрот",
+                    "военн*",
+                    "банкрот*",
                 ],
                 "filters": [],
                 "target_tag": "DRA",
@@ -209,17 +211,17 @@ class GigaChatLabService:
                 "type": "assign_tag",
                 "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
                 "keywords": [
-                    "ипотек",
-                    "жилищн",
-                    "недвижим",
-                    "квартир",
+                    "ипотек*",
+                    "жилищн*",
+                    "недвижим*",
+                    "квартир*",
                     "дом в залог",
                     "залог недвиж",
-                    "закладн",
+                    "закладн*",
                     "эскроу",
-                    "обременен",
+                    "обременен*",
                     "созаемщик",
-                    "созаемщ",
+                    "созаемщ*",
                     "рефинансир*ипот",
                     "рефинансирован*ипот",
                     "материнск*капитал",
@@ -250,12 +252,12 @@ class GigaChatLabService:
                 "type": "reclass_topic",
                 "source_fields": ["Во. Описание", "Обр. Результат суммаризации диалога"],
                 "keywords": [
-                    "Образовательн",
+                    "Образовательн*",
                     "Вуз",
                     "Кредит на образ",
                     "Оплатить обучение",
                     "Период*обучения",
-                    "Отчисл",
+                    "Отчисл*",
                 ],
                 "filters": [
                     {"field": "Трайб", "op": "eq", "value": "ПОТРЕБИТЕЛЬСКИЕ КРЕДИТЫ"},
@@ -655,7 +657,7 @@ class GigaChatLabService:
         for row_index, row in df.iterrows():
             code = self._cell_text(row.get(name_column))
             source_fields = self._split_rule_list(row.get(fields_column))
-            keywords = self._split_rule_list(row.get(keywords_column))
+            keywords = self._split_keyword_list(row.get(keywords_column))
             if not code and not source_fields and not keywords:
                 continue
             if not code:
@@ -1855,6 +1857,18 @@ class GigaChatLabService:
         return [part for part in parts if part]
 
     @staticmethod
+    def _split_keyword_list(raw: Any) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item).strip()]
+        if raw is None:
+            return []
+        text = str(raw).replace("\r", "\n")
+        if "\n" in text or "," in text:
+            parts = [part.strip() for chunk in text.split("\n") for part in chunk.split(",")]
+            return [part for part in parts if part]
+        return [text] if text.strip() else []
+
+    @staticmethod
     def _normalize_rule_pack_import_header(raw: Any) -> str:
         text = str(raw or "").strip().lower().replace("ё", "е")
         return re.sub(r"[^0-9a-zа-я]+", "", text)
@@ -1943,7 +1957,7 @@ class GigaChatLabService:
                     enabled=bool(entry.get("enabled", True)),
                     type=rule_type,
                     source_fields=cls._split_rule_list(entry.get("source_fields")),
-                    keywords=cls._split_rule_list(entry.get("keywords")),
+                    keywords=cls._split_keyword_list(entry.get("keywords")),
                     filters=filters,
                     target_tag=str(entry.get("target_tag", "") or "").strip() or None,
                     target_topic=str(entry.get("target_topic", "") or "").strip() or None,
@@ -1952,23 +1966,36 @@ class GigaChatLabService:
         return items
 
     @staticmethod
-    def _normalize_match_text(value: Any) -> str:
-        text = str(value or "").strip().lower()
+    def _normalize_match_text(value: Any, *, strip: bool = True) -> str:
+        text = "" if value is None else str(value)
+        if strip:
+            text = text.strip()
+        text = text.lower()
         text = re.sub(r"\s+", " ", text)
         return text
 
     @classmethod
+    def _is_match_word_char(cls, value: str) -> bool:
+        return bool(value and re.fullmatch(rf"[{cls.MATCH_WORD_CHARS}]", value))
+
+    @classmethod
     def _keyword_matches_text(cls, keyword: str, text: str) -> bool:
-        normalized_keyword = cls._normalize_match_text(keyword)
-        normalized_text = cls._normalize_match_text(text)
-        if not normalized_keyword or not normalized_text:
+        normalized_keyword = cls._normalize_match_text(keyword, strip=False)
+        normalized_text = cls._normalize_match_text(text, strip=False)
+        if not normalized_keyword.strip() or not normalized_text:
+            return False
+        if not normalized_keyword.replace("*", "").strip():
             return False
         regex_pattern = ".*".join(re.escape(part) for part in normalized_keyword.split("*"))
         regex_pattern = regex_pattern.replace(r"\ ", r"\s+")
+        if not normalized_keyword.startswith("*") and cls._is_match_word_char(normalized_keyword[0]):
+            regex_pattern = rf"(?<![{cls.MATCH_WORD_CHARS}]){regex_pattern}"
+        if not normalized_keyword.endswith("*") and cls._is_match_word_char(normalized_keyword[-1]):
+            regex_pattern = rf"{regex_pattern}(?![{cls.MATCH_WORD_CHARS}])"
         try:
             return re.search(regex_pattern, normalized_text, flags=re.IGNORECASE) is not None
         except re.error:
-            return normalized_keyword in normalized_text
+            return False
 
     @classmethod
     def _row_filter_matches(cls, row: dict[str, Any], rule_filter: GigaChatRulePackFilter) -> bool:
