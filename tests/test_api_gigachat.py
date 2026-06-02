@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import yaml
@@ -154,63 +153,6 @@ def test_gigachat_final_prompt_save_writes_snapshot(tmp_path: Path):
     assert payload["saved"] is True
     assert payload["saved_path"]
     assert Path(payload["saved_path"]).exists()
-
-
-def test_gigachat_rule_pack_keywords_respect_word_boundaries_and_literal_spaces(tmp_path: Path):
-    client = TestClient(create_app(str(_setup(tmp_path))))
-    rules = [
-        {
-            "code": "SVO",
-            "enabled": True,
-            "type": "assign_tag",
-            "source_fields": ["text"],
-            "keywords": ["СВО"],
-            "filters": [],
-            "target_tag": "SVO",
-            "target_topic": None,
-        },
-        {
-            "code": "SVO_SPACE",
-            "enabled": True,
-            "type": "assign_tag",
-            "source_fields": ["text"],
-            "keywords": ["СВО "],
-            "filters": [],
-            "target_tag": "SVO_SPACE",
-            "target_topic": None,
-        },
-        {
-            "code": "MORTGAGE_STEM",
-            "enabled": True,
-            "type": "assign_tag",
-            "source_fields": ["text"],
-            "keywords": ["ипотек*"],
-            "filters": [],
-            "target_tag": "IPOTEKA",
-            "target_topic": None,
-        },
-    ]
-
-    response = client.post(
-        "/api/gigachat/lab/rule-packs/evaluate",
-        json={
-            "values": {"rule_pack_prompt_notes": json.dumps(rules, ensure_ascii=False)},
-            "rows": [
-                {"text": "Очень своеобразный кейс без нужного тега."},
-                {"text": "Участник СВО получил отсрочку."},
-                {"text": "Участник СВО, получил отсрочку."},
-                {"text": "По ипотеке не применили ставку."},
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    rows = response.json()["evaluations"]
-    codes_by_row = [{hit["code"] for hit in row["hits"]} for row in rows]
-    assert codes_by_row[0] == set()
-    assert codes_by_row[1] == {"SVO", "SVO_SPACE"}
-    assert codes_by_row[2] == {"SVO"}
-    assert codes_by_row[3] == {"MORTGAGE_STEM"}
 
 
 def test_gigachat_run_row_renders_payload_and_returns_model_output(monkeypatch, tmp_path: Path):

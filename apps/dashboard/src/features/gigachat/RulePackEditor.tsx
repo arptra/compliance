@@ -14,17 +14,6 @@ function splitLines(value: string) {
     .filter(Boolean)
 }
 
-function splitKeywordLines(value: string) {
-  const text = value.replace(/\r/g, '\n')
-  if (text.includes('\n')) {
-    return text
-      .split('\n')
-      .map((item) => item.trim())
-      .filter(Boolean)
-  }
-  return text.trim() ? [text] : []
-}
-
 function formatRuleAction(rule: GigaChatRulePack) {
   return rule.type === 'assign_tag'
     ? `Ключевые слова: ${rule.keywords.length ? rule.keywords.join(', ') : '—'}`
@@ -175,7 +164,7 @@ export function RulePackEditor({
       code: draft.code.trim(),
       description: '',
       source_fields: splitLines(sourceFieldsText),
-      keywords: splitKeywordLines(keywordsText),
+      keywords: splitLines(keywordsText),
       filters: draft.filters
         .map((filterItem) => ({
           field: filterItem.field.trim(),
