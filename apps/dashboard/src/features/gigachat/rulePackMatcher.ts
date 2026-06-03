@@ -16,6 +16,23 @@ function splitStringList(raw: unknown) {
     .filter(Boolean)
 }
 
+function splitKeywordList(raw: unknown) {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item ?? '')).filter((item) => item.trim())
+  }
+  const text = String(raw ?? '').replace(/\r/g, '\n')
+  if (text.includes(',')) {
+    return text
+      .split(/\n|,/u)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  if (text.includes('\n')) {
+    return text.split('\n').filter((item) => item.trim())
+  }
+  return text.trim() ? [text] : []
+}
+
 export function parseRulePacks(raw: unknown): GigaChatRulePack[] {
   const text = String(raw ?? '').trim()
   if (!text) return []
@@ -42,7 +59,7 @@ export function parseRulePacks(raw: unknown): GigaChatRulePack[] {
         enabled: Boolean(record.enabled ?? true),
         type,
         source_fields: splitStringList(record.source_fields),
-        keywords: splitStringList(record.keywords),
+        keywords: splitKeywordList(record.keywords),
         filters,
         target_tag: String(record.target_tag ?? '').trim() || null,
         target_topic: String(record.target_topic ?? '').trim() || null,
@@ -53,8 +70,9 @@ export function parseRulePacks(raw: unknown): GigaChatRulePack[] {
   }
 }
 
-function normalizeMatchText(value: unknown) {
-  return String(value ?? '').trim().toLowerCase().replace(/\s+/gu, ' ')
+function normalizeMatchText(value: unknown, { strip = true }: { strip?: boolean } = {}) {
+  const text = String(value ?? '')
+  return (strip ? text.trim() : text).toLowerCase().replace(/\s+/gu, ' ')
 }
 
 function escapeRegExp(value: string) {
@@ -62,9 +80,9 @@ function escapeRegExp(value: string) {
 }
 
 function keywordMatchesText(keyword: string, text: unknown) {
-  const normalizedKeyword = normalizeMatchText(keyword)
-  const normalizedText = normalizeMatchText(text)
-  if (!normalizedKeyword || !normalizedText) return false
+  const normalizedKeyword = normalizeMatchText(keyword, { strip: false })
+  const normalizedText = normalizeMatchText(text, { strip: false })
+  if (!normalizedKeyword.trim() || !normalizedText) return false
   const pattern = normalizedKeyword
     .split('*')
     .map(escapeRegExp)

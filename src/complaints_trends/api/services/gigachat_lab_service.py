@@ -655,7 +655,7 @@ class GigaChatLabService:
         for row_index, row in df.iterrows():
             code = self._cell_text(row.get(name_column))
             source_fields = self._split_rule_list(row.get(fields_column))
-            keywords = self._split_rule_list(row.get(keywords_column))
+            keywords = self._split_keyword_list(row.get(keywords_column))
             if not code and not source_fields and not keywords:
                 continue
             if not code:
@@ -1855,6 +1855,20 @@ class GigaChatLabService:
         return [part for part in parts if part]
 
     @staticmethod
+    def _split_keyword_list(raw: Any) -> list[str]:
+        if isinstance(raw, list):
+            return [str(item) for item in raw if str(item).strip()]
+        if raw is None:
+            return []
+        text = str(raw).replace("\r", "\n")
+        if "," in text:
+            parts = [part.strip() for chunk in text.split("\n") for part in chunk.split(",")]
+            return [part for part in parts if part]
+        if "\n" in text:
+            return [part for part in text.split("\n") if part.strip()]
+        return [text] if text.strip() else []
+
+    @staticmethod
     def _normalize_rule_pack_import_header(raw: Any) -> str:
         text = str(raw or "").strip().lower().replace("ё", "е")
         return re.sub(r"[^0-9a-zа-я]+", "", text)
@@ -1943,7 +1957,7 @@ class GigaChatLabService:
                     enabled=bool(entry.get("enabled", True)),
                     type=rule_type,
                     source_fields=cls._split_rule_list(entry.get("source_fields")),
-                    keywords=cls._split_rule_list(entry.get("keywords")),
+                    keywords=cls._split_keyword_list(entry.get("keywords")),
                     filters=filters,
                     target_tag=str(entry.get("target_tag", "") or "").strip() or None,
                     target_topic=str(entry.get("target_topic", "") or "").strip() or None,
@@ -1952,16 +1966,19 @@ class GigaChatLabService:
         return items
 
     @staticmethod
-    def _normalize_match_text(value: Any) -> str:
-        text = str(value or "").strip().lower()
+    def _normalize_match_text(value: Any, *, strip: bool = True) -> str:
+        text = "" if value is None else str(value)
+        if strip:
+            text = text.strip()
+        text = text.lower()
         text = re.sub(r"\s+", " ", text)
         return text
 
     @classmethod
     def _keyword_matches_text(cls, keyword: str, text: str) -> bool:
-        normalized_keyword = cls._normalize_match_text(keyword)
-        normalized_text = cls._normalize_match_text(text)
-        if not normalized_keyword or not normalized_text:
+        normalized_keyword = cls._normalize_match_text(keyword, strip=False)
+        normalized_text = cls._normalize_match_text(text, strip=False)
+        if not normalized_keyword.strip() or not normalized_text:
             return False
         regex_pattern = ".*".join(re.escape(part) for part in normalized_keyword.split("*"))
         regex_pattern = regex_pattern.replace(r"\ ", r"\s+")
