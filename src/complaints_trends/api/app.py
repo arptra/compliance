@@ -3,8 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .deps import get_services
-from .routers import auth, categories, feedback, gigachat, health, meta, overview, pattern_fit, pattern_monitor, preparation, records, reports, runs, timeseries
+from .routers import auth, gigachat, health, records
 
 
 def create_app(config_path: str) -> FastAPI:
@@ -23,15 +22,5 @@ def create_app(config_path: str) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(gigachat.router)
     app.include_router(records.router)
-    app.include_router(meta.router)
-    app.include_router(overview.router)
-    app.include_router(categories.router)
-    app.include_router(timeseries.router)
-    app.include_router(pattern_fit.router)
-    app.include_router(pattern_monitor.router)
-    app.include_router(feedback.router)
-    app.include_router(preparation.router)
-    app.include_router(reports.router)
-    app.include_router(runs.router)
 
     return app

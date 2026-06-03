@@ -1,23 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
-import { FilterBar } from './FilterBar'
 import { useAuth } from '../features/auth/AuthContext'
 
 const items = [
-  { to: '/overview', label: 'Overview', short: 'O' },
-  { to: '/categories', label: 'Categories', short: 'C' },
-  { to: '/timeseries', label: 'Timeseries', short: 'T' },
-  { to: '/preparation', label: 'Preparation', short: 'P' },
   { to: '/gigachat', label: 'GigaChat Lab', short: 'G' },
   { to: '/gigachat/lake', label: 'Загруженные данные', short: 'ЗД', sub: true },
   { to: '/gigachat/background', label: 'Фоновые задачи', short: 'Ф', sub: true },
-  { to: '/pattern-fit', label: 'Pattern Fit', short: 'PF' },
-  { to: '/pattern-monitor', label: 'Pattern Monitor', short: 'PM' },
-  { to: '/review-dataset', label: 'Review Dataset', short: 'R' },
-  { to: '/model-quality', label: 'Model Quality', short: 'M' },
-  { to: '/parquet-viewer', label: 'Parquet Viewer', short: 'PV' },
-  { to: '/reports', label: 'Reports', short: 'R' },
-  { to: '/settings', label: 'Settings', short: 'S' },
 ]
 
 const SIDEBAR_COLLAPSED_KEY = 'complaints-dashboard-sidebar-collapsed'
@@ -41,7 +29,6 @@ export function Layout() {
   const loc = useLocation()
   const { user, logout } = useAuth()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1')
-  const showFilters = !loc.pathname.startsWith('/gigachat') && loc.pathname !== '/profile'
   const userName = user?.display_name || user?.email || 'Профиль'
 
   useEffect(() => {
@@ -90,14 +77,13 @@ export function Layout() {
     </aside>
     <main className="main">
       <header className="header">
-        <div>Interactive Dashboard</div>
+        <div>GigaChat Lab</div>
         <div className='user-menu'>
           <Link to='/profile'>{userName}</Link>
           <span className='lab-muted'>{user?.role}</span>
           <button type='button' onClick={() => void logout()}>Выйти</button>
         </div>
       </header>
-      {showFilters ? <FilterBar /> : null}
       <section className="content"><Outlet /></section>
     </main>
   </div>
