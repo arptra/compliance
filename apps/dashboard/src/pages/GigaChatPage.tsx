@@ -30,7 +30,7 @@ import { LabelingRulesEditor } from '../features/gigachat/LabelingRulesEditor'
 import { evaluateRulePacksLocally, parseRulePacks } from '../features/gigachat/rulePackMatcher'
 import { RulePackEditor } from '../features/gigachat/RulePackEditor'
 import { GigaChatSettingsForm } from '../features/gigachat/GigaChatSettingsForm'
-import { WorkbookSheetPickerModal } from '../features/gigachat/WorkbookSheetPickerModal'
+import { WorkbookSheetPickerModal, WorkbookSheetsPanel } from '../features/gigachat/WorkbookSheetPickerModal'
 import { WorkbookSheetTable } from '../features/gigachat/WorkbookSheetTable'
 import { GigaChatTransportCard } from '../features/gigachat/GigaChatTransportCard'
 import { CellHoverPopover, useCellHoverPopover } from '../features/gigachat/useCellHoverPopover'
@@ -714,6 +714,7 @@ export default function GigaChatPage() {
   const [backgroundWorkbookUploads, setBackgroundWorkbookUploads] = useState<BackgroundWorkbookUpload[]>(() => loadBackgroundWorkbookUploads())
   const [workbookMeta, setWorkbookMeta] = useState<GigaChatWorkbookUploadResponse | null>(null)
   const [sheetData, setSheetData] = useState<GigaChatWorkbookSheetDataResponse | null>(null)
+  const [viewSheetData, setViewSheetData] = useState<GigaChatWorkbookSheetDataResponse | null>(null)
   const [sheetPickerOpen, setSheetPickerOpen] = useState(false)
   const [finalPromptPreview, setFinalPromptPreview] = useState<GigaChatFinalPromptResponse | null>(null)
   const [finalPromptModalOpen, setFinalPromptModalOpen] = useState(false)
@@ -722,7 +723,7 @@ export default function GigaChatPage() {
   const [finalPromptOverrideText, setFinalPromptOverrideText] = useState<string | null>(null)
   const [rowRunModalOpen, setRowRunModalOpen] = useState(false)
   const [rowRunResult, setRowRunResult] = useState<GigaChatLabRowRunResponse | null>(null)
-  const [workbookRowLimit, setWorkbookRowLimit] = useState<WorkbookRowLimit>(10)
+  const [workbookRowLimit, setWorkbookRowLimit] = useState<WorkbookRowLimit>('all')
   const [includedPromptColumns, setIncludedPromptColumns] = useState<string[]>([])
   const [selectedSheetRowKeys, setSelectedSheetRowKeys] = useState<string[]>([])
   const selectedSheetRowKeySet = useMemo(() => new Set(selectedSheetRowKeys), [selectedSheetRowKeys])
@@ -799,6 +800,7 @@ export default function GigaChatPage() {
         }],
       })
       setSheetData(importedSheet)
+      setViewSheetData(importedSheet)
       setSelectedFile(null)
       setFileInputVersion((current) => current + 1)
       setIncludedPromptColumns([...columns])
@@ -958,21 +960,58 @@ export default function GigaChatPage() {
   const selectSheet = useMutation({
     mutationFn: ({ uploadId, sheetName, rowLimit }: { uploadId: string; sheetName: string; rowLimit: number }) => selectGigaChatWorkbookSheet(uploadId, sheetName, rowLimit),
     onSuccess: (data) => {
+      const sameSheet = sheetData?.upload_id === data.upload_id && sheetData?.sheet_name === data.sheet_name
       setIncludedPromptColumns((current) => {
-        const sameSheet = sheetData?.upload_id === data.upload_id && sheetData?.sheet_name === data.sheet_name
         if (!sameSheet || !current.length) return [...data.columns]
         const filtered = current.filter((column) => data.columns.includes(column))
         return filtered.length ? filtered : [...data.columns]
       })
+      if (!sameSheet) {
+        setSelectedSheetRowKeys([])
+        setRuleEvaluationMap({})
+        setAnnotatedRows([])
+        setAnnotatedClassFilter([])
+        setAnnotatedTagFilter([])
+        setAnnotatedRuleFilter([])
+        setAnnotatedDecisionSourceFilter([])
+        setRowRunResult(null)
+        setRowRunError(null)
+        setBatchRunError(null)
+      }
       setSheetData(data)
+      setViewSheetData(data)
       setWorkbookCollapsed(false)
+      setUploadCollapsed(true)
       setSheetPickerOpen(false)
     },
   })
 
+  const viewSheet = useMutation({
+    mutationFn: ({ uploadId, sheetName, rowLimit }: { uploadId: string; sheetName: string; rowLimit: number }) => selectGigaChatWorkbookSheet(uploadId, sheetName, rowLimit),
+    onSuccess: (data) => {
+      setViewSheetData(data)
+      setWorkbookCollapsed(false)
+    },
+  })
+
+  const selectWorkbookSheet = (sheetName: string) => {
+    if (!workbookMeta) return
+    const previewSheet = workbookMeta.sheets.find((sheet) => sheet.name === sheetName)
+    const rowLimit = workbookRowLimit === 'all' ? (previewSheet?.rows_total ?? 200) : workbookRowLimit
+    selectSheet.mutate({ uploadId: workbookMeta.upload_id, sheetName, rowLimit })
+  }
+
+  const viewWorkbookSheet = (sheetName: string) => {
+    if (!workbookMeta) return
+    const previewSheet = workbookMeta.sheets.find((sheet) => sheet.name === sheetName)
+    const rowLimit = workbookRowLimit === 'all' ? (previewSheet?.rows_total ?? 200) : workbookRowLimit
+    viewSheet.mutate({ uploadId: workbookMeta.upload_id, sheetName, rowLimit })
+  }
+
   const activateUploadedWorkbook = (data: GigaChatWorkbookUploadResponse) => {
     setWorkbookMeta(data)
     setSheetData(null)
+    setViewSheetData(null)
     setSelectedFile(null)
     setFileInputVersion((current) => current + 1)
     setWorkbookCollapsed(false)
@@ -1354,6 +1393,7 @@ export default function GigaChatPage() {
 
   const applyBackgroundTaskResult = (data: GigaChatBackgroundTaskResultResponse) => {
     setSheetData(data.workbook)
+    setViewSheetData(data.workbook)
     setWorkbookMeta({
       upload_id: data.workbook.upload_id,
       filename: data.workbook.filename,
@@ -1653,6 +1693,9 @@ export default function GigaChatPage() {
   const selected = transports.find((item) => item.name === selectedTransport) ?? transports[0]
   const hasMultipleSheets = (workbookMeta?.sheet_count ?? 0) > 1
   const selectedSheetName = sheetData?.sheet_name ?? null
+  const viewSheetName = viewSheetData?.sheet_name ?? null
+  const displayedSheetData = viewSheetData ?? sheetData
+  const displayedSheetIsWorking = Boolean(displayedSheetData && sheetData && displayedSheetData.upload_id === sheetData.upload_id && displayedSheetData.sheet_name === sheetData.sheet_name)
   const ruleEvaluationTotal = ruleEvaluationProgress?.total ?? sheetData?.rows.length ?? 0
   const ruleEvaluationProcessed = ruleEvaluationProgress?.processed ?? 0
   const ruleEvaluationRemaining = Math.max(0, ruleEvaluationTotal - ruleEvaluationProcessed)
@@ -2256,7 +2299,7 @@ export default function GigaChatPage() {
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Excel для разметки</h3>
-          <p>Загрузите локальный Excel, CSV или ZIP-архив с ними, затем выберите нужный лист и откройте его как рабочую таблицу прямо на странице.</p>
+          <p>Загрузите локальный Excel, CSV или ZIP-архив с ними, затем выберите рабочий лист для правил и GigaChat.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setUploadCollapsed((current) => !current)}>
           {uploadCollapsed ? 'Развернуть' : 'Свернуть'}
@@ -2322,11 +2365,17 @@ export default function GigaChatPage() {
 
         {uploadWorkbook.isError ? <div className='transport-error'>{formatLabError(uploadWorkbook.error as Error, 'файл')}</div> : null}
         {selectSheet.isError ? <div className='transport-error'>{formatLabError(selectSheet.error as Error, 'лист')}</div> : null}
+        {viewSheet.isError ? <div className='transport-error'>{formatLabError(viewSheet.error as Error, 'лист для просмотра')}</div> : null}
         {workbookMeta ? <div className='lab-settings-meta'>
           <div><b>Файл:</b> <code>{workbookMeta.filename}</code></div>
           <div><b>Формат:</b> <code>{workbookMeta.file_format}</code></div>
           <div><b>Листов:</b> {workbookMeta.sheet_count}</div>
-          <div><b>Выбранный лист:</b> <code>{selectedSheetName ?? 'еще не выбран'}</code></div>
+          <div><b>Рабочий лист:</b> <code>{selectedSheetName ?? 'еще не выбран'}</code></div>
+        </div> : null}
+        {workbookMeta && !selectedSheetName && hasMultipleSheets ? <div className='transport-actions'>
+          <button type='button' onClick={() => setSheetPickerOpen(true)}>
+            Выбрать рабочий лист
+          </button>
         </div> : null}
       </> : null}
     </section>
@@ -2335,11 +2384,11 @@ export default function GigaChatPage() {
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Проверка правил</h3>
-          <p>Локальный прогон rule packs по текущему листу до GigaChat: здесь видно, какие правила сработали, по каким полям и сколько строк они нашли.</p>
+          <p>Локальный прогон rule packs по рабочему листу до GigaChat: здесь видно, какие правила сработали, по каким полям и сколько строк они нашли.</p>
         </div>
         <div className='transport-actions'>
           <button type='button' onClick={handleEvaluateRules} disabled={!sheetData || ruleEvaluationBusy}>
-            {ruleEvaluationBusy ? 'Прогоняем правила...' : 'Прогнать правила на текущем листе'}
+            {ruleEvaluationBusy ? 'Прогоняем правила...' : 'Прогнать правила на рабочем листе'}
           </button>
         </div>
       </div>
@@ -2433,15 +2482,15 @@ export default function GigaChatPage() {
     <section className='card transport-result workbook-table-card'>
       <div className='transport-section-head'>
         <div className='transport-section-title'>
-          <h3>Таблица с тегами</h3>
-          <p>Ниже отображаются колонки выбранного листа, строки для проверки структуры и быстрые действия по отправке одной записи в GigaChat.</p>
+          <h3>Рабочая тетрадь</h3>
+          <p>Просмотр листов файла как таблиц. Правила и GigaChat работают по рабочему листу.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setWorkbookCollapsed((current) => !current)}>
           {workbookCollapsed ? 'Развернуть' : 'Свернуть'}
         </button>
       </div>
 
-      {ruleEvaluationBusy ? <div className='workbook-rule-lock'>
+      {ruleEvaluationBusy && displayedSheetIsWorking ? <div className='workbook-rule-lock'>
         <div className='card workbook-rule-lock-card'>
           <div className='spinner workbook-upload-spinner' aria-hidden='true' />
           <div className='giga-processing-progress-copy'>
@@ -2477,7 +2526,16 @@ export default function GigaChatPage() {
           <div className='lab-muted'>Выгрузка полного выбранного листа идёт в фоне, кнопки экспорта временно заблокированы.</div>
         </div> : null}
         {!workbookMeta ? <p>Сначала загрузите Excel или CSV файл.</p> : null}
-        {workbookMeta && !sheetData && !selectSheet.isPending ? <div className='transport-actions'>
+        {workbookMeta && hasMultipleSheets ? <WorkbookSheetsPanel
+          workbook={workbookMeta}
+          selectedSheetName={selectedSheetName}
+          viewSheetName={viewSheetName}
+          busySheetName={selectSheet.isPending ? selectSheet.variables?.sheetName : null}
+          viewBusySheetName={viewSheet.isPending ? viewSheet.variables?.sheetName : null}
+          onSelect={selectWorkbookSheet}
+          onView={viewWorkbookSheet}
+        /> : null}
+        {workbookMeta && !displayedSheetData && !selectSheet.isPending && !viewSheet.isPending ? <div className='transport-actions'>
           <button
             onClick={() => {
               if (!workbookMeta) return
@@ -2487,8 +2545,7 @@ export default function GigaChatPage() {
               }
               const onlySheet = workbookMeta.sheets[0]
               if (onlySheet) {
-                const rowLimit = workbookRowLimit === 'all' ? onlySheet.rows_total : workbookRowLimit
-                selectSheet.mutate({ uploadId: workbookMeta.upload_id, sheetName: onlySheet.name, rowLimit })
+                selectWorkbookSheet(onlySheet.name)
               }
             }}
             disabled={!hasMultipleSheets && !workbookMeta.sheets[0]}
@@ -2496,21 +2553,26 @@ export default function GigaChatPage() {
             {hasMultipleSheets ? 'Выбрать лист' : 'Загрузить лист'}
           </button>
         </div> : null}
-        {workbookMeta && !sheetData && !hasMultipleSheets && workbookMeta.sheets[0] ? <p className='lab-muted'>В файле найден один лист. Нажмите `Загрузить лист`, если автозагрузка не успела завершиться.</p> : null}
-        {selectSheet.isPending ? <div>Загружаем лист <code>{selectSheet.variables?.sheetName ?? ''}</code>...</div> : null}
-        {sheetData ? <WorkbookSheetTable
-          data={sheetData}
-          canChooseAnotherSheet={hasMultipleSheets}
-          onChooseAnotherSheet={() => setSheetPickerOpen(true)}
+        {workbookMeta && !displayedSheetData && !hasMultipleSheets && workbookMeta.sheets[0] ? <p className='lab-muted'>В файле найден один лист. Нажмите `Загрузить лист`, если автозагрузка не успела завершиться.</p> : null}
+        {selectSheet.isPending ? <div>Загружаем рабочий лист <code>{selectSheet.variables?.sheetName ?? ''}</code>...</div> : null}
+        {viewSheet.isPending ? <div>Открываем лист <code>{viewSheet.variables?.sheetName ?? ''}</code> в тетради...</div> : null}
+        {displayedSheetData ? <WorkbookSheetTable
+          data={displayedSheetData}
+          canChooseAnotherSheet={false}
           rowLimit={workbookRowLimit}
           onRowLimitChange={(value) => {
             setWorkbookRowLimit(value)
-            if (!sheetData) return
-            const rowLimit = value === 'all' ? sheetData.total_rows : value
-            selectSheet.mutate({ uploadId: sheetData.upload_id, sheetName: sheetData.sheet_name, rowLimit })
+            if (!displayedSheetData) return
+            const rowLimit = value === 'all' ? displayedSheetData.total_rows : value
+            if (displayedSheetIsWorking) {
+              selectSheet.mutate({ uploadId: displayedSheetData.upload_id, sheetName: displayedSheetData.sheet_name, rowLimit })
+              return
+            }
+            viewSheet.mutate({ uploadId: displayedSheetData.upload_id, sheetName: displayedSheetData.sheet_name, rowLimit })
           }}
-          includedPromptColumns={includedPromptColumns}
+          includedPromptColumns={displayedSheetIsWorking ? includedPromptColumns : displayedSheetData.columns}
           onTogglePromptColumn={(column) => {
+            if (!displayedSheetIsWorking) return
             setIncludedPromptColumns((current) => {
               if (current.includes(column)) return current.filter((item) => item !== column)
               return [...current, column]
@@ -2583,9 +2645,13 @@ export default function GigaChatPage() {
           batchBusy={batchBusy}
           exportBusy={exportBusy}
           exportPending={exportWorkbookRows.isPending}
-          busy={ruleEvaluationBusy || batchBusy || runRowBusyIndex !== null || startBackgroundTask.isPending}
-          ruleEvaluations={ruleEvaluationMap}
+          busy={displayedSheetIsWorking ? ruleEvaluationBusy || batchBusy || runRowBusyIndex !== null || startBackgroundTask.isPending : viewSheet.isPending}
+          ruleEvaluations={displayedSheetIsWorking ? ruleEvaluationMap : {}}
           rulePackOptions={rulePackOptions}
+          readOnly={!displayedSheetIsWorking}
+          workingSheetName={selectedSheetName}
+          onMakeCurrentSheetWorking={displayedSheetIsWorking ? undefined : () => selectWorkbookSheet(displayedSheetData.sheet_name)}
+          makeCurrentSheetWorkingBusy={selectSheet.isPending && selectSheet.variables?.sheetName === displayedSheetData.sheet_name}
         /> : null}
         {rowRunError ? <div className='transport-error'>{rowRunError}</div> : null}
         {batchRunError ? <div className='transport-error'>{batchRunError}</div> : null}
@@ -3067,13 +3133,11 @@ export default function GigaChatPage() {
     <WorkbookSheetPickerModal
       workbook={workbookMeta}
       open={sheetPickerOpen}
+      selectedSheetName={selectedSheetName}
       busySheetName={selectSheet.isPending ? selectSheet.variables?.sheetName : null}
       onClose={() => setSheetPickerOpen(false)}
       onSelect={(sheetName) => {
-        if (!workbookMeta) return
-        const previewSheet = workbookMeta.sheets.find((sheet) => sheet.name === sheetName)
-        const rowLimit = workbookRowLimit === 'all' ? (previewSheet?.rows_total ?? 200) : workbookRowLimit
-        selectSheet.mutate({ uploadId: workbookMeta.upload_id, sheetName, rowLimit })
+        selectWorkbookSheet(sheetName)
       }}
     />
 

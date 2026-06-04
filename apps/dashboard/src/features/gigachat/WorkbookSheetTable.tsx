@@ -34,6 +34,10 @@ export function WorkbookSheetTable({
   busy,
   ruleEvaluations,
   rulePackOptions,
+  readOnly,
+  workingSheetName,
+  onMakeCurrentSheetWorking,
+  makeCurrentSheetWorkingBusy,
 }: {
   data: GigaChatWorkbookSheetDataResponse
   onChooseAnotherSheet?: () => void
@@ -62,6 +66,10 @@ export function WorkbookSheetTable({
   busy?: boolean
   ruleEvaluations: Record<number, GigaChatRuleEvaluationRow>
   rulePackOptions: string[]
+  readOnly?: boolean
+  workingSheetName?: string | null
+  onMakeCurrentSheetWorking?: () => void
+  makeCurrentSheetWorkingBusy?: boolean
 }) {
   const {
     rowClamp,
@@ -79,6 +87,7 @@ export function WorkbookSheetTable({
   } = useCellHoverPopover()
   const [showOnlyRuleHits, setShowOnlyRuleHits] = useState(false)
   const [ruleFilter, setRuleFilter] = useState('')
+  const tableReadOnly = Boolean(readOnly)
 
   const ruleOptions = useMemo(
     () => Array.from(new Set([
@@ -91,24 +100,25 @@ export function WorkbookSheetTable({
     () => data.rows
       .map((row, idx) => ({ row, idx, evaluation: ruleEvaluations[idx] }))
       .filter(({ evaluation }) => {
+        if (tableReadOnly) return true
         const hits = evaluation?.hits ?? []
         if (showOnlyRuleHits && !hits.length) return false
         if (ruleFilter && !hits.some((hit) => hit.code === ruleFilter)) return false
         return true
       }),
-    [data.rows, ruleEvaluations, ruleFilter, showOnlyRuleHits],
+    [data.rows, ruleEvaluations, ruleFilter, showOnlyRuleHits, tableReadOnly],
   )
   const virtualTable = useVirtualTableRows(visibleRows, rowClamp === 'all' ? 148 : 112)
-  const tableColumnCount = 7 + data.columns.length
+  const tableColumnCount = (tableReadOnly ? 0 : 7) + data.columns.length
   const selectedRowsForExport = useMemo(
-    () => data.rows
+    () => tableReadOnly ? [] : data.rows
       .map((row, idx) => ({ row, idx, evaluation: ruleEvaluations[idx] }))
       .filter(({ idx }) => selectedRowKeySet.has(`${data.upload_id}:${data.sheet_name}:${idx}`)),
-    [data.rows, data.sheet_name, data.upload_id, ruleEvaluations, selectedRowKeySet],
+    [data.rows, data.sheet_name, data.upload_id, ruleEvaluations, selectedRowKeySet, tableReadOnly],
   )
   const visibleRowsForExport = useMemo(
-    () => virtualTable.virtualRows.map(({ item }) => item),
-    [virtualTable.virtualRows],
+    () => tableReadOnly ? [] : virtualTable.virtualRows.map(({ item }) => item),
+    [tableReadOnly, virtualTable.virtualRows],
   )
   const exportRows = selectedRowsForExport.length ? selectedRowsForExport : visibleRowsForExport
 
@@ -132,7 +142,45 @@ export function WorkbookSheetTable({
       <div><b>Показано строк:</b> {data.rendered_rows} из {data.total_rows}</div>
     </div>
 
-    <div className='transport-actions workbook-batch-actions'>
+    <div className='workbook-table-status-row'>
+      <span className={tableReadOnly ? 'workbook-table-readonly-badge' : 'workbook-table-working-badge'}>
+        {tableReadOnly ? 'Только просмотр' : 'Рабочий лист'}
+      </span>
+      {tableReadOnly && workingSheetName ? <span className='lab-muted'>Рабочий лист для правил: <code>{workingSheetName}</code></span> : null}
+      {tableReadOnly && onMakeCurrentSheetWorking ? <button
+        type='button'
+        className='workbook-sheet-action-button primary compact'
+        onClick={onMakeCurrentSheetWorking}
+        disabled={Boolean(makeCurrentSheetWorkingBusy)}
+      >
+        {makeCurrentSheetWorkingBusy ? 'Назначаем...' : 'Сделать этот лист рабочим'}
+      </button> : null}
+    </div>
+
+    <div className='workbook-table-toolbar workbook-table-toolbar-top'>
+      <label className='workbook-row-limit-control'>
+        <span>Показывать строк:</span>
+        <select
+          value={String(rowLimit)}
+          disabled={Boolean(busy)}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value === '10' || value === '20' || value === '100') {
+              onRowLimitChange(Number(value) as 10 | 20 | 100)
+              return
+            }
+            onRowLimitChange('all')
+          }}
+        >
+          <option value='10'>10</option>
+          <option value='20'>20</option>
+          <option value='100'>100</option>
+          <option value='all'>Все</option>
+        </select>
+      </label>
+    </div>
+
+    {!tableReadOnly ? <div className='transport-actions workbook-batch-actions'>
       <label className='workbook-select-all'>
         <input type='checkbox' checked={allVisibleRowsSelected} disabled={Boolean(busy)} onChange={(e) => onToggleAllRows(e.target.checked)} />
         <span>Выбрать все</span>
@@ -161,9 +209,9 @@ export function WorkbookSheetTable({
         Запустить фоном
       </button> : null}
       <span className='lab-muted'>Выбрано строк: {selectedRowKeys.length}</span>
-    </div>
+    </div> : null}
 
-    <div className='rule-table-controls'>
+    {!tableReadOnly ? <div className='rule-table-controls'>
       <label className='lab-checkbox'>
         <input
           type='checkbox'
@@ -182,17 +230,17 @@ export function WorkbookSheetTable({
       <span className='lab-muted'>В таблице: {visibleRows.length} из {data.rows.length}</span>
       <span className='lab-muted'>Отрисовано сейчас: {virtualTable.virtualRows.length}</span>
       <span className='lab-muted'>Пустой rule hit не означает финальное решение. Это только значит, что локальные правила не нашли подсказку; такие строки можно выбрать и отправить в GigaChat.</span>
-    </div>
+    </div> : null}
 
     <div className='workbook-table-wrap' ref={virtualTable.scrollRef} onScroll={virtualTable.onScroll} onMouseLeave={hideCellPopover}>
       <table className='table workbook-table'>
         <thead>
           <tr>
-            <th className='workbook-select-head'>
+            {!tableReadOnly ? <th className='workbook-select-head'>
               <input type='checkbox' checked={allVisibleRowsSelected} disabled={Boolean(busy)} onChange={(e) => onToggleAllRows(e.target.checked)} />
-            </th>
-            <th className='workbook-actions-head'>Действие</th>
-            <th style={getColumnStyle('__rule_hits')}>
+            </th> : null}
+            {!tableReadOnly ? <th className='workbook-actions-head'>Действие</th> : null}
+            {!tableReadOnly ? <th style={getColumnStyle('__rule_hits')}>
               <div className='table-simple-header-cell'>
                 <span>Rule hits</span>
                 <button
@@ -204,8 +252,8 @@ export function WorkbookSheetTable({
                   onDoubleClick={() => resetColumnWidth('__rule_hits')}
                 />
               </div>
-            </th>
-            <th style={getColumnStyle('__suggested_actions')}>
+            </th> : null}
+            {!tableReadOnly ? <th style={getColumnStyle('__suggested_actions')}>
               <div className='table-simple-header-cell'>
                 <span>Suggested action</span>
                 <button
@@ -217,8 +265,8 @@ export function WorkbookSheetTable({
                   onDoubleClick={() => resetColumnWidth('__suggested_actions')}
                 />
               </div>
-            </th>
-            <th style={getColumnStyle('__matched_keywords')}>
+            </th> : null}
+            {!tableReadOnly ? <th style={getColumnStyle('__matched_keywords')}>
               <div className='table-simple-header-cell'>
                 <span>Matched keywords</span>
                 <button
@@ -230,8 +278,8 @@ export function WorkbookSheetTable({
                   onDoubleClick={() => resetColumnWidth('__matched_keywords')}
                 />
               </div>
-            </th>
-            <th style={getColumnStyle('__matched_fields')}>
+            </th> : null}
+            {!tableReadOnly ? <th style={getColumnStyle('__matched_fields')}>
               <div className='table-simple-header-cell'>
                 <span>Matched fields</span>
                 <button
@@ -243,8 +291,8 @@ export function WorkbookSheetTable({
                   onDoubleClick={() => resetColumnWidth('__matched_fields')}
                 />
               </div>
-            </th>
-            <th style={getColumnStyle('__suggested_topic')}>
+            </th> : null}
+            {!tableReadOnly ? <th style={getColumnStyle('__suggested_topic')}>
               <div className='table-simple-header-cell'>
                 <span>Suggested topic</span>
                 <button
@@ -256,16 +304,16 @@ export function WorkbookSheetTable({
                   onDoubleClick={() => resetColumnWidth('__suggested_topic')}
                 />
               </div>
-            </th>
+            </th> : null}
             {data.columns.map((column) => {
-              const included = includedPromptColumns.includes(column)
+              const included = tableReadOnly || includedPromptColumns.includes(column)
               return <th
                 key={`head-${column}`}
-                className={`workbook-prompt-column ${included ? 'included' : 'workbook-column-excluded excluded'}`}
+                className={tableReadOnly ? '' : `workbook-prompt-column ${included ? 'included' : 'workbook-column-excluded excluded'}`}
                 style={getColumnStyle(column)}
-                title={included ? 'Колонка включена в промпт. Клик по заголовку выключит ее.' : 'Колонка выключена из промпта. Клик по заголовку включит ее.'}
+                title={tableReadOnly ? undefined : included ? 'Колонка включена в промпт. Клик по заголовку выключит ее.' : 'Колонка выключена из промпта. Клик по заголовку включит ее.'}
                 onClick={() => {
-                  if (!busy) onTogglePromptColumn(column)
+                  if (!busy && !tableReadOnly) onTogglePromptColumn(column)
                 }}
               >
                 <div className='workbook-header-cell'>
@@ -301,15 +349,15 @@ export function WorkbookSheetTable({
               key={`row-${idx}`}
               className='workbook-table-row'
             >
-            <td className='workbook-row-select-cell'>
+            {!tableReadOnly ? <td className='workbook-row-select-cell'>
                 <input
                   type='checkbox'
                   checked={selectedRowKeySet.has(`${data.upload_id}:${data.sheet_name}:${idx}`)}
                   disabled={Boolean(busy)}
                   onChange={() => onToggleRowSelection(idx)}
                 />
-            </td>
-            <td className='workbook-row-action-cell'>
+            </td> : null}
+            {!tableReadOnly ? <td className='workbook-row-action-cell'>
               <button
                 className='workbook-row-action-button'
                 onClick={() => onRunRow(row, idx)}
@@ -318,24 +366,24 @@ export function WorkbookSheetTable({
               >
                 {runRowBusyIndex === idx ? 'Отправляем...' : 'Отправить запрос в GigaChat'}
               </button>
-            </td>
-            <td style={getColumnStyle('__rule_hits')}>
+            </td> : null}
+            {!tableReadOnly ? <td style={getColumnStyle('__rule_hits')}>
               {renderCellValue('Rule hits', ruleCodes)}
-            </td>
-            <td style={getColumnStyle('__suggested_actions')}>
+            </td> : null}
+            {!tableReadOnly ? <td style={getColumnStyle('__suggested_actions')}>
               {renderCellValue('Suggested action', suggestedActions)}
-            </td>
-            <td style={getColumnStyle('__matched_keywords')}>
+            </td> : null}
+            {!tableReadOnly ? <td style={getColumnStyle('__matched_keywords')}>
               {renderCellValue('Matched keywords', matchedKeywords)}
-            </td>
-            <td style={getColumnStyle('__matched_fields')}>
+            </td> : null}
+            {!tableReadOnly ? <td style={getColumnStyle('__matched_fields')}>
               {renderCellValue('Matched fields', matchedFields)}
-            </td>
-            <td style={getColumnStyle('__suggested_topic')}>
+            </td> : null}
+            {!tableReadOnly ? <td style={getColumnStyle('__suggested_topic')}>
               {renderCellValue('Suggested topic', suggestedTopic)}
-            </td>
+            </td> : null}
             {data.columns.map((column) => {
-              const included = includedPromptColumns.includes(column)
+              const included = tableReadOnly || includedPromptColumns.includes(column)
               return <td
                 key={`cell-${idx}-${column}`}
                 className={included ? '' : 'workbook-column-excluded'}
@@ -353,27 +401,6 @@ export function WorkbookSheetTable({
       </table>
     </div>
     <div className='workbook-table-toolbar workbook-table-toolbar-bottom'>
-      <label className='workbook-row-limit-control'>
-        <span>Показывать строк:</span>
-        <select
-          value={String(rowLimit)}
-          disabled={Boolean(busy)}
-          onChange={(e) => {
-            const value = e.target.value
-            if (value === '10' || value === '20' || value === '100') {
-              onRowLimitChange(Number(value) as 10 | 20 | 100)
-              return
-            }
-            onRowLimitChange('all')
-          }}
-        >
-          <option value='10'>10</option>
-          <option value='20'>20</option>
-          <option value='100'>100</option>
-          <option value='all'>Все</option>
-        </select>
-      </label>
-
       <label className='workbook-row-limit-control'>
         <span>Высота строк:</span>
         <select
