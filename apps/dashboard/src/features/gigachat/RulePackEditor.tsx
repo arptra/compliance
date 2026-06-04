@@ -307,7 +307,7 @@ export function RulePackEditor({
       <button type='button' onClick={() => setAllRulesEnabled(false)}>Сделать не активными все</button>
       <button type='button' onClick={clearAll}>Сбросить все правила</button>
     </div>
-    {persistBusy ? <div className='lab-muted'>Сохраняем правила в файл версии...</div> : null}
+    {persistBusy ? <div className='lab-muted'>Сохраняем правила в профиль...</div> : null}
     {persistError ? <div className='transport-error'>{persistError}</div> : null}
 
     {items.length ? <div className='labeling-rules-list'>

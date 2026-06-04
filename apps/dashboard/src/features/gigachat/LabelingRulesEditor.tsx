@@ -128,7 +128,7 @@ export function LabelingRulesEditor({
       }}>{adding && !isEditing ? 'Скрыть форму' : `+ ${addLabel}`}</button>
       {onClear ? <button type='button' onClick={onClear} disabled={persistBusy}>{clearLabel ?? 'Сбросить все'}</button> : null}
     </div>
-    {persistBusy ? <div className='lab-muted'>Сохраняем в файл версии...</div> : null}
+    {persistBusy ? <div className='lab-muted'>Сохраняем в профиль...</div> : null}
     {persistError ? <div className='transport-error'>{persistError}</div> : null}
 
     {adding && !isEditing ? <div className='labeling-entry-form'>

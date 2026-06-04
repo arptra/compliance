@@ -41,6 +41,7 @@ import { useAuth } from '../features/auth/AuthContext'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskResultResponse,
+  GigaChatLabSettingsVersionsResponse,
   GigaChatLabRowRunResponse,
   GigaChatRuleEvaluationResponse,
   GigaChatRulePack,
@@ -873,29 +874,59 @@ export default function GigaChatPage() {
   })
 
   const saveSettings = useMutation({
-    mutationFn: (valuesOverride?: Record<string, unknown>) => {
-      if (!selectedVersionCanEdit) {
-        throw new Error('Эту версию может сохранять только ее владелец. Создайте свою версию на основе текущей.')
+    mutationFn: async (valuesOverride?: Record<string, unknown>) => {
+      const sourceVersion = selectedVersionQ.data?.version
+      if (!sourceVersion) {
+        throw new Error('Версия настроек еще не загружена.')
       }
-      return saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
-        title: selectedVersionQ.data?.version.title,
-        description: selectedVersionQ.data?.version.description,
-        status: selectedVersionQ.data?.version.status,
-        visibility: selectedVersionQ.data?.version.visibility,
+      const values = valuesOverride ?? settingValues
+      if (selectedVersionCanEdit) {
+        return saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
+          title: sourceVersion.title,
+          description: sourceVersion.description,
+          status: sourceVersion.status,
+          visibility: sourceVersion.visibility,
+          updated_by: currentUserDisplayName,
+          values,
+        })
+      }
+
+      const baseTitle = sourceVersion.title || selectedSettingsVersionId || 'Профиль настроек'
+      const created = await createGigaChatLabSettingsVersion({
+        title: `${baseTitle} · мой профиль`,
+        version_id: null,
+        description: `Приватный профиль настроек на основе "${baseTitle}". Создан автоматически при сохранении изменений ${new Date().toLocaleString()}.`,
+        status: 'draft',
+        visibility: 'private',
+        created_by: currentUserDisplayName,
+        base_version_id: selectedSettingsVersionId,
+      })
+      return saveGigaChatLabSettingsVersion(created.version.version_id, {
+        title: created.version.title,
+        description: created.version.description,
+        status: created.version.status,
+        visibility: created.version.visibility,
         updated_by: currentUserDisplayName,
-        values: valuesOverride ?? settingValues,
+        values,
       })
     },
     onSuccess: async (data) => {
+      qc.setQueryData(['gigachat-lab-settings-version', data.version.version_id], data)
+      qc.setQueryData(['gigachat-lab-settings-versions'], (current: GigaChatLabSettingsVersionsResponse | undefined) => ({
+        versions: [
+          data.version,
+          ...(current?.versions ?? []).filter((version) => version.version_id !== data.version.version_id),
+        ],
+      }))
+      setSelectedSettingsVersionId(data.version.version_id)
       setSettingValues(data.values)
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
-      await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', selectedSettingsVersionId] })
+      await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', data.version.version_id] })
       await qc.invalidateQueries({ queryKey: ['gigachat-status'] })
     },
   })
 
   const persistSettingValue = (key: string, value: unknown) => {
-    if (!selectedVersionCanEdit) return
     const nextValues = { ...settingValues, [key]: value }
     setSettingValues(nextValues)
     saveSettings.mutate(nextValues)
@@ -1974,13 +2005,13 @@ export default function GigaChatPage() {
               }}>
                 Создать версию
               </button>
-              <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending || !selectedVersionCanEdit}>
-                {saveSettings.isPending ? 'Сохраняем...' : 'Сохранить версию'}
+              <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending || !selectedVersionQ.data}>
+                {saveSettings.isPending ? 'Сохраняем...' : selectedVersionCanEdit ? 'Сохранить профиль' : 'Сохранить в мой профиль'}
               </button>
             </div>
           </div>
           {!selectedVersionCanEdit ? <div className='lab-muted'>
-            Эта версия доступна для просмотра и использования. Чтобы менять настройки, создайте свою версию на основе текущей.
+            Эта версия доступна для просмотра и использования. При сохранении изменений будет создан приватный профиль на основе текущей версии.
           </div> : null}
 
           {versionCreateOpen ? <div className='settings-version-create'>
