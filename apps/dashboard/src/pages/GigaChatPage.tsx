@@ -303,19 +303,28 @@ function buildSheetRowKey(uploadId: string, sheetName: string, rowIndex: number)
   return `${uploadId}:${sheetName}:${rowIndex}`
 }
 
+function getBlockingRuleMissingFields(rule: GigaChatRulePack, columns: string[]) {
+  const available = new Set(columns)
+  if (!rule.source_fields.length) return ['Source fields не выбраны']
+  const missingSourceFields = Array.from(new Set(rule.source_fields.filter((field) => !available.has(field))))
+  const hasAvailableSourceField = rule.source_fields.some((field) => available.has(field))
+  const missingFilterFields = Array.from(new Set(
+    rule.filters
+      .map((filterItem) => filterItem.field)
+      .filter(Boolean)
+      .filter((field) => !available.has(field)),
+  ))
+  return [
+    ...(!hasAvailableSourceField ? missingSourceFields : []),
+    ...missingFilterFields,
+  ]
+}
+
 function findRuleGuardIssues(values: Record<string, unknown>, columns: string[]) {
   if (!columns.length) return [] as RuleGuardIssue[]
-  const available = new Set(columns)
   return parseRulePacks(values.rule_pack_prompt_notes)
     .flatMap((rule) => {
-      if (!rule.source_fields.length) {
-        return [{ code: rule.code || 'Без кода', missingFields: ['Source fields не выбраны'] }]
-      }
-      const ruleFields = [
-        ...rule.source_fields,
-        ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
-      ]
-      const missingFields = Array.from(new Set(ruleFields.filter((field) => !available.has(field))))
+      const missingFields = getBlockingRuleMissingFields(rule, columns)
       return missingFields.length ? [{ code: rule.code || 'Без кода', missingFields }] : []
     })
 }
@@ -325,11 +334,12 @@ function disableRulesWithMissingFields(values: Record<string, unknown>, columns:
   const rules = parseRulePacks(values.rule_pack_prompt_notes)
   const nextRules = rules.map((rule): GigaChatRulePack => {
     if (!rule.source_fields.length) return rule.enabled ? { ...rule, enabled: false } : rule
-    const ruleFields = [
-      ...rule.source_fields,
-      ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
-    ]
-    const missing = ruleFields.some((field) => !available.has(field))
+    const hasAvailableSourceField = rule.source_fields.some((field) => available.has(field))
+    const missingFilter = rule.filters
+      .map((filterItem) => filterItem.field)
+      .filter(Boolean)
+      .some((field) => !available.has(field))
+    const missing = !hasAvailableSourceField || missingFilter
     return rule.enabled && missing ? { ...rule, enabled: false } : rule
   })
   return {

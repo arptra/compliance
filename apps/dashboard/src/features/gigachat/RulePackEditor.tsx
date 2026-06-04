@@ -41,11 +41,18 @@ function sourceFieldStatus(rule: GigaChatRulePack, availableFields: string[]) {
   if (!availableFields.length) return { valid: true, missing: [] as string[] }
   if (!rule.source_fields.length) return { valid: false, missing: ['Source fields не выбраны'] }
   const available = new Set(availableFields)
-  const ruleFields = [
-    ...rule.source_fields,
-    ...rule.filters.map((filterItem) => filterItem.field).filter(Boolean),
+  const missingSourceFields = Array.from(new Set(rule.source_fields.filter((field) => !available.has(field))))
+  const hasAvailableSourceField = rule.source_fields.some((field) => available.has(field))
+  const missingFilterFields = Array.from(new Set(
+    rule.filters
+      .map((filterItem) => filterItem.field)
+      .filter(Boolean)
+      .filter((field) => !available.has(field)),
+  ))
+  const missing = [
+    ...(!hasAvailableSourceField ? missingSourceFields : []),
+    ...missingFilterFields,
   ]
-  const missing = Array.from(new Set(ruleFields.filter((field) => !available.has(field))))
   return { valid: missing.length === 0, missing }
 }
 
@@ -111,7 +118,10 @@ export function RulePackEditor({
     () => availableFields.length ? draftSourceFields.filter((field) => !availableFields.includes(field)) : [],
     [availableFields, draftSourceFields],
   )
-  const draftHasMissingSourceFields = draftHasEmptySourceFields || draftMissingSourceFields.length > 0
+  const draftHasNoAvailableSourceFields = availableFields.length > 0
+    && draftSourceFields.length > 0
+    && draftSourceFields.every((field) => !availableFields.includes(field))
+  const draftHasBlockingSourceFieldIssue = draftHasEmptySourceFields || draftHasNoAvailableSourceFields
 
   const resetDraft = () => {
     setEditingIndex(null)
@@ -164,7 +174,7 @@ export function RulePackEditor({
   }
 
   const saveDraft = () => {
-    if (draftHasMissingSourceFields) return
+    if (draftHasBlockingSourceFieldIssue) return
     const nextRule: GigaChatRulePack = {
       ...draft,
       code: draft.code.trim(),
@@ -405,11 +415,13 @@ export function RulePackEditor({
               onChange={(e) => setSourceFieldsText(e.target.value)}
               placeholder={'Во. Описание\nОбр. Результат суммаризации диалога'}
             />}
-            <small className={draftHasMissingSourceFields ? 'transport-error' : 'lab-field-help'}>
+            <small className={draftHasBlockingSourceFieldIssue ? 'transport-error' : 'lab-field-help'}>
               {draftHasEmptySourceFields
                 ? 'Выберите хотя бы одну колонку. Без Source fields правило будет выключено.'
-                : draftHasMissingSourceFields
-                  ? 'В правиле есть поля, которых нет в текущей таблице. Уберите их или выберите существующие колонки.'
+                : draftHasNoAvailableSourceFields
+                  ? 'Все выбранные поля отсутствуют в текущей таблице. Добавьте хотя бы одну существующую колонку.'
+                  : draftMissingSourceFields.length
+                    ? 'Часть полей отсутствует в текущей таблице. Правило останется активным и будет искать совпадения по доступным колонкам.'
                   : availableFields.length
                     ? 'Выберите колонки загруженной таблицы, которые будут анализироваться локальными правилами.'
                     : 'По одному полю на строку. После загрузки Excel здесь появится список колонок.'}
@@ -484,7 +496,7 @@ export function RulePackEditor({
         </div>
 
         <div className='lab-settings-actions'>
-          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim() || draftHasMissingSourceFields || persistBusy}>
+          <button className='primary' type='button' onClick={saveDraft} disabled={!draft.code.trim() || draftHasBlockingSourceFieldIssue || persistBusy}>
             {persistBusy ? 'Сохраняем...' : 'Сохранить'}
           </button>
           <button type='button' onClick={resetDraft}>Отмена</button>
