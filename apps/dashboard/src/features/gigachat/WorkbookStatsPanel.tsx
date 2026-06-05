@@ -47,6 +47,26 @@ const DATE_BUCKETS: Array<{ value: DateBucket; label: string }> = [
 ]
 const AXIS_LABEL_LINE_LENGTH = 14
 const AXIS_LABEL_MAX_LINES = 3
+const PIE_SEGMENT_LIMIT: Extract<TopLimit, number> = 12
+const HISTOGRAM_SCROLL_THRESHOLD = 14
+const CHART_COLORS = [
+  '#2563eb',
+  '#16a34a',
+  '#dc2626',
+  '#9333ea',
+  '#ea580c',
+  '#0891b2',
+  '#be123c',
+  '#4f46e5',
+  '#65a30d',
+  '#c026d3',
+  '#0f766e',
+  '#ca8a04',
+  '#7c3aed',
+  '#db2777',
+  '#0284c7',
+  '#84cc16',
+]
 
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -124,6 +144,12 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)
 }
 
+function formatShare(count: number, total: number) {
+  if (!total) return '0%'
+  const share = (count / total) * 100
+  return share > 0 && share < 1 ? '<1%' : `${formatNumber(share)}%`
+}
+
 function wrapChartLabel(value: string, lineLength = AXIS_LABEL_LINE_LENGTH, maxLines = AXIS_LABEL_MAX_LINES) {
   const text = value.trim()
   if (text.length <= lineLength) return text
@@ -156,6 +182,10 @@ function wrapChartLabel(value: string, lineLength = AXIS_LABEL_LINE_LENGTH, maxL
   return visibleLines.join('\n')
 }
 
+function sortDistribution(items: DistributionItem[]) {
+  return [...items].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ru'))
+}
+
 function buildNumericBins(values: number[], limit: TopLimit): DistributionItem[] {
   const clean = values.filter(Number.isFinite)
   if (!clean.length) return []
@@ -181,11 +211,21 @@ function buildNumericBins(values: number[], limit: TopLimit): DistributionItem[]
 }
 
 function applyTopLimit(items: DistributionItem[], limit: TopLimit) {
-  const sorted = [...items].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ru'))
+  const sorted = sortDistribution(items)
   if (limit === 'all' || sorted.length <= limit) return sorted
   const top = sorted.slice(0, limit)
   const rest = sorted.slice(limit).reduce((sum, item) => sum + item.count, 0)
   return rest ? [...top, { label: 'Другие', count: rest }] : top
+}
+
+function getPieLimit(limit: TopLimit): TopLimit {
+  if (limit === 'all') return PIE_SEGMENT_LIMIT
+  return limit > PIE_SEGMENT_LIMIT ? PIE_SEGMENT_LIMIT : limit
+}
+
+function getChartColor(label: string, colorByLabel: Map<string, string>, index: number) {
+  if (label === 'Другие') return '#94a3b8'
+  return colorByLabel.get(label) ?? CHART_COLORS[index % CHART_COLORS.length]
 }
 
 function emptyChartOption(title: string): echarts.EChartsCoreOption {
@@ -298,7 +338,14 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     return Array.from(counts.entries()).map(([label, count]) => ({ label, count }))
   }, [dateBucket, dimensionKey, includeEmpty, statRows])
 
+  const fullDistribution = useMemo(() => sortDistribution(distribution), [distribution])
   const visibleDistribution = useMemo(() => applyTopLimit(distribution, topLimit), [distribution, topLimit])
+  const pieDistribution = useMemo(() => applyTopLimit(distribution, getPieLimit(topLimit)), [distribution, topLimit])
+  const distributionTotal = useMemo(() => fullDistribution.reduce((sum, item) => sum + item.count, 0), [fullDistribution])
+  const colorByLabel = useMemo(() => new Map(fullDistribution.map((item, index) => [
+    item.label,
+    CHART_COLORS[index % CHART_COLORS.length],
+  ])), [fullDistribution])
 
   const numericDimensionValues = useMemo(() => {
     if (!selectedDimension?.column || selectedDimension.dataType !== 'number') return []
@@ -313,6 +360,7 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     : selectedDimension?.dataType === 'date'
       ? [...visibleDistribution].sort((a, b) => a.label.localeCompare(b.label))
       : visibleDistribution
+  const isNumericHistogram = selectedDimension?.dataType === 'number'
 
   const rowsWithHits = statRows.filter((item) => item.hitCount > 0).length
   const uniqueTags = new Set(statRows.flatMap((item) => item.ruleTags)).size
@@ -320,34 +368,70 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
   const averageHits = statRows.length ? statRows.reduce((sum, item) => sum + item.hitCount, 0) / statRows.length : 0
 
   const pieOption = useMemo<echarts.EChartsCoreOption>(() => {
-    if (!visibleDistribution.length) return emptyChartOption('Нет данных')
+    if (!pieDistribution.length) return emptyChartOption('Нет данных')
+    const showSliceLabels = pieDistribution.length <= 8
     return {
       tooltip: { trigger: 'item' },
-      legend: {
-        bottom: 0,
-        type: 'scroll',
-        formatter: (name: string) => wrapChartLabel(name, 18, 2),
-      },
+      legend: { show: false },
       series: [{
         name: selectedDimension?.label ?? 'Разрез',
         type: 'pie',
-        radius: ['38%', '64%'],
-        center: ['50%', '42%'],
+        radius: ['40%', '68%'],
+        center: ['50%', '50%'],
         avoidLabelOverlap: true,
         itemStyle: { borderColor: '#fff', borderWidth: 2 },
         label: {
+          show: showSliceLabels,
           formatter: (params: { name?: string; percent?: number }) => `${wrapChartLabel(params.name ?? '', 16, 2)}\n${params.percent ?? 0}%`,
           lineHeight: 14,
           width: 110,
           overflow: 'break',
         },
-        data: visibleDistribution.map((item) => ({ name: item.label, value: item.count })),
+        labelLine: { show: showSliceLabels },
+        data: pieDistribution.map((item, index) => ({
+          name: item.label,
+          value: item.count,
+          itemStyle: { color: getChartColor(item.label, colorByLabel, index) },
+        })),
       }],
     }
-  }, [selectedDimension?.label, visibleDistribution])
+  }, [colorByLabel, pieDistribution, selectedDimension?.label])
 
   const histogramOption = useMemo<echarts.EChartsCoreOption>(() => {
     if (!histogramData.length) return emptyChartOption('Нет данных')
+    if (!isNumericHistogram) {
+      const visiblePercent = Math.min(100, (HISTOGRAM_SCROLL_THRESHOLD / histogramData.length) * 100)
+      return {
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { left: 154, right: histogramData.length > HISTOGRAM_SCROLL_THRESHOLD ? 36 : 18, top: 20, bottom: 24, containLabel: false },
+        dataZoom: histogramData.length > HISTOGRAM_SCROLL_THRESHOLD ? [
+          { type: 'slider', yAxisIndex: 0, right: 4, width: 14, start: 0, end: visiblePercent, showDetail: false, brushSelect: false },
+          { type: 'inside', yAxisIndex: 0, start: 0, end: visiblePercent },
+        ] : [],
+        xAxis: { type: 'value', minInterval: 1 },
+        yAxis: {
+          type: 'category',
+          inverse: true,
+          data: histogramData.map((item) => item.label),
+          axisLabel: {
+            interval: 0,
+            formatter: (value: string) => wrapChartLabel(value, 18, 2),
+            lineHeight: 14,
+            margin: 10,
+          },
+        },
+        series: [{
+          name: 'Строк',
+          type: 'bar',
+          data: histogramData.map((item, index) => ({
+            value: item.count,
+            itemStyle: { color: getChartColor(item.label, colorByLabel, index) },
+          })),
+          label: { show: true, position: 'right', color: '#334155', fontWeight: 700 },
+          barMaxWidth: 22,
+        }],
+      }
+    }
     return {
       tooltip: { trigger: 'axis' },
       grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true },
@@ -357,6 +441,7 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
         axisLabel: {
           interval: 0,
           formatter: (value: string) => wrapChartLabel(value),
+          hideOverlap: true,
           lineHeight: 14,
           margin: 12,
         },
@@ -370,7 +455,7 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
         barMaxWidth: 42,
       }],
     }
-  }, [histogramData])
+  }, [colorByLabel, histogramData, isNumericHistogram])
 
   const chartCards: Array<{ key: StatsChartKey; title: string; meta: string; option: echarts.EChartsCoreOption }> = [
     {
@@ -469,12 +554,20 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
         </article>)}
       </div>
 
-      <div className='workbook-stats-strip'>
-        {visibleDistribution.slice(0, 6).map((item) => <div key={item.label} className='workbook-stats-strip-item'>
-          <span>{item.label}</span>
-          <strong>{item.count}</strong>
-        </div>)}
-      </div>
+      <section className='workbook-stats-legend' aria-label='Легенда распределения'>
+        <div className='workbook-stats-legend-head'>
+          <h4>Легенда</h4>
+          <span>{fullDistribution.length} сегментов</span>
+        </div>
+        <div className='workbook-stats-legend-list'>
+          {fullDistribution.map((item, index) => <div key={item.label} className='workbook-stats-legend-row'>
+            <span className='workbook-stats-legend-color' style={{ backgroundColor: getChartColor(item.label, colorByLabel, index) }} />
+            <span className='workbook-stats-legend-label' title={item.label}>{item.label}</span>
+            <strong>{item.count}</strong>
+            <em>{formatShare(item.count, distributionTotal)}</em>
+          </div>)}
+        </div>
+      </section>
 
       {expandedChartCard ? <div className='workbook-chart-modal-backdrop' onClick={() => setExpandedChart(null)}>
         <section className='workbook-chart-modal' onClick={(event) => event.stopPropagation()}>
