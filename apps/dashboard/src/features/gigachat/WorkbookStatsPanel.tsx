@@ -49,6 +49,8 @@ const DATE_BUCKETS: Array<{ value: DateBucket; label: string }> = [
   { value: 'week', label: 'Недели' },
   { value: 'month', label: 'Месяцы' },
 ]
+const AXIS_LABEL_LINE_LENGTH = 14
+const AXIS_LABEL_MAX_LINES = 3
 
 function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return ''
@@ -147,6 +149,38 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)
 }
 
+function wrapChartLabel(value: string, lineLength = AXIS_LABEL_LINE_LENGTH, maxLines = AXIS_LABEL_MAX_LINES) {
+  const text = value.trim()
+  if (text.length <= lineLength) return text
+
+  const words = text.split(/\s+/u)
+  const lines: string[] = []
+  let currentLine = ''
+
+  words.forEach((word) => {
+    const nextLine = currentLine ? `${currentLine} ${word}` : word
+    if (nextLine.length <= lineLength) {
+      currentLine = nextLine
+      return
+    }
+    if (currentLine) lines.push(currentLine)
+    if (word.length <= lineLength) {
+      currentLine = word
+      return
+    }
+    const chunks = word.match(new RegExp(`.{1,${lineLength}}`, 'gu')) ?? [word]
+    lines.push(...chunks.slice(0, -1))
+    currentLine = chunks[chunks.length - 1] ?? ''
+  })
+
+  if (currentLine) lines.push(currentLine)
+  if (lines.length <= maxLines) return lines.join('\n')
+
+  const visibleLines = lines.slice(0, maxLines)
+  visibleLines[maxLines - 1] = `${visibleLines[maxLines - 1].slice(0, Math.max(1, lineLength - 1))}…`
+  return visibleLines.join('\n')
+}
+
 function buildNumericBins(values: number[], limit: TopLimit): DistributionItem[] {
   const clean = values.filter(Number.isFinite)
   if (!clean.length) return []
@@ -191,6 +225,7 @@ function emptyChartOption(title: string): echarts.EChartsCoreOption {
 }
 
 export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanelProps) {
+  const [collapsed, setCollapsed] = useState(true)
   const [dimensionKey, setDimensionKey] = useState('__rule_tag')
   const [metricKey, setMetricKey] = useState('__hit_count')
   const [topLimit, setTopLimit] = useState<TopLimit>(12)
@@ -338,15 +373,24 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     if (!visibleDistribution.length) return emptyChartOption('Нет данных')
     return {
       tooltip: { trigger: 'item' },
-      legend: { bottom: 0, type: 'scroll' },
+      legend: {
+        bottom: 0,
+        type: 'scroll',
+        formatter: (name: string) => wrapChartLabel(name, 18, 2),
+      },
       series: [{
         name: selectedDimension?.label ?? 'Разрез',
         type: 'pie',
-        radius: ['42%', '70%'],
-        center: ['50%', '43%'],
+        radius: ['38%', '64%'],
+        center: ['50%', '42%'],
         avoidLabelOverlap: true,
         itemStyle: { borderColor: '#fff', borderWidth: 2 },
-        label: { formatter: '{b}: {d}%' },
+        label: {
+          formatter: (params: { name?: string; percent?: number }) => `${wrapChartLabel(params.name ?? '', 16, 2)}\n${params.percent ?? 0}%`,
+          lineHeight: 14,
+          width: 110,
+          overflow: 'break',
+        },
         data: visibleDistribution.map((item) => ({ name: item.label, value: item.count })),
       }],
     }
@@ -356,11 +400,16 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     if (!histogramData.length) return emptyChartOption('Нет данных')
     return {
       tooltip: { trigger: 'axis' },
-      grid: { left: 44, right: 16, top: 24, bottom: 76 },
+      grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true },
       xAxis: {
         type: 'category',
         data: histogramData.map((item) => item.label),
-        axisLabel: { interval: 0, rotate: histogramData.some((item) => item.label.length > 12) ? 30 : 0 },
+        axisLabel: {
+          interval: 0,
+          formatter: (value: string) => wrapChartLabel(value),
+          lineHeight: 14,
+          margin: 12,
+        },
       },
       yAxis: { type: 'value', minInterval: 1 },
       series: [{
@@ -390,13 +439,24 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
           ].join('<br/>')
         },
       },
-      grid: { left: 50, right: 16, top: 24, bottom: 78 },
+      grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true },
       xAxis: {
         type: 'category',
         data: boxPlotGroups.map((item) => item.label),
-        axisLabel: { interval: 0, rotate: boxPlotGroups.some((item) => item.label.length > 12) ? 30 : 0 },
+        axisLabel: {
+          interval: 0,
+          formatter: (value: string) => wrapChartLabel(value),
+          lineHeight: 14,
+          margin: 12,
+        },
       },
-      yAxis: { type: 'value', scale: true, name: selectedMetric?.label ?? '' },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        name: selectedMetric?.label ?? '',
+        nameTextStyle: { align: 'left' },
+        nameTruncate: { maxWidth: 140, ellipsis: '…' },
+      },
       series: [{
         name: selectedMetric?.label ?? 'Метрика',
         type: 'boxplot',
@@ -412,9 +472,12 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
         <h3>Статистика rule hits</h3>
         <p>Распределения по тегам, ключевым словам и колонкам рабочей тетради.</p>
       </div>
+      <button className='transport-collapse-button' onClick={() => setCollapsed((current) => !current)}>
+        {collapsed ? 'Развернуть' : 'Свернуть'}
+      </button>
     </div>
 
-    {!data ? <p className='lab-muted'>Загрузите рабочий лист, чтобы увидеть статистику.</p> : <>
+    {!collapsed && (!data ? <p className='lab-muted'>Загрузите рабочий лист, чтобы увидеть статистику.</p> : <>
       <div className='workbook-stats-controls'>
         <label className='workbook-stats-field'>
           <span>Разрез</span>
@@ -423,7 +486,7 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
           </select>
         </label>
         <label className='workbook-stats-field'>
-          <span>Метрика для ящика</span>
+          <span>Метрика для box plot</span>
           <select value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
             {metricOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
@@ -484,7 +547,7 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
         </article>
         <article className='workbook-stats-panel'>
           <div className='workbook-stats-panel-head'>
-            <h4>Ящик с усами</h4>
+            <h4>Box plot</h4>
             <span>{selectedMetric?.label ?? ''}</span>
           </div>
           <EChart option={boxPlotOption} height={310} />
@@ -497,6 +560,6 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
           <strong>{item.count}</strong>
         </div>)}
       </div>
-    </>}
+    </>)}
   </section>
 }
