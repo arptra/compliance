@@ -15,16 +15,12 @@ type DimensionOption = {
   listLike?: boolean
 }
 
-type MetricOption = {
-  key: string
-  label: string
-  column?: string
-}
-
 type DistributionItem = {
   label: string
   count: number
 }
+
+type StatsChartKey = 'pie' | 'histogram'
 
 type StatRow = {
   row: Record<string, unknown>
@@ -124,27 +120,6 @@ function inferColumnType(rows: Array<Record<string, unknown>>, column: string): 
   return 'category'
 }
 
-function quantile(sorted: number[], q: number) {
-  if (!sorted.length) return 0
-  const position = (sorted.length - 1) * q
-  const base = Math.floor(position)
-  const rest = position - base
-  const next = sorted[base + 1]
-  return next === undefined ? sorted[base] : sorted[base] + rest * (next - sorted[base])
-}
-
-function boxStats(values: number[]) {
-  const sorted = [...values].filter(Number.isFinite).sort((a, b) => a - b)
-  if (!sorted.length) return null
-  return [
-    sorted[0],
-    quantile(sorted, 0.25),
-    quantile(sorted, 0.5),
-    quantile(sorted, 0.75),
-    sorted[sorted.length - 1],
-  ]
-}
-
 function formatNumber(value: number) {
   return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(value)
 }
@@ -227,10 +202,26 @@ function emptyChartOption(title: string): echarts.EChartsCoreOption {
 export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanelProps) {
   const [collapsed, setCollapsed] = useState(true)
   const [dimensionKey, setDimensionKey] = useState('__rule_tag')
-  const [metricKey, setMetricKey] = useState('__hit_count')
   const [topLimit, setTopLimit] = useState<TopLimit>(12)
   const [dateBucket, setDateBucket] = useState<DateBucket>('day')
   const [includeEmpty, setIncludeEmpty] = useState(true)
+  const [expandedChart, setExpandedChart] = useState<StatsChartKey | null>(null)
+
+  useEffect(() => {
+    if (!expandedChart) return undefined
+
+    const previousOverflow = document.body.style.overflow
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setExpandedChart(null)
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', closeOnEscape)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [expandedChart])
 
   const rows = data?.rows ?? []
   const statRows = useMemo<StatRow[]>(() => rows.map((row, rowIndex) => {
@@ -273,27 +264,13 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     ]
   }, [data?.columns, rows])
 
-  const metricOptions = useMemo<MetricOption[]>(() => [
-    { key: '__hit_count', label: 'Rule hits на строку' },
-    ...(data?.columns ?? [])
-      .filter((column) => inferColumnType(rows, column) === 'number')
-      .map((column) => ({ key: `num:${column}`, label: column, column })),
-  ], [data?.columns, rows])
-
   useEffect(() => {
     if (!dimensionOptions.some((option) => option.key === dimensionKey)) {
       setDimensionKey(dimensionOptions[0]?.key ?? '__rule_tag')
     }
   }, [dimensionKey, dimensionOptions])
 
-  useEffect(() => {
-    if (!metricOptions.some((option) => option.key === metricKey)) {
-      setMetricKey(metricOptions[0]?.key ?? '__hit_count')
-    }
-  }, [metricKey, metricOptions])
-
   const selectedDimension = dimensionOptions.find((option) => option.key === dimensionKey) ?? dimensionOptions[0]
-  const selectedMetric = metricOptions.find((option) => option.key === metricKey) ?? metricOptions[0]
 
   const getDimensionValues = (item: StatRow) => {
     if (!selectedDimension) return []
@@ -309,13 +286,6 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
       return date ? [formatDateKey(date, dateBucket)] : []
     }
     return splitListValue(raw, Boolean(selectedDimension.listLike))
-  }
-
-  const getMetricValue = (item: StatRow) => {
-    if (!selectedMetric) return null
-    if (selectedMetric.key === '__hit_count') return item.hitCount
-    if (!selectedMetric.column) return null
-    return parseNumberValue(item.row[selectedMetric.column])
   }
 
   const distribution = useMemo(() => {
@@ -343,26 +313,6 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     : selectedDimension?.dataType === 'date'
       ? [...visibleDistribution].sort((a, b) => a.label.localeCompare(b.label))
       : visibleDistribution
-
-  const boxPlotGroups = useMemo(() => {
-    const topLabels = new Set(visibleDistribution.filter((item) => item.label !== 'Другие').map((item) => item.label))
-    const valuesByLabel = new Map<string, number[]>()
-    statRows.forEach((item) => {
-      const metric = getMetricValue(item)
-      if (metric === null) return
-      const values = getDimensionValues(item)
-      const normalized = values.length ? values : (includeEmpty ? [EMPTY_LABEL] : [])
-      normalized.forEach((label) => {
-        if (!topLabels.has(label)) return
-        const list = valuesByLabel.get(label) ?? []
-        list.push(metric)
-        valuesByLabel.set(label, list)
-      })
-    })
-    return Array.from(valuesByLabel.entries())
-      .map(([label, values]) => ({ label, values, stats: boxStats(values) }))
-      .filter((item): item is { label: string; values: number[]; stats: number[] } => Boolean(item.stats))
-  }, [dateBucket, dimensionKey, includeEmpty, metricKey, statRows, visibleDistribution])
 
   const rowsWithHits = statRows.filter((item) => item.hitCount > 0).length
   const uniqueTags = new Set(statRows.flatMap((item) => item.ruleTags)).size
@@ -422,49 +372,21 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
     }
   }, [histogramData])
 
-  const boxPlotOption = useMemo<echarts.EChartsCoreOption>(() => {
-    if (!boxPlotGroups.length) return emptyChartOption('Нет числовой метрики')
-    return {
-      tooltip: {
-        trigger: 'item',
-        formatter: (params: unknown) => {
-          const data = (params as { data?: number[]; name?: string }).data ?? []
-          return [
-            `<b>${(params as { name?: string }).name ?? ''}</b>`,
-            `min: ${formatNumber(data[0] ?? 0)}`,
-            `Q1: ${formatNumber(data[1] ?? 0)}`,
-            `median: ${formatNumber(data[2] ?? 0)}`,
-            `Q3: ${formatNumber(data[3] ?? 0)}`,
-            `max: ${formatNumber(data[4] ?? 0)}`,
-          ].join('<br/>')
-        },
-      },
-      grid: { left: 8, right: 12, top: 24, bottom: 8, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: boxPlotGroups.map((item) => item.label),
-        axisLabel: {
-          interval: 0,
-          formatter: (value: string) => wrapChartLabel(value),
-          lineHeight: 14,
-          margin: 12,
-        },
-      },
-      yAxis: {
-        type: 'value',
-        scale: true,
-        name: selectedMetric?.label ?? '',
-        nameTextStyle: { align: 'left' },
-        nameTruncate: { maxWidth: 140, ellipsis: '…' },
-      },
-      series: [{
-        name: selectedMetric?.label ?? 'Метрика',
-        type: 'boxplot',
-        data: boxPlotGroups.map((item) => item.stats),
-        itemStyle: { color: '#e0f2fe', borderColor: '#0284c7' },
-      }],
-    }
-  }, [boxPlotGroups, selectedMetric?.label])
+  const chartCards: Array<{ key: StatsChartKey; title: string; meta: string; option: echarts.EChartsCoreOption }> = [
+    {
+      key: 'pie',
+      title: 'Доли',
+      meta: topSegment ? `${topSegment.label}: ${topSegment.count}` : 'нет данных',
+      option: pieOption,
+    },
+    {
+      key: 'histogram',
+      title: 'Гистограмма',
+      meta: selectedDimension?.label ?? '',
+      option: histogramOption,
+    },
+  ]
+  const expandedChartCard = chartCards.find((chart) => chart.key === expandedChart) ?? null
 
   return <section className='card transport-result workbook-stats-card'>
     <div className='transport-section-head'>
@@ -483,12 +405,6 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
           <span>Разрез</span>
           <select value={dimensionKey} onChange={(event) => setDimensionKey(event.target.value)}>
             {dimensionOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
-          </select>
-        </label>
-        <label className='workbook-stats-field'>
-          <span>Метрика для box plot</span>
-          <select value={metricKey} onChange={(event) => setMetricKey(event.target.value)}>
-            {metricOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
           </select>
         </label>
         <div className='workbook-stats-setting'>
@@ -531,27 +447,26 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
       </div>
 
       <div className='workbook-stats-chart-grid'>
-        <article className='workbook-stats-panel'>
+        {chartCards.map((chart) => <article
+          key={chart.key}
+          className='workbook-stats-panel interactive'
+          role='button'
+          tabIndex={0}
+          aria-label={`${chart.title}: открыть на весь экран`}
+          onClick={() => setExpandedChart(chart.key)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              setExpandedChart(chart.key)
+            }
+          }}
+        >
           <div className='workbook-stats-panel-head'>
-            <h4>Доли</h4>
-            <span>{topSegment ? `${topSegment.label}: ${topSegment.count}` : 'нет данных'}</span>
+            <h4>{chart.title}</h4>
+            <span>{chart.meta}</span>
           </div>
-          <EChart option={pieOption} height={310} />
-        </article>
-        <article className='workbook-stats-panel'>
-          <div className='workbook-stats-panel-head'>
-            <h4>Гистограмма</h4>
-            <span>{selectedDimension?.label ?? ''}</span>
-          </div>
-          <EChart option={histogramOption} height={310} />
-        </article>
-        <article className='workbook-stats-panel'>
-          <div className='workbook-stats-panel-head'>
-            <h4>Box plot</h4>
-            <span>{selectedMetric?.label ?? ''}</span>
-          </div>
-          <EChart option={boxPlotOption} height={310} />
-        </article>
+          <EChart option={chart.option} height={330} />
+        </article>)}
       </div>
 
       <div className='workbook-stats-strip'>
@@ -560,6 +475,21 @@ export function WorkbookStatsPanel({ data, ruleEvaluations }: WorkbookStatsPanel
           <strong>{item.count}</strong>
         </div>)}
       </div>
+
+      {expandedChartCard ? <div className='workbook-chart-modal-backdrop' onClick={() => setExpandedChart(null)}>
+        <section className='workbook-chart-modal' onClick={(event) => event.stopPropagation()}>
+          <div className='workbook-chart-modal-head'>
+            <div>
+              <h3>{expandedChartCard.title}</h3>
+              <p>{expandedChartCard.meta}</p>
+            </div>
+            <button type='button' className='transport-collapse-button' onClick={() => setExpandedChart(null)}>Закрыть</button>
+          </div>
+          <div className='workbook-chart-modal-body'>
+            <EChart option={expandedChartCard.option} height='100%' />
+          </div>
+        </section>
+      </div> : null}
     </>)}
   </section>
 }

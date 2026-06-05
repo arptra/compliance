@@ -3,7 +3,7 @@ import * as echarts from 'echarts'
 
 export type EChartProps = {
   option: echarts.EChartsCoreOption
-  height?: number
+  height?: number | string
 }
 
 export function EChart({ option, height = 320 }: EChartProps) {
