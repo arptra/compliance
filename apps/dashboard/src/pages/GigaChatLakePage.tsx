@@ -31,6 +31,7 @@ const STAGE_LABELS: Record<LakeStage, string> = {
 
 const FILTER_OP_LABELS: Array<{ value: FilterOp; label: string }> = [
   { value: 'contains', label: 'содержит' },
+  { value: 'exists_any', label: 'поле существует' },
   { value: 'eq', label: 'равно' },
   { value: 'ne', label: 'не равно' },
   { value: 'gte', label: '>=' },
@@ -58,6 +59,10 @@ const SYSTEM_KEYS = new Set([
   '__period_month',
 ])
 
+function splitFieldList(value: string) {
+  return Array.from(new Set(value.split(/[,;|\n]+/u).map((item) => item.trim()).filter(Boolean)))
+}
+
 function newFilterDraft(): FilterDraft {
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -71,6 +76,11 @@ function newFilterDraft(): FilterDraft {
 function toFilter(draft: FilterDraft): RecordFilter | null {
   const column = draft.column.trim()
   if (!column) return null
+  if (draft.op === 'exists_any') {
+    const fields = splitFieldList(column)
+    if (!fields.length) return null
+    return { column: fields[0], op: draft.op, value: fields }
+  }
   if (draft.op === 'between') {
     if (!draft.value.trim() && !draft.valueTo.trim()) return null
     return { column, op: draft.op, value: [draft.value.trim(), draft.valueTo.trim()] }
@@ -115,6 +125,7 @@ export default function GigaChatLakePage() {
   const [offset, setOffset] = useState(0)
   const [filters, setFilters] = useState<FilterDraft[]>([newFilterDraft()])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectAllFound, setSelectAllFound] = useState(false)
   const [mutationMessage, setMutationMessage] = useState('')
 
   const activeFilters = useMemo(
@@ -127,20 +138,37 @@ export default function GigaChatLakePage() {
     staleTime: 5_000,
   })
 
+  const totalRows = query.data?.total ?? 0
+  const allFoundQuery = useQuery({
+    queryKey: ['gigachat-lake-records-all-selected', stage, activeFilters, totalRows],
+    queryFn: () => searchRecords({ stage, filters: activeFilters, limit: Math.max(1, totalRows), offset: 0 }),
+    enabled: selectAllFound && totalRows > 0,
+    staleTime: 5_000,
+  })
+
   const rows = query.data?.rows ?? []
   const columns = query.data?.columns ?? []
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const selectedRows = useMemo(
-    () => rows.filter((row, index) => selectedIdSet.has(rowKey(row, index))),
-    [rows, selectedIdSet],
+    () => selectAllFound ? (allFoundQuery.data?.rows ?? []) : rows.filter((row, index) => selectedIdSet.has(rowKey(row, index))),
+    [allFoundQuery.data?.rows, rows, selectAllFound, selectedIdSet],
   )
   const pageIds = useMemo(() => rows.map(rowKey), [rows])
-  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIdSet.has(id))
+  const allPageSelected = selectAllFound || (pageIds.length > 0 && pageIds.every((id) => selectedIdSet.has(id)))
   const visibleColumns = columns.slice(0, 36)
+  const isSelectingAllFound = selectAllFound && allFoundQuery.isFetching
+  const selectedCount = selectAllFound ? totalRows : selectedRows.length
 
   const resetSelection = () => {
     setSelectedIds([])
+    setSelectAllFound(false)
     setMutationMessage('')
+  }
+
+  const updateFilters = (updater: (current: FilterDraft[]) => FilterDraft[]) => {
+    setFilters(updater)
+    setOffset(0)
+    resetSelection()
   }
 
   const changeStage = (nextStage: LakeStage) => {
@@ -150,7 +178,7 @@ export default function GigaChatLakePage() {
   }
 
   const importSelectedToLab = () => {
-    if (!selectedRows.length || !columns.length) return
+    if (isSelectingAllFound || !selectedRows.length || !columns.length) return
     const payload: GigaChatLakeImportPayload = {
       upload_id: `lake-import-${Date.now()}`,
       filename: `parquet_${stage}_selection.csv`,
@@ -195,7 +223,7 @@ export default function GigaChatLakePage() {
   const isMutatingRecords = deleteSelectedRows.isPending || clearCurrentStage.isPending
 
   const confirmDeleteSelected = () => {
-    if (!selectedRows.length || isMutatingRecords) return
+    if (isSelectingAllFound || !selectedRows.length || isMutatingRecords) return
     const ok = window.confirm(`Удалить выбранные строки из слоя "${STAGE_LABELS[stage]}"? Строк: ${selectedRows.length}.`)
     if (ok) deleteSelectedRows.mutate()
   }
@@ -266,7 +294,7 @@ export default function GigaChatLakePage() {
           <p>Можно фильтровать по любой колонке parquet-файлов. Для списка значений используйте запятую.</p>
         </div>
         <div className='transport-actions'>
-          <button type='button' onClick={() => setFilters((current) => [...current, newFilterDraft()])}>Добавить фильтр</button>
+          <button type='button' onClick={() => updateFilters((current) => [...current, newFilterDraft()])}>Добавить фильтр</button>
           <button
             type='button'
             onClick={() => {
@@ -281,32 +309,34 @@ export default function GigaChatLakePage() {
       </div>
 
       <div className='lake-filter-grid'>
-        {filters.map((filter) => <div className='lake-filter-row' key={filter.id}>
+        {filters.map((filter) => <div className={`lake-filter-row ${filter.op === 'exists_any' ? 'exists-mode' : ''}`} key={filter.id}>
           <input
             value={filter.column}
-            placeholder='Колонка, например created_at или tag'
+            placeholder={filter.op === 'exists_any' ? 'Колонки: tag, created_at, score' : 'Колонка, например created_at или tag'}
             list='lake-column-options'
-            onChange={(event) => setFilters((current) => current.map((item) => item.id === filter.id ? { ...item, column: event.target.value } : item))}
+            onChange={(event) => updateFilters((current) => current.map((item) => item.id === filter.id ? { ...item, column: event.target.value } : item))}
           />
           <select
             value={filter.op}
-            onChange={(event) => setFilters((current) => current.map((item) => item.id === filter.id ? { ...item, op: event.target.value as FilterOp } : item))}
+            onChange={(event) => updateFilters((current) => current.map((item) => item.id === filter.id ? { ...item, op: event.target.value as FilterOp } : item))}
           >
             {FILTER_OP_LABELS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
-          <input
-            value={filter.value}
-            placeholder={filter.op === 'in' ? 'A, B, C' : 'Значение'}
-            onChange={(event) => setFilters((current) => current.map((item) => item.id === filter.id ? { ...item, value: event.target.value } : item))}
-          />
-          {filter.op === 'between' ? <input
-            value={filter.valueTo}
-            placeholder='До'
-            onChange={(event) => setFilters((current) => current.map((item) => item.id === filter.id ? { ...item, valueTo: event.target.value } : item))}
-          /> : <span className='lake-filter-spacer' />}
+          {filter.op === 'exists_any' ? <div className='lake-filter-hint'>Выберет строки, где заполнено хотя бы одно из указанных полей.</div> : <>
+            <input
+              value={filter.value}
+              placeholder={filter.op === 'in' ? 'A, B, C' : 'Значение'}
+              onChange={(event) => updateFilters((current) => current.map((item) => item.id === filter.id ? { ...item, value: event.target.value } : item))}
+            />
+            {filter.op === 'between' ? <input
+              value={filter.valueTo}
+              placeholder='До'
+              onChange={(event) => updateFilters((current) => current.map((item) => item.id === filter.id ? { ...item, valueTo: event.target.value } : item))}
+            /> : <span className='lake-filter-spacer' />}
+          </>}
           <button
             type='button'
-            onClick={() => setFilters((current) => current.length <= 1 ? [newFilterDraft()] : current.filter((item) => item.id !== filter.id))}
+            onClick={() => updateFilters((current) => current.length <= 1 ? [newFilterDraft()] : current.filter((item) => item.id !== filter.id))}
           >
             Удалить
           </button>
@@ -335,9 +365,9 @@ export default function GigaChatLakePage() {
             type='button'
             className='primary'
             onClick={importSelectedToLab}
-            disabled={!selectedRows.length}
+            disabled={isSelectingAllFound || !selectedRows.length}
           >
-            Загрузить выбранное в Lab ({selectedRows.length})
+            {isSelectingAllFound ? 'Готовим выборку...' : `Загрузить выбранное в Lab (${selectedCount})`}
           </button>
         </div>
       </div>
@@ -355,8 +385,8 @@ export default function GigaChatLakePage() {
         </div>
         <div className='rule-validation-kpi'>
           <span>Выбрано</span>
-          <strong>{selectedRows.length}</strong>
-          <small>для переноса в лабораторию</small>
+          <strong>{selectedCount}</strong>
+          <small>{selectAllFound ? 'все найденные строки' : 'для переноса в лабораторию'}</small>
         </div>
       </div>
 
@@ -370,9 +400,9 @@ export default function GigaChatLakePage() {
             type='button'
             className='danger'
             onClick={confirmDeleteSelected}
-            disabled={!selectedRows.length || isMutatingRecords}
+            disabled={isSelectingAllFound || !selectedRows.length || isMutatingRecords}
           >
-            {deleteSelectedRows.isPending ? 'Удаляем...' : `Удалить выбранные (${selectedRows.length})`}
+            {deleteSelectedRows.isPending ? 'Удаляем...' : `Удалить выбранные (${selectedCount})`}
           </button>
           <button
             type='button'
@@ -392,8 +422,21 @@ export default function GigaChatLakePage() {
         <label className='workbook-select-all'>
           <input
             type='checkbox'
+            checked={selectAllFound}
+            disabled={!totalRows || query.isFetching}
+            onChange={(event) => {
+              setSelectAllFound(event.target.checked)
+              setSelectedIds([])
+              setMutationMessage('')
+            }}
+          />
+          <span>{isSelectingAllFound ? 'Загружаем найденные...' : `Выбрать все найденные (${totalRows})`}</span>
+        </label>
+        <label className='workbook-select-all'>
+          <input
+            type='checkbox'
             checked={allPageSelected}
-            disabled={!pageIds.length}
+            disabled={!pageIds.length || selectAllFound}
             onChange={(event) => {
               setSelectedIds((current) => {
                 const next = new Set(current)
@@ -427,6 +470,7 @@ export default function GigaChatLakePage() {
       </div>
 
       {query.isError ? <div className='transport-error'>{(query.error as Error).message}</div> : null}
+      {allFoundQuery.isError ? <div className='transport-error'>Не удалось загрузить все найденные строки: {(allFoundQuery.error as Error).message}</div> : null}
       {!query.isLoading && !rows.length ? <div className='lab-muted'>В этом слое пока нет parquet-строк или фильтры ничего не нашли.</div> : null}
       {query.isLoading ? <div className='lab-muted'>Загружаем parquet-превью...</div> : null}
 
@@ -450,7 +494,8 @@ export default function GigaChatLakePage() {
                 <td className='workbook-row-select-cell lake-select-cell' style={lakeTable.getColumnStyle('__select')}>
                   <input
                     type='checkbox'
-                    checked={selectedIdSet.has(id)}
+                    checked={selectAllFound || selectedIdSet.has(id)}
+                    disabled={selectAllFound}
                     onChange={() => {
                       setSelectedIds((current) => {
                         const next = new Set(current)

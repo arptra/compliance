@@ -2,7 +2,7 @@ import { apiPost } from '../../lib/api'
 
 export type RecordFilter = {
   column: string
-  op: 'eq' | 'ne' | 'contains' | 'in' | 'between' | 'gte' | 'lte'
+  op: 'eq' | 'ne' | 'contains' | 'in' | 'between' | 'gte' | 'lte' | 'exists_any'
   value: unknown
 }
 

@@ -1772,6 +1772,9 @@ body { margin: 0; }
   gap:8px;
   align-items:center;
 }
+.lake-filter-row.exists-mode {
+  grid-template-columns:minmax(220px, 1fr) 170px minmax(220px, 1fr) auto;
+}
 .lake-filter-row input,
 .lake-filter-row select {
   width:100%;
@@ -1793,6 +1796,16 @@ body { margin: 0; }
 }
 .lake-filter-spacer {
   min-height:1px;
+}
+.lake-filter-hint {
+  min-width:0;
+  padding:9px 10px;
+  border:1px solid #dbeafe;
+  border-radius:8px;
+  background:#f8fbff;
+  color:#334155;
+  font-size:13px;
+  line-height:1.25;
 }
 .lake-summary-grid {
   display:grid;
@@ -1892,7 +1905,7 @@ body { margin: 0; }
   .row-run-grid { grid-template-columns:1fr; }
   .annotated-filters { grid-template-columns:1fr; }
   .token-accounting-stats { grid-template-columns:1fr; }
-  .rule-validation-summary, .rule-validation-row, .lake-summary-grid, .lake-filter-row { grid-template-columns:1fr; }
+  .rule-validation-summary, .rule-validation-row, .lake-summary-grid, .lake-filter-row, .lake-filter-row.exists-mode { grid-template-columns:1fr; }
   .profile-hero, .profile-grid { grid-template-columns:1fr; }
 }
 

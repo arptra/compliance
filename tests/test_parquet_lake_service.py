@@ -35,3 +35,25 @@ def test_frame_to_rows_returns_json_serializable_values() -> None:
         }
     ]
     orjson.dumps(rows)
+
+
+def test_exists_any_filter_matches_any_non_empty_field() -> None:
+    df = pd.DataFrame(
+        {
+            "first_tag": ["alpha", "", None, float("inf")],
+            "second_tag": [None, "beta", "", None],
+            "other": ["x", "y", "z", "w"],
+        }
+    )
+
+    fields = ParquetLakeService._filter_field_names({"column": "ignored", "op": "exists_any", "value": ["first_tag", "second_tag"]})
+    mask = ParquetLakeService._field_exists_mask(df, fields)
+
+    assert fields == ["first_tag", "second_tag"]
+    assert mask.tolist() == [True, True, False, False]
+
+
+def test_exists_any_filter_parses_comma_separated_columns() -> None:
+    fields = ParquetLakeService._filter_field_names({"column": "first_tag, second_tag", "op": "exists_any"})
+
+    assert fields == ["first_tag", "second_tag"]

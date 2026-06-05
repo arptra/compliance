@@ -463,10 +463,11 @@ class ParquetLakeService:
 
         projection_columns = self._projection_columns(columns)
         projection = "*" if not projection_columns else ", ".join(self._quote_identifier(column) for column in projection_columns)
-        where_sql, params = self._duckdb_where(filters)
         con = duckdb.connect()
         con.execute("PRAGMA threads=4")
         table_expr = "read_parquet(?)"
+        available_columns = self._duckdb_columns(con, table_expr, paths)
+        where_sql, params = self._duckdb_where(filters, available_columns)
         rows_df = con.execute(
             f"SELECT {projection} FROM {table_expr} {where_sql} LIMIT ? OFFSET ?",
             [paths, *params, int(limit), int(offset)],
@@ -481,15 +482,34 @@ class ParquetLakeService:
             "engine": "duckdb",
         }
 
-    def _duckdb_where(self, filters: list[dict[str, Any]]) -> tuple[str, list[Any]]:
+    @staticmethod
+    def _duckdb_columns(con: Any, table_expr: str, paths: list[str]) -> set[str]:
+        rows = con.execute(f"DESCRIBE SELECT * FROM {table_expr}", [paths]).fetchall()
+        return {str(row[0]) for row in rows}
+
+    def _duckdb_where(self, filters: list[dict[str, Any]], available_columns: set[str] | None = None) -> tuple[str, list[Any]]:
         parts: list[str] = []
         params: list[Any] = []
         for item in filters:
             column = str(item.get("column") or "").strip()
-            if not column:
-                continue
             op = str(item.get("op") or "eq")
             value = item.get("value")
+            if op == "exists_any":
+                fields = self._filter_field_names(item)
+                existing_fields = [field for field in fields if available_columns is None or field in available_columns]
+                if not existing_fields:
+                    parts.append("FALSE")
+                    continue
+                field_checks = []
+                for field in existing_fields:
+                    ident = self._quote_identifier(field)
+                    field_checks.append(
+                        f"({ident} IS NOT NULL AND LOWER(TRIM(CAST({ident} AS VARCHAR))) NOT IN ('', 'nan', 'inf', '-inf'))"
+                    )
+                parts.append(f"({' OR '.join(field_checks)})")
+                continue
+            if not column:
+                continue
             ident = self._quote_identifier(column)
             if op == "contains":
                 parts.append(f"CAST({ident} AS VARCHAR) ILIKE ?")
@@ -531,10 +551,13 @@ class ParquetLakeService:
         df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         for item in filters:
             column = str(item.get("column") or "").strip()
-            if not column or column not in df.columns:
-                continue
             op = str(item.get("op") or "eq")
             value = item.get("value")
+            if op == "exists_any":
+                df = df[self._field_exists_mask(df, self._filter_field_names(item))]
+                continue
+            if not column or column not in df.columns:
+                continue
             series = df[column]
             if op == "contains":
                 df = df[series.astype(str).str.contains(str(value), case=False, na=False)]
@@ -559,6 +582,41 @@ class ParquetLakeService:
             "total": int(len(df)),
             "engine": "pandas",
         }
+
+    @staticmethod
+    def _filter_field_names(item: dict[str, Any]) -> list[str]:
+        value = item.get("value")
+        if isinstance(value, list):
+            raw_values = value
+        elif value not in (None, ""):
+            raw_values = [value]
+        else:
+            raw_values = [item.get("column")]
+
+        fields: list[str] = []
+        for raw_value in raw_values:
+            for field in re.split(r"[,;|\n]+", str(raw_value or "")):
+                field = field.strip()
+                if field and field not in fields:
+                    fields.append(field)
+        return fields
+
+    @classmethod
+    def _field_exists_mask(cls, df: pd.DataFrame, fields: list[str]) -> pd.Series:
+        mask = pd.Series(False, index=df.index)
+        for field in fields:
+            if field not in df.columns:
+                continue
+            mask = mask | df[field].map(cls._field_value_exists)
+        return mask
+
+    @staticmethod
+    def _field_value_exists(value: Any) -> bool:
+        if _is_missing_cell(value):
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        return True
 
     @staticmethod
     def _projection_columns(columns: list[str] | None) -> list[str]:

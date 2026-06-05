@@ -74,7 +74,7 @@ class AuthTokenResponse(BaseModel):
 
 class RecordFilter(BaseModel):
     column: str
-    op: Literal["eq", "ne", "contains", "in", "between", "gte", "lte"] = "eq"
+    op: Literal["eq", "ne", "contains", "in", "between", "gte", "lte", "exists_any"] = "eq"
     value: Any = None
 
 
