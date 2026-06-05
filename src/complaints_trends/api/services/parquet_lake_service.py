@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from zipfile import ZipFile
@@ -57,9 +58,11 @@ def _now() -> datetime:
 
 
 def _canonical_cell(value: Any) -> Any:
-    if pd.isna(value):
+    if _is_missing_cell(value):
         return None
     if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     if hasattr(value, "isoformat") and not isinstance(value, str):
         try:
@@ -68,7 +71,63 @@ def _canonical_cell(value: Any) -> Any:
             pass
     if isinstance(value, str):
         return value.strip()
-    return value
+    return _json_safe_cell(value)
+
+
+def _is_missing_cell(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value) or math.isinf(value)
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(missing, bool):
+        return missing
+    try:
+        return bool(missing)
+    except (TypeError, ValueError):
+        return False
+
+
+def _json_safe_cell(value: Any) -> Any:
+    if _is_missing_cell(value):
+        return None
+    if isinstance(value, dict):
+        return {str(key): _json_safe_cell(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_cell(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.hex()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if hasattr(value, "item"):
+        try:
+            item = value.item()
+        except (TypeError, ValueError):
+            item = value
+        if item is not value:
+            return _json_safe_cell(item)
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 def _canonical_row(row: dict[str, Any]) -> str:
@@ -561,5 +620,5 @@ class ParquetLakeService:
 
     @staticmethod
     def _frame_to_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
-        rows = df.where(pd.notna(df), None).to_dict(orient="records")
-        return [{str(key): value for key, value in row.items()} for row in rows]
+        rows = df.to_dict(orient="records")
+        return [{str(key): _json_safe_cell(value) for key, value in row.items()} for row in rows]
