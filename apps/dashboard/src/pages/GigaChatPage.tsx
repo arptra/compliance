@@ -32,6 +32,7 @@ import { RulePackEditor } from '../features/gigachat/RulePackEditor'
 import { GigaChatSettingsForm } from '../features/gigachat/GigaChatSettingsForm'
 import { WorkbookSheetPickerModal, WorkbookSheetsPanel } from '../features/gigachat/WorkbookSheetPickerModal'
 import { WorkbookSheetTable } from '../features/gigachat/WorkbookSheetTable'
+import { WorkbookStatsPanel } from '../features/gigachat/WorkbookStatsPanel'
 import { GigaChatTransportCard } from '../features/gigachat/GigaChatTransportCard'
 import { CellHoverPopover, useCellHoverPopover } from '../features/gigachat/useCellHoverPopover'
 import { useResizableTable, type TableRowClamp } from '../features/gigachat/useResizableTable'
@@ -2669,6 +2670,11 @@ export default function GigaChatPage() {
         {loadBackgroundTaskResult.isPending ? <div className='lab-muted'>Подгружаем рабочую тетрадь из фоновой задачи...</div> : null}
       </> : null}
     </section>
+
+    <WorkbookStatsPanel
+      data={displayedSheetData}
+      ruleEvaluations={displayedSheetIsWorking ? ruleEvaluationMap : {}}
+    />
 
     <section className='card transport-result annotated-table-card'>
       <div className='transport-section-head'>
