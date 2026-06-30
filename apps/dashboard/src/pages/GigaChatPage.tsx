@@ -905,6 +905,13 @@ export default function GigaChatPage() {
   const probe = useMutation({
     mutationFn: (transport: GigaChatTransportName) => probeGigaChatTransport(transport),
   })
+  const modelOptionsQ = useQuery({
+    queryKey: ['gigachat-model-options', selectedTransport],
+    queryFn: () => probeGigaChatTransport(selectedTransport),
+    enabled: activeLabTab === 'workspace' && activeSetupTab === 'prompts',
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
 
   const saveSettings = useMutation({
     mutationFn: async (valuesOverride?: Record<string, unknown>) => {
@@ -1770,7 +1777,29 @@ export default function GigaChatPage() {
   const exportPercent = exportTotalBytes ? Math.min(100, Math.round((exportLoadedBytes / exportTotalBytes) * 100)) : null
   const uploadPercent = workbookUploadProgress ? Math.min(100, Math.max(3, Math.round(workbookUploadProgress.progress * 100))) : null
   const exportBusy = exportWorkbookRows.isPending || exportAnnotatedRows.isPending || exportValidationRows.isPending
-  const requestSettingsFields = (selectedVersionQ.data?.fields ?? []).filter((field) => !labelingFieldKeys.has(field.key))
+  const modelOptionNames = Array.from(new Set([
+    ...((modelOptionsQ.data?.ok ? modelOptionsQ.data.models : []) ?? []),
+    ...((probe.data?.ok ? probe.data.models : []) ?? []),
+    String(settingValues.model ?? '').trim(),
+    String(selectedVersionQ.data?.values?.model ?? '').trim(),
+    String(statusQ.data?.model ?? '').trim(),
+  ].filter(Boolean)))
+  const requestSettingsFields = (selectedVersionQ.data?.fields ?? [])
+    .filter((field) => !labelingFieldKeys.has(field.key))
+    .map((field) => {
+      if (field.key !== 'model') return field
+      const modelsHelpText = modelOptionsQ.isFetching
+        ? 'Загружаем актуальный список моделей из API...'
+        : modelOptionsQ.isError
+          ? 'Не удалось загрузить список моделей из API. Оставлена текущая модель.'
+          : 'Список моделей загружается из API выбранного transport.'
+      return {
+        ...field,
+        input_type: 'select' as const,
+        help_text: modelsHelpText,
+        options: modelOptionNames.map((modelName) => ({ value: modelName, label: modelName })),
+      }
+    })
   const finalPromptDraftDirty = finalPromptDraftText !== finalPromptBaseText
   const finalPromptDraftValidation = useMemo(() => {
     const text = finalPromptDraftText.trim()

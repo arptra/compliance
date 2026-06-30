@@ -108,13 +108,12 @@ class GigaChatConnectionService:
         try:
             client = build_gigachat_transport_client(llm_cfg, transport=req.transport)
             models = client.list_models()
-            preview = models[:8]
             message = "Соединение успешно установлено."
-            if preview:
+            if models:
                 message = f"Соединение успешно установлено, найдено моделей: {len(models)}."
             ok = True
         except Exception as exc:
-            preview = []
+            models = []
             message = str(exc)
             ok = False
         return GigaChatTransportProbeResponse(
@@ -124,5 +123,5 @@ class GigaChatConnectionService:
             oauth_url=(llm_cfg.oauth_url if req.transport == "token" else None),
             model=llm_cfg.model,
             message=message,
-            models=preview,
+            models=models,
         )
