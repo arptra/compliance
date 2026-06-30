@@ -104,6 +104,19 @@ def save_lab_settings_version(version_id: str, req: GigaChatLabSettingsVersionUp
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/lab/settings/versions/{version_id}", response_model=GigaChatLabSettingsVersionsResponse)
+def delete_lab_settings_version(version_id: str, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
+    try:
+        user = _optional_user(services, authorization)
+        return services["gigachat_lab"].delete_settings_version(version_id, user=user)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/lab/settings/versions/{version_id}/rule-packs/export")
 def export_rule_packs(version_id: str, authorization: str | None = Header(default=None), services=Depends(get_service_container)):
     try:

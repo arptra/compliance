@@ -414,6 +414,20 @@ class CatalogService:
             row = con.execute(query, params).fetchone()
         return self._lab_settings_version_from_row(row, user_id=user_id) if row else None
 
+    def delete_lab_settings_version(self, version_id: str, *, user_id: str, workspace_id: str) -> bool:
+        with self._connect() as con:
+            cur = con.execute(
+                """
+                DELETE FROM lab_settings_versions
+                WHERE version_id = ?
+                  AND workspace_id = ?
+                  AND owner_user_id = ?
+                  AND version_id != 'default'
+                """,
+                (version_id, workspace_id, user_id),
+            )
+        return int(cur.rowcount or 0) > 0
+
     @staticmethod
     def _lab_settings_version_from_row(row: sqlite3.Row, *, user_id: str) -> dict[str, Any]:
         data = dict(row)

@@ -8,6 +8,7 @@ import {
   getGigaChatBackgroundTaskResultWithProgress,
   getGigaChatWorkbookUploadTask,
   createGigaChatLabSettingsVersion,
+  deleteGigaChatLabSettingsVersion,
   exportGigaChatAnnotatedWorkbook,
   exportGigaChatValidationWorkbook,
   exportGigaChatWorkbookRows,
@@ -717,6 +718,11 @@ export default function GigaChatPage() {
   })
   const selectedVersionCanEdit = selectedVersionQ.data?.version.can_edit ?? false
   const currentUserDisplayName = user?.display_name || user?.email || ''
+  const personalProfileForSelectedVersion = selectedVersionQ.data?.version.can_edit ? null : (versionsQ.data?.versions ?? []).find((version) =>
+    version.can_edit
+    && version.visibility === 'private'
+    && version.base_version_id === selectedVersionQ.data?.version.version_id
+  ) ?? null
 
   const [selectedTransport, setSelectedTransport] = useState<GigaChatTransportName>('mtls')
   const [heroCollapsed, setHeroCollapsed] = useState(false)
@@ -907,12 +913,28 @@ export default function GigaChatPage() {
         throw new Error('Версия настроек еще не загружена.')
       }
       const values = valuesOverride ?? settingValues
-      if (selectedVersionCanEdit) {
+      if (sourceVersion.can_edit) {
         return saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
           title: sourceVersion.title,
           description: sourceVersion.description,
           status: sourceVersion.status,
           visibility: sourceVersion.visibility,
+          updated_by: currentUserDisplayName,
+          values,
+        })
+      }
+
+      const existingPersonalVersion = (versionsQ.data?.versions ?? []).find((version) =>
+        version.can_edit
+        && version.visibility === 'private'
+        && version.base_version_id === sourceVersion.version_id
+      )
+      if (existingPersonalVersion) {
+        return saveGigaChatLabSettingsVersion(existingPersonalVersion.version_id, {
+          title: existingPersonalVersion.title,
+          description: existingPersonalVersion.description,
+          status: existingPersonalVersion.status,
+          visibility: existingPersonalVersion.visibility,
           updated_by: currentUserDisplayName,
           values,
         })
@@ -979,6 +1001,20 @@ export default function GigaChatPage() {
       setVersionCreateOpen(false)
       setVersionDraft((current) => ({ ...current, title: '', versionId: '', description: '', visibility: 'private', createdBy: currentUserDisplayName }))
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
+    },
+  })
+
+  const deleteSettingsVersion = useMutation({
+    mutationFn: (versionId: string) => deleteGigaChatLabSettingsVersion(versionId),
+    onSuccess: async (data, deletedVersionId) => {
+      qc.removeQueries({ queryKey: ['gigachat-lab-settings-version', deletedVersionId] })
+      qc.setQueryData(['gigachat-lab-settings-versions'], data)
+      const nextVersionId = data.versions[0]?.version_id ?? 'default'
+      setSelectedSettingsVersionId(nextVersionId)
+      setVersionDraft((current) => ({ ...current, baseVersionId: nextVersionId }))
+      setVersionInfoOpen(false)
+      await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
+      await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', nextVersionId] })
     },
   })
 
@@ -2076,10 +2112,29 @@ export default function GigaChatPage() {
               <button type='button' onClick={() => saveSettings.mutate(undefined)} disabled={saveSettings.isPending || !selectedVersionQ.data}>
                 {saveSettings.isPending ? 'Сохраняем...' : selectedVersionCanEdit ? 'Сохранить профиль' : 'Сохранить в мой профиль'}
               </button>
+              <button
+                type='button'
+                className='danger'
+                onClick={() => {
+                  const version = selectedVersionQ.data?.version
+                  if (!version) return
+                  if (window.confirm(`Удалить версию "${version.title}"?`)) {
+                    deleteSettingsVersion.mutate(version.version_id)
+                  }
+                }}
+                disabled={!selectedVersionCanEdit || deleteSettingsVersion.isPending || saveSettings.isPending}
+                title={selectedVersionCanEdit ? 'Удалить выбранную версию настроек' : 'Можно удалять только свой приватный профиль'}
+              >
+                {deleteSettingsVersion.isPending ? 'Удаляем...' : 'Удалить версию'}
+              </button>
             </div>
           </div>
+          {saveSettings.isError ? <div className='transport-error'>{formatLabError(saveSettings.error as Error, 'сохранение профиля')}</div> : null}
+          {deleteSettingsVersion.isError ? <div className='transport-error'>{formatLabError(deleteSettingsVersion.error as Error, 'удаление версии')}</div> : null}
           {!selectedVersionCanEdit ? <div className='lab-muted'>
-            Эта версия доступна для просмотра и использования. При сохранении изменений будет создан приватный профиль на основе текущей версии.
+            {personalProfileForSelectedVersion
+              ? `Эта версия доступна для просмотра и использования. При сохранении изменений будет обновлен ваш приватный профиль "${personalProfileForSelectedVersion.title}".`
+              : 'Эта версия доступна для просмотра и использования. При первом сохранении изменений будет создан приватный профиль на основе текущей версии.'}
           </div> : null}
 
           {versionCreateOpen ? <div className='settings-version-create'>

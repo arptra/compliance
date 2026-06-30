@@ -1,4 +1,4 @@
-import { apiGet, apiGetWithProgress, apiPost, apiPostBlob, apiPostForm } from '../../lib/api'
+import { apiDelete, apiGet, apiGetWithProgress, apiPost, apiPostBlob, apiPostForm } from '../../lib/api'
 import type {
   GigaChatFinalPromptResponse,
   GigaChatBackgroundTaskListResponse,
@@ -66,6 +66,10 @@ export function saveGigaChatLabSettingsVersion(versionId: string, payload: {
   values: Record<string, unknown>
 }) {
   return apiPost<GigaChatLabSettingsVersionResponse>(`/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}`, payload)
+}
+
+export function deleteGigaChatLabSettingsVersion(versionId: string) {
+  return apiDelete<GigaChatLabSettingsVersionsResponse>(`/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}`)
 }
 
 export function exportGigaChatRulePacks(versionId: string) {

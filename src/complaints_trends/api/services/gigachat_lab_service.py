@@ -550,6 +550,30 @@ class GigaChatLabService:
         self._write_version_payload(payload)
         return self.get_settings_version(str(payload["version_id"]), user=user)
 
+    def delete_settings_version(self, version_id: str, *, user: dict[str, Any] | None = None) -> GigaChatLabSettingsVersionsResponse:
+        context = self._user_context(user)
+        if version_id == "default":
+            raise PermissionError("Default settings version cannot be deleted.")
+        payload = self._read_version_payload(version_id, user=user)
+        if self.catalog:
+            is_owner = str(payload.get("owner_user_id") or "") == context["user_id"]
+            if not is_owner:
+                raise PermissionError("Only the owner can delete this settings version.")
+            deleted = self.catalog.delete_lab_settings_version(
+                version_id,
+                user_id=context["user_id"],
+                workspace_id=context["workspace_id"],
+            )
+            if not deleted:
+                raise FileNotFoundError(f"Settings version not found: {version_id}")
+            return self.list_settings_versions(user=user)
+
+        path = self._version_path(version_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Settings version not found: {version_id}")
+        path.unlink()
+        return self.list_settings_versions(user=user)
+
     def export_rule_packs_workbook(self, version_id: str, *, user: dict[str, Any] | None = None) -> tuple[str, bytes]:
         payload = self._read_version_payload(version_id, user=user)
         values = self._values_from_version_payload(payload)

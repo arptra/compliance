@@ -227,12 +227,14 @@ body { margin: 0; }
   color:#f8fafc;
   border-color:#0f172a;
 }
-.transport-actions button.danger {
+.transport-actions button.danger,
+.settings-version-actions button.danger {
   border-color:#fca5a5;
   background:#fee2e2;
   color:#991b1b;
 }
-.transport-actions button.danger.ghost {
+.transport-actions button.danger.ghost,
+.settings-version-actions button.danger.ghost {
   background:#fff;
 }
 .transport-actions button:disabled { opacity:0.65; cursor:default; }
