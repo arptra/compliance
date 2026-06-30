@@ -966,6 +966,26 @@ class GigaChatLabService:
             list(req.rows),
             key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
         )
+        model_columns = [
+            "Класс",
+            "Теги",
+            "Local tags",
+            "Model added tags",
+            "Model rejected tags",
+            "Match type",
+            "Evidence",
+            "Tag decisions",
+            "Rule hits",
+            "Suggested topics",
+            "Confirmed rule hits",
+            "Rejected rule hits",
+            "Rule decision",
+            "Model decision",
+            "Reclassified topic",
+            "Final topic",
+            "Decision source",
+        ]
+        source_export_columns = self._source_export_columns(source_columns, model_columns)
         export_rows: list[dict[str, Any]] = []
         for row in ordered_rows:
             export_row: dict[str, Any] = {
@@ -987,29 +1007,13 @@ class GigaChatLabService:
                 "Final topic": row.final_topic or "",
                 "Decision source": row.decision_source or "",
             }
-            for column in source_columns:
-                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
+            for source_column, export_column in source_export_columns:
+                export_row[export_column] = self._normalize_export_cell(row.source_row.get(source_column))
             export_rows.append(export_row)
 
         ordered_columns = [
-            "Класс",
-            "Теги",
-            "Local tags",
-            "Model added tags",
-            "Model rejected tags",
-            "Match type",
-            "Evidence",
-            "Tag decisions",
-            "Rule hits",
-            "Suggested topics",
-            "Confirmed rule hits",
-            "Rejected rule hits",
-            "Rule decision",
-            "Model decision",
-            "Reclassified topic",
-            "Final topic",
-            "Decision source",
-            *source_columns,
+            *model_columns,
+            *[export_column for _, export_column in source_export_columns],
         ]
         df = pd.DataFrame(export_rows, columns=ordered_columns)
         df = self._sanitize_for_excel(df)
@@ -1039,6 +1043,34 @@ class GigaChatLabService:
             list(req.rows),
             key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
         )
+        model_columns = [
+            "Review status",
+            "Class matches",
+            "Tags match",
+            "Topic matches",
+            "Expected class",
+            "Expected tags",
+            "Expected final topic",
+            "Reviewer comment",
+            "Model class",
+            "Model tags",
+            "Local tags",
+            "Model added tags",
+            "Model rejected tags",
+            "Match type",
+            "Evidence",
+            "Tag decisions",
+            "Rule hits",
+            "Suggested topics",
+            "Confirmed rule hits",
+            "Rejected rule hits",
+            "Rule decision",
+            "Model decision",
+            "Reclassified topic",
+            "Model final topic",
+            "Decision source",
+        ]
+        source_export_columns = self._source_export_columns(source_columns, model_columns)
         export_rows: list[dict[str, Any]] = []
         for row in ordered_rows:
             model_class = row.classification or ""
@@ -1071,37 +1103,13 @@ class GigaChatLabService:
                 "Model final topic": model_topic,
                 "Decision source": row.decision_source or "",
             }
-            for column in source_columns:
-                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
+            for source_column, export_column in source_export_columns:
+                export_row[export_column] = self._normalize_export_cell(row.source_row.get(source_column))
             export_rows.append(export_row)
 
         ordered_columns = [
-            "Review status",
-            "Class matches",
-            "Tags match",
-            "Topic matches",
-            "Expected class",
-            "Expected tags",
-            "Expected final topic",
-            "Reviewer comment",
-            "Model class",
-            "Model tags",
-            "Local tags",
-            "Model added tags",
-            "Model rejected tags",
-            "Match type",
-            "Evidence",
-            "Tag decisions",
-            "Rule hits",
-            "Suggested topics",
-            "Confirmed rule hits",
-            "Rejected rule hits",
-            "Rule decision",
-            "Model decision",
-            "Reclassified topic",
-            "Model final topic",
-            "Decision source",
-            *source_columns,
+            *model_columns,
+            *[export_column for _, export_column in source_export_columns],
         ]
         df = pd.DataFrame(export_rows, columns=ordered_columns)
         df = self._sanitize_for_excel(df)
@@ -1161,6 +1169,15 @@ class GigaChatLabService:
             list(req.rows),
             key=lambda row: (row.row_index is None, row.row_index if row.row_index is not None else 0),
         )
+        model_columns = [
+            "Row index",
+            "Rule hits",
+            "Suggested action",
+            "Matched keywords",
+            "Matched fields",
+            "Suggested topic",
+        ]
+        source_export_columns = self._source_export_columns(source_columns, model_columns)
         export_rows: list[dict[str, Any]] = []
         for row in ordered_rows:
             export_row: dict[str, Any] = {
@@ -1171,18 +1188,13 @@ class GigaChatLabService:
                 "Matched fields": ", ".join([str(item).strip() for item in row.matched_fields if str(item).strip()]),
                 "Suggested topic": ", ".join([str(item).strip() for item in row.suggested_topics if str(item).strip()]),
             }
-            for column in source_columns:
-                export_row[column] = self._normalize_export_cell(row.source_row.get(column))
+            for source_column, export_column in source_export_columns:
+                export_row[export_column] = self._normalize_export_cell(row.source_row.get(source_column))
             export_rows.append(export_row)
 
         ordered_columns = [
-            "Row index",
-            "Rule hits",
-            "Suggested action",
-            "Matched keywords",
-            "Matched fields",
-            "Suggested topic",
-            *source_columns,
+            *model_columns,
+            *[export_column for _, export_column in source_export_columns],
         ]
         df = pd.DataFrame(export_rows, columns=ordered_columns)
         df = self._sanitize_for_excel(df)
@@ -2268,6 +2280,10 @@ class GigaChatLabService:
     def _normalize_cell(value: Any) -> Any:
         if value is None:
             return None
+        if isinstance(value, pd.Series):
+            values = [GigaChatLabService._normalize_cell(item) for item in value.tolist()]
+            values = [item for item in values if item not in (None, "")]
+            return ", ".join(str(item) for item in values) if values else None
         if isinstance(value, (datetime, date)):
             return value.isoformat()
         if isinstance(value, pd.Timestamp):
@@ -2306,6 +2322,24 @@ class GigaChatLabService:
         return normalized
 
     @staticmethod
+    def _source_export_columns(source_columns: list[str], reserved_columns: list[str]) -> list[tuple[str, str]]:
+        used = {str(column) for column in reserved_columns}
+        result: list[tuple[str, str]] = []
+        for source_column in source_columns:
+            source_column = str(source_column).strip()
+            if not source_column:
+                continue
+            base = source_column if source_column not in used else f"Source: {source_column}"
+            export_column = base
+            suffix = 2
+            while export_column in used:
+                export_column = f"{base} ({suffix})"
+                suffix += 1
+            used.add(export_column)
+            result.append((source_column, export_column))
+        return result
+
+    @staticmethod
     def _excel_safe_sheet_name(value: str) -> str:
         cleaned = re.sub(r"[:\\\\/?*\\[\\]]", "_", str(value or "Разметка")).strip()
         return (cleaned or "Разметка")[:31]
@@ -2313,12 +2347,13 @@ class GigaChatLabService:
     @staticmethod
     def _sanitize_for_excel(df: pd.DataFrame, max_len: int = 32767) -> pd.DataFrame:
         out = df.copy()
-        cols = out.select_dtypes(include=["object", "string"]).columns
-        for col in cols:
-            series = out[col]
+        for col_idx, dtype in enumerate(out.dtypes):
+            if not (pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype) or str(dtype) == "str"):
+                continue
+            series = out.iloc[:, col_idx]
             mask = series.map(lambda v: isinstance(v, str))
             if not bool(mask.any()):
                 continue
             sanitized = series.loc[mask].astype(str).str.replace(_OPENPYXL_ILLEGAL_RE, "", regex=True).str.slice(0, max_len)
-            out.loc[mask, col] = sanitized
+            out.iloc[mask.to_numpy(), col_idx] = sanitized.to_numpy()
         return out
