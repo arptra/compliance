@@ -424,31 +424,45 @@ function extractClassification(responseJson: unknown) {
   return ''
 }
 
+const TAG_VALUE_KEYS = ['tag', 'target_tag', 'name', 'value', 'label', 'title', 'code']
+const RULE_HIT_VALUE_KEYS = ['code', 'rule_code', 'rule', 'id', 'tag', 'value', 'label', 'name']
+
+function extractTextValue(value: unknown, keys = TAG_VALUE_KEYS): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim()
+  if (Array.isArray(value)) {
+    return extractStringList(value, keys).join(', ')
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    for (const key of keys) {
+      const text = extractTextValue(record[key], keys)
+      if (text) return text
+    }
+  }
+  return ''
+}
+
+function extractStringList(value: unknown, keys = TAG_VALUE_KEYS): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.flatMap((item) => {
+      const text = extractTextValue(item, keys)
+      return text ? [text] : []
+    })))
+  }
+  const text = extractTextValue(value, keys)
+  return text ? [text] : []
+}
+
 function extractTags(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return [] as string[]
   const record = responseJson as Record<string, unknown>
   const assignedTags = record.assigned_tags
-  if (Array.isArray(assignedTags)) {
-    return assignedTags.map((item) => String(item ?? '').trim()).filter(Boolean)
-  }
+  const directAssignedTags = extractStringList(assignedTags)
+  if (directAssignedTags.length) return directAssignedTags
   const tags = record.tags
-  if (Array.isArray(tags)) {
-    return tags.flatMap((item) => {
-      if (typeof item === 'string') return item.trim() ? [item.trim()] : []
-      if (item && typeof item === 'object' && !Array.isArray(item)) {
-        const tagValue = (item as Record<string, unknown>).tag
-        return typeof tagValue === 'string' && tagValue.trim() ? [tagValue.trim()] : []
-      }
-      return []
-    })
-  }
-  return []
-}
-
-function extractStringList(value: unknown) {
-  return Array.isArray(value)
-    ? value.map((item) => String(item ?? '').trim()).filter(Boolean)
-    : []
+  return extractStringList(tags)
 }
 
 function extractFirstString(record: Record<string, unknown>, keys: string[]) {
@@ -461,12 +475,12 @@ function extractFirstString(record: Record<string, unknown>, keys: string[]) {
 
 function extractConfirmedRuleHits(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return [] as string[]
-  return extractStringList((responseJson as Record<string, unknown>).confirmed_rule_hits)
+  return extractStringList((responseJson as Record<string, unknown>).confirmed_rule_hits, RULE_HIT_VALUE_KEYS)
 }
 
 function extractRejectedRuleHits(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return [] as string[]
-  return extractStringList((responseJson as Record<string, unknown>).rejected_rule_hits)
+  return extractStringList((responseJson as Record<string, unknown>).rejected_rule_hits, RULE_HIT_VALUE_KEYS)
 }
 
 function extractModelAddedTags(responseJson: unknown) {
@@ -490,12 +504,12 @@ function extractTagDecisionSummary(responseJson: unknown) {
   const tagDecisions = record.tag_decisions
   if (Array.isArray(tagDecisions)) {
     return tagDecisions.map((item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return String(item ?? '').trim()
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return extractTextValue(item)
       const decision = item as Record<string, unknown>
-      const tag = String(decision.tag ?? '').trim()
-      const status = String(decision.decision ?? '').trim()
-      const matchType = String(decision.match_type ?? '').trim()
-      const evidence = String(decision.evidence ?? '').trim()
+      const tag = extractTextValue(decision.tag)
+      const status = extractTextValue(decision.decision, ['decision', 'status', 'value', 'label', 'name'])
+      const matchType = extractTextValue(decision.match_type, ['match_type', 'type', 'value', 'label', 'name'])
+      const evidence = extractTextValue(decision.evidence, ['evidence', 'text', 'value', 'label', 'name'])
       return [tag, status, matchType, evidence ? `"${evidence}"` : ''].filter(Boolean).join(' · ')
     }).filter(Boolean).join('; ')
   }
