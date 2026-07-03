@@ -1223,6 +1223,11 @@ body { margin: 0; }
 .workbook-table td {
   padding: 6px 8px;
 }
+.annotated-new-class-cell.reclassified {
+  background:#fef3c7;
+  box-shadow:inset 3px 0 0 #f59e0b;
+  font-weight:700;
+}
 .virtual-table-spacer-row td {
   padding: 0;
   border-bottom: 0;

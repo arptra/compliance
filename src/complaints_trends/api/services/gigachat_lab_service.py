@@ -15,6 +15,7 @@ from typing import Any
 from zipfile import ZipFile
 
 import pandas as pd
+from openpyxl.styles import PatternFill
 
 from ...config import LLMConfig, ProjectConfig
 from ...gigachat_api import build_gigachat_transport_client
@@ -97,6 +98,27 @@ class GigaChatLabService:
         "Если ни один разрешенный класс не подходит, верни пустую строку в complaint_category и объясни причину в notes."
     )
     DEFAULT_RECLASSIFICATION_PROMPT = ""
+    EMPTY_RECLASSIFICATION_MARKERS = {
+        "-",
+        "—",
+        "–",
+        "нет",
+        "нет изменений",
+        "без изменений",
+        "не менять",
+        "оставить",
+        "оставить как есть",
+        "none",
+        "null",
+        "nil",
+        "n/a",
+        "na",
+        "no change",
+        "no_change",
+        "same",
+        "same topic",
+        "same_topic",
+    }
     DEFAULT_CONTEXT_NOTES = (
         "Источник данных: Excel/CSV с клиентскими обращениями. "
         "Одна строка таблицы = одно обращение для разметки. "
@@ -1086,6 +1108,7 @@ class GigaChatLabService:
         )
         model_columns = [
             "Класс",
+            "Новая подтематика",
             "Теги",
             "Local tags",
             "Model added tags",
@@ -1105,9 +1128,13 @@ class GigaChatLabService:
         ]
         source_export_columns = self._source_export_columns(source_columns, model_columns)
         export_rows: list[dict[str, Any]] = []
+        reclassified_export_rows: set[int] = set()
         for row in ordered_rows:
+            new_class = self._normalize_reclassification_topic_value(row.new_class)
+            is_reclassified = bool(row.is_reclassified and new_class)
             export_row: dict[str, Any] = {
                 "Класс": row.classification,
+                "Новая подтематика": new_class if is_reclassified else "",
                 "Теги": ", ".join([str(tag).strip() for tag in row.tags if str(tag).strip()]),
                 "Local tags": ", ".join([str(tag).strip() for tag in row.local_tags if str(tag).strip()]),
                 "Model added tags": ", ".join([str(tag).strip() for tag in row.model_added_tags if str(tag).strip()]),
@@ -1128,6 +1155,8 @@ class GigaChatLabService:
             for source_column, export_column in source_export_columns:
                 export_row[export_column] = self._normalize_export_cell(row.source_row.get(source_column))
             export_rows.append(export_row)
+            if is_reclassified:
+                reclassified_export_rows.add(len(export_rows) + 1)
 
         ordered_columns = [
             *model_columns,
@@ -1143,6 +1172,9 @@ class GigaChatLabService:
             ws = writer.sheets[sheet_name]
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
+            reclassified_fill = PatternFill(fill_type="solid", fgColor="FEF3C7")
+            for export_row_idx in reclassified_export_rows:
+                ws.cell(row=export_row_idx, column=2).fill = reclassified_fill
             for col_idx in range(1, ws.max_column + 1):
                 for row_idx in range(2, ws.max_row + 1):
                     cell = ws.cell(row=row_idx, column=col_idx)
@@ -2306,14 +2338,24 @@ class GigaChatLabService:
         return list(fallback_columns)
 
     @classmethod
+    def _normalize_reclassification_topic_value(cls, value: Any) -> str:
+        text = cls._cell_text(value)
+        if not text:
+            return ""
+        normalized = re.sub(r"\s+", " ", text).casefold()
+        if normalized in cls.EMPTY_RECLASSIFICATION_MARKERS:
+            return ""
+        return text
+
+    @classmethod
     def _sanitize_reclassification_response(cls, response_json: Any, values: dict[str, Any]) -> Any:
         if not isinstance(response_json, dict):
             return response_json
         allowed_names = [item["name"] for item in cls._reclassification_choice_items(values)]
         allowed_by_normalized = {name.strip().casefold(): name for name in allowed_names}
-        raw_topic = str(response_json.get("reclassified_topic") or "").strip()
+        raw_topic = cls._normalize_reclassification_topic_value(response_json.get("reclassified_topic"))
         sanitized = dict(response_json)
-        sanitized["reclassified_topic"] = allowed_by_normalized.get(raw_topic.casefold(), "")
+        sanitized["reclassified_topic"] = allowed_by_normalized.get(raw_topic.casefold(), "") if raw_topic else ""
         return sanitized
 
     @staticmethod
@@ -2429,13 +2471,16 @@ class GigaChatLabService:
         allowed_topics = self._reclassification_choice_items(values)
 
         prompt_parts = [
-            "Задача: выбрать новую тему обращения из закрытого списка `allowed_topics`.",
+            "Задача: проверить, нужно ли заменить исходную тему обращения на одну тему из закрытого списка `allowed_topics`.",
             (
                 "Правила ответа:\n"
                 "1. Верни только JSON без markdown: {\"reclassified_topic\":\"...\"}.\n"
                 "2. Значение `reclassified_topic` должно точно совпадать с одним из `allowed_topics[].name`.\n"
-                "3. Если ни одна тема не подходит уверенно, исходная тема уже корректна или данных недостаточно, верни пустую строку.\n"
-                "4. Не придумывай новые темы, не переформулируй названия и не возвращай description."
+                "3. Сравни исходную тему строки, контекст обращения и описания allowed_topics по смыслу, а не по буквальному тексту.\n"
+                "4. Если исходная тема уже означает то же самое, что подходящая тема из allowed_topics, даже если написана свободно, короче или другими словами, верни пустую строку.\n"
+                "5. Верни название allowed topic только если контекст явно показывает, что исходная тема ошибочная, слишком общая или относится к другой смысловой теме.\n"
+                "6. Если ни одна тема не подходит уверенно или данных недостаточно, верни пустую строку.\n"
+                "7. Не возвращай '-', '—', 'нет', null, description и не придумывай новые темы."
             ),
             "allowed_topics:",
             json.dumps(allowed_topics, ensure_ascii=False, indent=2),
@@ -2453,7 +2498,8 @@ class GigaChatLabService:
                     "role": "system",
                     "content": (
                         f"{system_prompt}\n"
-                        "Для этого запроса действует закрытый список: нельзя возвращать значения вне allowed_topics[].name."
+                        "Для этого запроса действует закрытый список: нельзя возвращать значения вне allowed_topics[].name. "
+                        "Если текущая тема совпадает с контекстом по смыслу, reclassified_topic должен быть пустой строкой."
                     ),
                 },
                 {"role": "user", "content": "\n\n".join(prompt_parts)},

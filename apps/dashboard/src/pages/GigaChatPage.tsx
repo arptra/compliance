@@ -80,6 +80,27 @@ const CHUNKED_UPLOAD_POLL_MS = 1000
 const RULE_EVALUATION_CHUNK_COUNT = 25
 const DEFAULT_RECLASSIFICATION_PROMPT = ''
 const RECLASSIFICATION_DESCRIPTION_PLACEHOLDER = 'Например: обращения про задержку очередного транша по образовательному кредиту, оплату семестра или проблемы с учебным периодом.'
+const EMPTY_RECLASSIFICATION_MARKERS = new Set([
+  '-',
+  '—',
+  '–',
+  'нет',
+  'нет изменений',
+  'без изменений',
+  'не менять',
+  'оставить',
+  'оставить как есть',
+  'none',
+  'null',
+  'nil',
+  'n/a',
+  'na',
+  'no change',
+  'no_change',
+  'same',
+  'same topic',
+  'same_topic',
+])
 const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   draft: 'Черновая',
   test: 'Тестовая',
@@ -156,6 +177,9 @@ type AnnotatedSheetRow = {
   rowKey: string
   rowIndex: number
   classification: string
+  newClassification: string
+  sourceClassification: string
+  isReclassified: boolean
   tags: string[]
   localTags: string[]
   modelAddedTags: string[]
@@ -686,14 +710,35 @@ function extractEvidence(responseJson: unknown) {
   return ''
 }
 
+function normalizeReclassificationTopicValue(value: unknown) {
+  if (value === null || value === undefined) return ''
+  const text = String(value).trim()
+  if (!text) return ''
+  const normalized = text.replace(/\s+/g, ' ').toLocaleLowerCase('ru-RU')
+  if (EMPTY_RECLASSIFICATION_MARKERS.has(normalized)) return ''
+  return text
+}
+
+function normalizeReclassificationTopicForCompare(value: unknown) {
+  return normalizeReclassificationTopicValue(value).replace(/\s+/g, ' ').toLocaleLowerCase('ru-RU')
+}
+
 function extractReclassifiedTopic(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== 'object' || Array.isArray(responseJson)) return ''
   const record = responseJson as Record<string, unknown>
   for (const key of ['reclassified_topic', 'suggested_topic', 'target_topic']) {
-    const value = record[key]
-    if (typeof value === 'string' && value.trim()) return value.trim()
+    const value = normalizeReclassificationTopicValue(record[key])
+    if (value) return value
   }
   return ''
+}
+
+function isAnnotatedRowReclassified(row: AnnotatedSheetRow) {
+  const newClassification = normalizeReclassificationTopicValue(row.newClassification)
+  if (!row.isReclassified || !newClassification) return false
+  const newComparable = normalizeReclassificationTopicForCompare(newClassification)
+  const sourceComparable = normalizeReclassificationTopicForCompare(row.sourceClassification || row.classification)
+  return !sourceComparable || newComparable !== sourceComparable
 }
 
 function formatLabError(error: Error | null | undefined, resourceLabel: string) {
@@ -1622,42 +1667,64 @@ export default function GigaChatPage() {
     onSettled: () => setExportProgress(null),
   })
 
+  const buildAnnotatedExportRow = (row: AnnotatedSheetRow) => ({
+    row_index: row.rowIndex,
+    classification: row.classification,
+    new_class: isAnnotatedRowReclassified(row) ? normalizeReclassificationTopicValue(row.newClassification) : '',
+    source_classification: row.sourceClassification,
+    is_reclassified: isAnnotatedRowReclassified(row),
+    tags: row.tags,
+    local_tags: row.localTags,
+    model_added_tags: row.modelAddedTags,
+    model_rejected_tags: row.modelRejectedTags,
+    match_type: row.matchType || null,
+    evidence: row.evidence || null,
+    tag_decisions: row.tagDecisions || null,
+    rule_hits: row.ruleHits,
+    suggested_topics: row.suggestedTopics,
+    confirmed_rule_hits: row.confirmedRuleHits,
+    rejected_rule_hits: row.rejectedRuleHits,
+    rule_decision: row.ruleDecision,
+    model_decision: row.modelDecision,
+    reclassified_topic: row.reclassifiedTopic || null,
+    final_topic: row.finalTopic || null,
+    decision_source: row.decisionSource,
+    source_row: row.sourceRow,
+  })
+
   const exportAnnotatedRows = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (mode: 'filtered' | 'reclassified' = 'filtered') => {
       if (!sheetData) throw new Error('Сначала загрузите рабочую таблицу.')
+      const rowsForExport = mode === 'reclassified'
+        ? filteredAnnotatedRows.filter((row) => isAnnotatedRowReclassified(row))
+        : filteredAnnotatedRows
+      if (!rowsForExport.length) {
+        throw new Error(mode === 'reclassified' ? 'Нет строк с новой подтематикой для выгрузки.' : 'Нет строк для выгрузки.')
+      }
+      const baseName = sheetData.filename.replace(/\.[^.]+$/u, '') || 'annotated'
+      const exportFilename = mode === 'reclassified'
+        ? `${baseName}_reclassified.xlsx`
+        : sheetData.filename
       return exportGigaChatAnnotatedWorkbook(
-        sheetData.filename,
+        exportFilename,
         sheetData.sheet_name,
         sheetData.columns,
-        filteredAnnotatedRows.map((row) => ({
-          row_index: row.rowIndex,
-          classification: row.classification,
-          tags: row.tags,
-          local_tags: row.localTags,
-          model_added_tags: row.modelAddedTags,
-          model_rejected_tags: row.modelRejectedTags,
-          match_type: row.matchType || null,
-          evidence: row.evidence || null,
-          tag_decisions: row.tagDecisions || null,
-          rule_hits: row.ruleHits,
-          suggested_topics: row.suggestedTopics,
-          confirmed_rule_hits: row.confirmedRuleHits,
-          rejected_rule_hits: row.rejectedRuleHits,
-          rule_decision: row.ruleDecision,
-          model_decision: row.modelDecision,
-          reclassified_topic: row.reclassifiedTopic || null,
-          final_topic: row.finalTopic || null,
-          decision_source: row.decisionSource,
-          source_row: row.sourceRow,
-        })),
+        rowsForExport.map(buildAnnotatedExportRow),
         (loadedBytes, totalBytes) => {
-          setExportProgress({ label: 'Выгружаем Excel', loadedBytes, totalBytes })
+          setExportProgress({
+            label: mode === 'reclassified' ? 'Выгружаем строки с новой подтематикой' : 'Выгружаем Excel',
+            loadedBytes,
+            totalBytes,
+          })
         },
       )
     },
-    onSuccess: ({ blob, filename }) => {
+    onSuccess: ({ blob, filename }, mode) => {
       const sourceName = sheetData?.filename ?? 'annotated.xlsx'
-      const fallbackName = `${sourceName.replace(/\.[^.]+$/u, '') || 'annotated'}_annotated.xlsx`
+      const fallbackStem = sourceName.replace(/\.[^.]+$/u, '') || 'annotated'
+      const fallbackName = mode === 'reclassified'
+        ? `${fallbackStem}_reclassified_annotated.xlsx`
+        : `${fallbackStem}_annotated.xlsx`
       downloadBlob(blob, filename || fallbackName)
     },
     onSettled: () => setExportProgress(null),
@@ -1670,27 +1737,7 @@ export default function GigaChatPage() {
         sheetData.filename,
         sheetData.sheet_name,
         sheetData.columns,
-        filteredAnnotatedRows.map((row) => ({
-          row_index: row.rowIndex,
-          classification: row.classification,
-          tags: row.tags,
-          local_tags: row.localTags,
-          model_added_tags: row.modelAddedTags,
-          model_rejected_tags: row.modelRejectedTags,
-          match_type: row.matchType || null,
-          evidence: row.evidence || null,
-          tag_decisions: row.tagDecisions || null,
-          rule_hits: row.ruleHits,
-          suggested_topics: row.suggestedTopics,
-          confirmed_rule_hits: row.confirmedRuleHits,
-          rejected_rule_hits: row.rejectedRuleHits,
-          rule_decision: row.ruleDecision,
-          model_decision: row.modelDecision,
-          reclassified_topic: row.reclassifiedTopic || null,
-          final_topic: row.finalTopic || null,
-          decision_source: row.decisionSource,
-          source_row: row.sourceRow,
-        })),
+        filteredAnnotatedRows.map(buildAnnotatedExportRow),
         (loadedBytes, totalBytes) => {
           setExportProgress({ label: 'Готовим validation-файл', loadedBytes, totalBytes })
         },
@@ -1739,9 +1786,20 @@ export default function GigaChatPage() {
     const matchType = extractMatchType(data.response_json)
     const evidence = extractEvidence(data.response_json)
     const tagDecisions = extractTagDecisionSummary(data.response_json)
+    const reclassificationWasRun = Boolean(reclassificationData)
     const secondPassReclassifiedTopic = extractReclassifiedTopic(reclassificationData?.response_json)
     const reclassifiedTopic = secondPassReclassifiedTopic || extractReclassifiedTopic(data.response_json)
-    const classification = secondPassReclassifiedTopic || extractClassification(data.response_json)
+    const primaryClassification = extractClassification(data.response_json)
+    const sourceClassificationField = (
+      reclassificationRules.find((rule) => rule.source_field.trim())?.source_field
+      || ''
+    )
+    const sourceClassification = sourceClassificationField
+      ? String(row[sourceClassificationField] ?? '').trim()
+      : primaryClassification
+    const newClassification = normalizeReclassificationTopicValue(reclassifiedTopic)
+    const isReclassified = Boolean(newClassification)
+    const classification = primaryClassification || sourceClassification || ''
     const finalTopic = reclassifiedTopic || classification
     const confirmedLocalTags = localTags.filter((tag) => {
       if (confirmedRuleHits.includes(tag)) return true
@@ -1757,8 +1815,10 @@ export default function GigaChatPage() {
         rejectedRuleHits.length ? `rejected: ${rejectedRuleHits.join(', ')}` : '',
       ].filter(Boolean).join('; ')
       : localRuleHits.length ? 'pending_in_model_response' : 'no_rule_hits'
-    const modelDecision = secondPassReclassifiedTopic
+    const modelDecision = isReclassified
       ? 'reclassified_by_second_request'
+      : reclassificationWasRun
+      ? 'reclassification_no_change'
       : !data.parse_ok
       ? 'raw_response'
       : modelAddedTags.length
@@ -1774,6 +1834,8 @@ export default function GigaChatPage() {
                 : 'empty_result'
     const decisionSource = secondPassReclassifiedTopic
       ? 'llm_reclassification'
+      : reclassificationWasRun
+      ? 'llm_reclassification'
       : modelAddedTags.length
       ? 'llm_semantic'
       : modelRejectedTags.length
@@ -1787,6 +1849,9 @@ export default function GigaChatPage() {
       rowKey,
       rowIndex,
       classification,
+      newClassification,
+      sourceClassification,
+      isReclassified,
       tags: finalTags,
       localTags,
       modelAddedTags,
@@ -2302,8 +2367,12 @@ export default function GigaChatPage() {
     }),
     [annotatedRows, annotatedClassFilter, annotatedTagFilter, annotatedRuleFilter, annotatedDecisionSourceFilter],
   )
+  const reclassifiedAnnotatedRows = useMemo(
+    () => filteredAnnotatedRows.filter((row) => isAnnotatedRowReclassified(row)),
+    [filteredAnnotatedRows],
+  )
   const virtualAnnotatedTable = useVirtualTableRows(filteredAnnotatedRows, annotatedTable.rowClamp === 'all' ? 148 : 112)
-  const annotatedTableColumnCount = 13 + (sheetData?.columns.length ?? 0)
+  const annotatedTableColumnCount = 14 + (sheetData?.columns.length ?? 0)
   const totalTokenCost = useMemo(
     () => (tokenAccounting.totalTokens / 1000) * tokenAccounting.pricePer1k,
     [tokenAccounting.totalTokens, tokenAccounting.pricePer1k],
@@ -3373,10 +3442,17 @@ export default function GigaChatPage() {
         {annotatedRows.length ? <div className='transport-actions'>
           <button
             type='button'
-            onClick={() => exportAnnotatedRows.mutate()}
+            onClick={() => exportAnnotatedRows.mutate('filtered')}
             disabled={exportBusy}
           >
             {exportAnnotatedRows.isPending ? 'Выгружаем Excel...' : 'Выгрузить в Excel'}
+          </button>
+          <button
+            type='button'
+            onClick={() => exportAnnotatedRows.mutate('reclassified')}
+            disabled={exportBusy || !reclassifiedAnnotatedRows.length}
+          >
+            Выгрузить с новой подтематикой ({reclassifiedAnnotatedRows.length})
           </button>
           <button
             type='button'
@@ -3481,6 +3557,7 @@ export default function GigaChatPage() {
             </select>
           </label>
           <span className='lab-muted'>В таблице: {filteredAnnotatedRows.length} из {annotatedRows.length}</span>
+          <span className='lab-muted'>С новой подтематикой: {reclassifiedAnnotatedRows.length}</span>
           <span className='lab-muted'>Отрисовано сейчас: {virtualAnnotatedTable.virtualRows.length}</span>
         </div>
 
@@ -3498,6 +3575,19 @@ export default function GigaChatPage() {
                       aria-label='Изменить ширину колонки Класс'
                       onMouseDown={(e) => annotatedTable.startColumnResize(e, '__classification')}
                       onDoubleClick={() => annotatedTable.resetColumnWidth('__classification')}
+                    />
+                  </div>
+                </th>
+                <th style={annotatedTable.getColumnStyle('__new_class')}>
+                  <div className='table-simple-header-cell'>
+                    <span>Новая подтематика</span>
+                    <button
+                      type='button'
+                      className='table-column-resizer'
+                      title='Потяните, чтобы изменить ширину колонки. Двойной клик сбрасывает ширину.'
+                      aria-label='Изменить ширину колонки Новая подтематика'
+                      onMouseDown={(e) => annotatedTable.startColumnResize(e, '__new_class')}
+                      onDoubleClick={() => annotatedTable.resetColumnWidth('__new_class')}
                     />
                   </div>
                 </th>
@@ -3685,6 +3775,25 @@ export default function GigaChatPage() {
                     onMouseLeave={hideAnnotatedCellPopover}
                   >
                     {row.classification || '—'}
+                  </div>
+                </td>
+                <td
+                  className={isAnnotatedRowReclassified(row) ? 'annotated-new-class-cell reclassified' : 'annotated-new-class-cell'}
+                  style={annotatedTable.getColumnStyle('__new_class')}
+                >
+                  <div
+                    className={annotatedTable.cellClampClassName}
+                    style={annotatedTable.cellClampStyle}
+                    onMouseEnter={(e) => showAnnotatedCellPopover(
+                      e,
+                      'Новая подтематика',
+                      normalizeReclassificationTopicValue(row.newClassification)
+                        ? `${normalizeReclassificationTopicValue(row.newClassification)}\nТекущий класс: ${row.sourceClassification || row.classification || '—'}`
+                        : '—',
+                    )}
+                    onMouseLeave={hideAnnotatedCellPopover}
+                  >
+                    {normalizeReclassificationTopicValue(row.newClassification) || '—'}
                   </div>
                 </td>
                 <td style={annotatedTable.getColumnStyle('__tags')}>

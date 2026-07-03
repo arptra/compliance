@@ -9,6 +9,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from complaints_trends.api import create_app
+from complaints_trends.api.services.gigachat_lab_service import GigaChatLabService
 
 
 def _setup(tmp_path: Path):
@@ -383,3 +384,9 @@ def test_gigachat_reclassification_run_uses_closed_topic_list(monkeypatch, tmp_p
     request_user_message = payload["request_payload"]["messages"][1]["content"]
     assert "Не пришел транш за семестр." in request_user_message
     assert "лишняя колонка" not in request_user_message
+    assert "по смыслу" in request_user_message
+
+    values = {"reclassification_prompt_notes": json.dumps(rules, ensure_ascii=False)}
+    for marker in ("—", "нет изменений", "same topic", None):
+        sanitized = GigaChatLabService._sanitize_reclassification_response({"reclassified_topic": marker}, values)
+        assert sanitized["reclassified_topic"] == ""

@@ -465,6 +465,9 @@ class GigaChatBackgroundTaskResultResponse(BaseModel):
 class GigaChatAnnotatedExportRow(BaseModel):
     row_index: int | None = None
     classification: str = ""
+    new_class: str = ""
+    source_classification: str = ""
+    is_reclassified: bool = False
     tags: list[str] = Field(default_factory=list)
     local_tags: list[str] = Field(default_factory=list)
     model_added_tags: list[str] = Field(default_factory=list)

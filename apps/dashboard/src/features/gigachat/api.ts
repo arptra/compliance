@@ -247,6 +247,9 @@ export function exportGigaChatAnnotatedWorkbook(
   rows: Array<{
     row_index?: number | null
     classification: string
+    new_class?: string | null
+    source_classification?: string | null
+    is_reclassified?: boolean
     tags: string[]
     local_tags?: string[]
     model_added_tags?: string[]
@@ -282,6 +285,9 @@ export function exportGigaChatValidationWorkbook(
   rows: Array<{
     row_index?: number | null
     classification: string
+    new_class?: string | null
+    source_classification?: string | null
+    is_reclassified?: boolean
     tags: string[]
     local_tags?: string[]
     model_added_tags?: string[]
