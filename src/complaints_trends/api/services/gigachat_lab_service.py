@@ -147,7 +147,7 @@ class GigaChatLabService:
         {"key": "user_prompt_prefix", "label": "User prompt prefix", "input_type": "textarea", "section": "Промпты", "help_text": "Дополнительный текст перед пользовательским payload."},
         {"key": "context_notes", "label": "Context notes", "input_type": "textarea", "section": "Промпты", "help_text": "Текстовые инструкции про контекст, листы Excel и особенности эксперимента."},
         {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
-        {"key": "reclassification_prompt_notes", "label": "Reclassification rules", "input_type": "textarea", "section": "Переклассификация", "help_text": "JSON-массив правил переклассификации: name, source_field, context_field, prompt."},
+        {"key": "reclassification_prompt_notes", "label": "Reclassification rules", "input_type": "textarea", "section": "Переклассификация", "help_text": "JSON-массив правил переклассификации: name, source_field, context_field/context_fields, prompt."},
     ]
     _background_lock = threading.Lock()
     _background_cancel_flags: dict[str, threading.Event] = {}
@@ -763,19 +763,20 @@ class GigaChatLabService:
         context_column = find_column("context_field", "context field", "поле контекста", "контекст")
         prompt_column = find_column("prompt_field", "prompt", "description", "описание", "описание переклассификации")
         if not name_column or not source_column or not context_column or not prompt_column:
-            raise ValueError("В Excel должны быть колонки: name, src_field, context_field, prompt_field.")
+            raise ValueError("В Excel должны быть колонки: name, src_field, context_field, prompt_field. В context_field можно перечислить несколько колонок через запятую или перенос строки.")
 
         rules: list[GigaChatReclassificationRuleImportItem] = []
         for row_index, row in df.iterrows():
             name = self._cell_text(row.get(name_column))
             source_field = self._cell_text(row.get(source_column))
-            context_field = self._cell_text(row.get(context_column))
+            context_fields = self._split_rule_list(row.get(context_column))
+            context_field = context_fields[0] if context_fields else ""
             prompt = self._cell_text(row.get(prompt_column))
-            if not name and not source_field and not context_field and not prompt:
+            if not name and not source_field and not context_fields and not prompt:
                 continue
             if not name:
                 raise ValueError(f"Строка {row_index + 2}: заполните name.")
-            if not source_field and not context_field:
+            if not source_field and not context_fields:
                 raise ValueError(f"Строка {row_index + 2}: заполните src_field или context_field.")
             if not prompt:
                 raise ValueError(f"Строка {row_index + 2}: заполните prompt_field.")
@@ -784,6 +785,7 @@ class GigaChatLabService:
                     name=name,
                     source_field=source_field,
                     context_field=context_field,
+                    context_fields=context_fields,
                     prompt=prompt,
                 )
             )
@@ -2247,20 +2249,24 @@ class GigaChatLabService:
                 elif isinstance(parsed, dict):
                     raw_items = [parsed]
 
-        rules: list[dict[str, str]] = []
+        rules: list[dict[str, Any]] = []
         for item in raw_items:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or item.get("title") or item.get("code") or "").strip()
             source_field = str(item.get("source_field") or item.get("sourceField") or "").strip()
-            context_field = str(item.get("context_field") or item.get("contextField") or "").strip()
-            if not source_field and not context_field:
+            context_fields = cls._split_rule_list(item.get("context_fields") or item.get("contextFields"))
+            legacy_context_field = str(item.get("context_field") or item.get("contextField") or "").strip()
+            if legacy_context_field and legacy_context_field not in context_fields:
+                context_fields.insert(0, legacy_context_field)
+            if not source_field and not context_fields:
                 continue
             prompt = str(item.get("prompt") or item.get("description") or "").strip()
             rules.append({
                 "name": name,
                 "source_field": source_field,
-                "context_field": context_field,
+                "context_field": context_fields[0] if context_fields else "",
+                "context_fields": context_fields,
                 "prompt": prompt,
             })
 
@@ -2276,6 +2282,7 @@ class GigaChatLabService:
             "name": "",
             "source_field": source_field,
             "context_field": context_field,
+            "context_fields": [context_field] if context_field else [],
             "prompt": prompt,
         }]
 
@@ -2303,7 +2310,7 @@ class GigaChatLabService:
             *[
                 field
                 for rule in cls._parse_reclassification_rules(values)
-                for field in (rule["source_field"], rule["context_field"])
+                for field in [rule["source_field"], *rule.get("context_fields", [])]
             ],
         ]:
             if column and column not in merged:
@@ -2329,8 +2336,8 @@ class GigaChatLabService:
     def _reclassification_prompt_columns(cls, values: dict[str, Any], fallback_columns: list[str]) -> list[str]:
         merged: list[str] = []
         for rule in cls._parse_reclassification_rules(values):
-            for key in ("source_field", "context_field"):
-                column = str(rule.get(key) or "").strip()
+            for column in [rule.get("source_field"), *rule.get("context_fields", [])]:
+                column = str(column or "").strip()
                 if column and column not in merged:
                     merged.append(column)
         if merged:

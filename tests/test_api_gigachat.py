@@ -235,7 +235,7 @@ def test_gigachat_import_reclassification_rules_from_excel(tmp_path: Path):
             {
                 "name": "Проблема с траншем",
                 "src_field": "Во. Подтематика",
-                "context_field": "Обр. Описание",
+                "context_field": "Обр. Описание, Обр. Результат суммаризации диалога",
                 "prompt_field": "Задержка очередного транша или оплаты семестра.",
             },
             {
@@ -266,12 +266,14 @@ def test_gigachat_import_reclassification_rules_from_excel(tmp_path: Path):
             "name": "Проблема с траншем",
             "source_field": "Во. Подтематика",
             "context_field": "Обр. Описание",
+            "context_fields": ["Обр. Описание", "Обр. Результат суммаризации диалога"],
             "prompt": "Задержка очередного транша или оплаты семестра.",
         },
         {
             "name": "Проблема с заявкой",
             "source_field": "Во. Тематика",
             "context_field": "Обр. Результат суммаризации диалога",
+            "context_fields": ["Обр. Результат суммаризации диалога"],
             "prompt": "Заявка на образовательный кредит зависла или не рассмотрена.",
         },
     ]
@@ -360,6 +362,7 @@ def test_gigachat_reclassification_run_uses_closed_topic_list(monkeypatch, tmp_p
             "name": "Проблема с траншем",
             "source_field": "Текущая тема",
             "context_field": "Контекст обращения",
+            "context_fields": ["Контекст обращения", "Суммаризация"],
             "prompt": "Задержка очередного транша или оплаты семестра.",
         }
     ]
@@ -372,6 +375,7 @@ def test_gigachat_reclassification_run_uses_closed_topic_list(monkeypatch, tmp_p
             "row": {
                 "Текущая тема": "Образовательный кредит",
                 "Контекст обращения": "Не пришел транш за семестр.",
+                "Суммаризация": "Клиент жалуется на задержку оплаты учебного периода.",
                 "extra": "лишняя колонка",
             },
             "reclassification_only": True,
@@ -383,6 +387,7 @@ def test_gigachat_reclassification_run_uses_closed_topic_list(monkeypatch, tmp_p
     assert payload["response_json"]["reclassified_topic"] == ""
     request_user_message = payload["request_payload"]["messages"][1]["content"]
     assert "Не пришел транш за семестр." in request_user_message
+    assert "Клиент жалуется на задержку оплаты учебного периода." in request_user_message
     assert "лишняя колонка" not in request_user_message
     assert "по смыслу" in request_user_message
 

@@ -91,6 +91,7 @@ export type GigaChatReclassificationRuleImportItem = {
   name: string
   source_field: string
   context_field: string
+  context_fields: string[]
   prompt: string
 }
 

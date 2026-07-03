@@ -380,6 +380,7 @@ class GigaChatReclassificationRuleImportItem(BaseModel):
     name: str
     source_field: str = ""
     context_field: str = ""
+    context_fields: list[str] = Field(default_factory=list)
     prompt: str = ""
 
 

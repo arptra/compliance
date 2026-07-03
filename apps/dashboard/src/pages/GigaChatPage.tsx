@@ -63,13 +63,14 @@ type ReclassificationRule = {
   name: string
   source_field: string
   context_field: string
+  context_fields: string[]
   prompt: string
 }
 type ReclassificationDraft = {
   editingIndex: number | null
   name: string
   sourceField: string
-  contextField: string
+  contextFields: string[]
   prompt: string
 }
 const WORKBOOK_UPLOAD_TIMEOUT_MS = 15_000
@@ -357,18 +358,35 @@ function stringifyJson(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function splitReclassificationFieldList(value: unknown) {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)))
+  }
+  if (value === null || value === undefined) return []
+  return Array.from(new Set(String(value)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .flatMap((chunk) => chunk.split(','))
+    .map((item) => item.trim())
+    .filter(Boolean)))
+}
+
 function normalizeReclassificationRule(value: unknown): ReclassificationRule | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const item = value as Record<string, unknown>
   const name = String(item.name ?? item.title ?? item.code ?? '').trim()
   const sourceField = String(item.source_field ?? item.sourceField ?? '').trim()
-  const contextField = String(item.context_field ?? item.contextField ?? '').trim()
+  const contextFields = splitReclassificationFieldList(item.context_fields ?? item.contextFields)
+  const legacyContextField = String(item.context_field ?? item.contextField ?? '').trim()
+  if (legacyContextField && !contextFields.includes(legacyContextField)) contextFields.unshift(legacyContextField)
+  const contextField = contextFields[0] ?? ''
   const prompt = String(item.prompt ?? item.description ?? '').trim()
-  if (!sourceField && !contextField) return null
+  if (!sourceField && !contextFields.length) return null
   return {
     name,
     source_field: sourceField,
     context_field: contextField,
+    context_fields: contextFields,
     prompt,
   }
 }
@@ -406,6 +424,7 @@ function parseReclassificationRules(value: unknown, fallbackValues?: Record<stri
     name: '',
     source_field: sourceField,
     context_field: contextField,
+    context_fields: contextField ? [contextField] : [],
     prompt: String(fallbackValues?.reclassification_prompt ?? '').trim(),
   }]
 }
@@ -415,14 +434,20 @@ function serializeReclassificationRules(items: ReclassificationRule[]) {
 }
 
 function formatReclassificationRuleTitle(rule: ReclassificationRule) {
-  return rule.name || `${rule.source_field || 'Без поля темы'} → ${rule.context_field || 'без поля контекста'}`
+  const contextFields = getReclassificationRuleContextFields(rule)
+  return rule.name || `${rule.source_field || 'Без поля темы'} → ${contextFields.join(', ') || 'без поля контекста'}`
+}
+
+function getReclassificationRuleContextFields(rule: ReclassificationRule) {
+  return rule.context_fields?.length ? rule.context_fields : splitReclassificationFieldList(rule.context_field)
 }
 
 function canRunReclassificationRule(rule: ReclassificationRule) {
+  const contextFields = getReclassificationRuleContextFields(rule)
   return Boolean(
-    rule.name.trim()
-    && rule.prompt.trim()
-    && (rule.source_field.trim() || rule.context_field.trim()),
+    String(rule.name ?? '').trim()
+    && String(rule.prompt ?? '').trim()
+    && (String(rule.source_field ?? '').trim() || contextFields.length),
   )
 }
 
@@ -432,7 +457,7 @@ function getReclassificationRuleFieldStatus(
 ): ReclassificationRuleFieldStatus {
   if (!availableFields) return { valid: true, missing: [] }
   const available = new Set(availableFields)
-  const configuredFields = [rule.source_field, rule.context_field]
+  const configuredFields = [rule.source_field, ...getReclassificationRuleContextFields(rule)]
     .map((field) => field.trim())
     .filter(Boolean)
   const missing = configuredFields.filter((field) => !available.has(field))
@@ -926,7 +951,7 @@ export default function GigaChatPage() {
     editingIndex: null,
     name: '',
     sourceField: '',
-    contextField: '',
+    contextFields: [],
     prompt: '',
   })
   const [uploadCollapsed, setUploadCollapsed] = useState(false)
@@ -1211,12 +1236,13 @@ export default function GigaChatPage() {
 
   const openReclassificationRule = (index: number | null) => {
     const rule = index === null ? null : reclassificationRules[index]
+    const contextFields = rule ? getReclassificationRuleContextFields(rule) : []
     setReclassificationSaveStatus({ type: 'idle', message: '' })
     setReclassificationDraft({
       editingIndex: index,
       name: rule?.name ?? '',
       sourceField: rule?.source_field ?? '',
-      contextField: rule?.context_field ?? '',
+      contextFields,
       prompt: rule?.prompt ?? '',
     })
     setReclassificationOpen(true)
@@ -1265,13 +1291,15 @@ export default function GigaChatPage() {
   }
 
   const saveReclassificationRule = () => {
+    const contextFields = Array.from(new Set(reclassificationDraftContextFields.map((field) => field.trim()).filter(Boolean)))
     const nextRule: ReclassificationRule = {
       name: reclassificationDraft.name.trim(),
       source_field: reclassificationDraft.sourceField.trim(),
-      context_field: reclassificationDraft.contextField.trim(),
+      context_field: contextFields[0] ?? '',
+      context_fields: contextFields,
       prompt: reclassificationDraft.prompt.trim(),
     }
-    if (!nextRule.name || !nextRule.prompt || (!nextRule.source_field && !nextRule.context_field)) return
+    if (!nextRule.name || !nextRule.prompt || (!nextRule.source_field && !nextRule.context_fields.length)) return
     const fieldStatus = getReclassificationRuleFieldStatus(nextRule, sheetData?.columns ?? null)
     if (!fieldStatus.valid) {
       setReclassificationSaveStatus({
@@ -1299,12 +1327,16 @@ export default function GigaChatPage() {
     setReclassificationSaveStatus({ type: 'saving', message: `Читаем правила переклассификации из "${file.name}"...` })
     try {
       const data = await importGigaChatReclassificationRules(file)
-      const importedRules = data.rules.map((rule) => ({
-        name: rule.name.trim(),
-        source_field: rule.source_field.trim(),
-        context_field: rule.context_field.trim(),
-        prompt: rule.prompt.trim(),
-      }))
+      const importedRules = data.rules.map((rule) => {
+        const contextFields = splitReclassificationFieldList(rule.context_fields?.length ? rule.context_fields : rule.context_field)
+        return {
+          name: rule.name.trim(),
+          source_field: rule.source_field.trim(),
+          context_field: contextFields[0] ?? '',
+          context_fields: contextFields,
+          prompt: rule.prompt.trim(),
+        }
+      })
       persistReclassificationRules(importedRules, false, {
         saving: `Excel прочитан: ${data.imported_count}. Записываем правила переклассификации в профиль...`,
         saved: (profileTitle) => `Из Excel загружено ${data.imported_count} правил и записано в профиль "${profileTitle}".`,
@@ -1562,19 +1594,21 @@ export default function GigaChatPage() {
   )
   const currentSheetColumnSet = useMemo(() => new Set(sheetData?.columns ?? []), [sheetData?.columns])
   const isReclassificationFieldMissing = (field: string) => (
-    Boolean(sheetData && field.trim() && !currentSheetColumnSet.has(field.trim()))
+    Boolean(sheetData && String(field ?? '').trim() && !currentSheetColumnSet.has(String(field ?? '').trim()))
   )
+  const reclassificationDraftContextFields = splitReclassificationFieldList(reclassificationDraft.contextFields)
   const reclassificationDraftSourceMissing = isReclassificationFieldMissing(reclassificationDraft.sourceField)
-  const reclassificationDraftContextMissing = isReclassificationFieldMissing(reclassificationDraft.contextField)
+  const reclassificationDraftMissingContextFields = reclassificationDraftContextFields.filter((field) => isReclassificationFieldMissing(field))
+  const reclassificationDraftContextMissing = reclassificationDraftMissingContextFields.length > 0
   const reclassificationColumnOptions = useMemo(() => {
     const columns = sheetData?.columns ?? []
     return Array.from(new Set([
       ...columns,
-      ...reclassificationRules.flatMap((rule) => [rule.source_field, rule.context_field]),
+      ...reclassificationRules.flatMap((rule) => [rule.source_field, ...getReclassificationRuleContextFields(rule)]),
       String(settingValues.reclassification_source_field ?? '').trim(),
       String(settingValues.reclassification_context_field ?? '').trim(),
       reclassificationDraft.sourceField.trim(),
-      reclassificationDraft.contextField.trim(),
+      ...reclassificationDraftContextFields.map((field) => field.trim()),
     ].filter(Boolean)))
   }, [
     sheetData?.columns,
@@ -1582,7 +1616,7 @@ export default function GigaChatPage() {
     settingValues.reclassification_source_field,
     settingValues.reclassification_context_field,
     reclassificationDraft.sourceField,
-    reclassificationDraft.contextField,
+    reclassificationDraftContextFields,
   ])
   const reclassificationAvailableColumnOptions = useMemo(
     () => reclassificationColumnOptions.filter((column) => !isReclassificationFieldMissing(column)),
@@ -1596,7 +1630,7 @@ export default function GigaChatPage() {
   const canSaveReclassificationDraft = (
     Boolean(reclassificationDraft.name.trim())
     && Boolean(reclassificationDraft.prompt.trim())
-    && Boolean(reclassificationDraft.sourceField.trim() || reclassificationDraft.contextField.trim())
+    && Boolean(reclassificationDraft.sourceField.trim() || reclassificationDraftContextFields.length)
     && !hasReclassificationDraftMissingFields
   )
   const renderReclassificationColumnOptions = (prefix: string) => <>
@@ -2831,24 +2865,60 @@ export default function GigaChatPage() {
                   </span>
                 </label>
 
-                <label className={`lab-field ${reclassificationDraftContextMissing ? 'missing-field' : ''}`}>
+                <div className={`lab-field ${reclassificationDraftContextMissing ? 'missing-field' : ''}`}>
                   <span>Поле контекста</span>
-                  <select
-                    className={reclassificationDraftContextMissing ? 'missing-field-control' : ''}
-                    value={reclassificationDraft.contextField}
-                    onChange={(event) => {
-                      setReclassificationDraft((current) => ({ ...current, contextField: event.target.value }))
-                      setReclassificationSaveStatus({ type: 'idle', message: '' })
-                    }}
-                  >
-                    {renderReclassificationColumnOptions('reclassification-context')}
-                  </select>
+                  <div className={`rule-source-field-picker ${reclassificationDraftContextMissing ? 'missing-field-control' : ''}`}>
+                    <div className='rule-source-selected'>
+                      {reclassificationDraftContextFields.length ? reclassificationDraftContextFields.map((field) => {
+                        const missing = isReclassificationFieldMissing(field)
+                        return <button
+                          key={`reclassification-context-selected-${field}`}
+                          type='button'
+                          className={missing ? 'missing' : ''}
+                          title='Убрать поле из контекста'
+                          onClick={() => {
+                            setReclassificationDraft((current) => ({
+                              ...current,
+                              contextFields: current.contextFields.filter((item) => item !== field),
+                            }))
+                            setReclassificationSaveStatus({ type: 'idle', message: '' })
+                          }}
+                        >
+                          {field} ×
+                        </button>
+                      }) : <span className='lab-muted'>Не выбрано</span>}
+                    </div>
+                    <div className='rule-source-options'>
+                      {reclassificationAvailableColumnOptions.map((column) => {
+                        const selected = reclassificationDraftContextFields.includes(column)
+                        return <button
+                          key={`reclassification-context-option-${column}`}
+                          type='button'
+                          className={selected ? 'selected' : ''}
+                          disabled={selected}
+                          onClick={() => {
+                            if (selected) return
+                            setReclassificationDraft((current) => ({
+                              ...current,
+                              contextFields: [...current.contextFields, column],
+                            }))
+                            setReclassificationSaveStatus({ type: 'idle', message: '' })
+                          }}
+                        >
+                          <span className='rule-source-field-option'>
+                            <span>{selected ? '✓' : '+'}</span>
+                            <span>{column}</span>
+                          </span>
+                        </button>
+                      })}
+                    </div>
+                  </div>
                   <span className={reclassificationDraftContextMissing ? 'lab-field-help missing-field-help' : 'lab-field-help'}>
                     {reclassificationDraftContextMissing
-                      ? `Колонки "${reclassificationDraft.contextField}" нет в текущем рабочем листе. Правило будет неактивным.`
-                      : 'Колонка с текстом, суммаризацией или другим контекстом для проверки темы.'}
+                      ? `Колонок ${reclassificationDraftMissingContextFields.join(', ')} нет в текущем рабочем листе. Правило будет неактивным.`
+                      : 'Колонки с текстом, суммаризацией или другим контекстом для проверки темы.'}
                   </span>
-                </label>
+                </div>
 
                 <label className='lab-field wide'>
                   <span>Описание переклассификации</span>
@@ -2900,7 +2970,7 @@ export default function GigaChatPage() {
                   />
                 </label>
               </div>
-              <div className='lab-muted'>Ожидаемые колонки: name, src_field, context_field, prompt_field.</div>
+              <div className='lab-muted'>Ожидаемые колонки: name, src_field, context_field, prompt_field. В context_field можно указать несколько колонок через запятую или перенос строки.</div>
               {reclassificationSaveStatus.message ? <div className={reclassificationSaveStatus.type === 'error' ? 'transport-error' : 'lab-muted'}>
                 {reclassificationSaveStatus.message}
               </div> : null}
@@ -2909,8 +2979,9 @@ export default function GigaChatPage() {
                 {reclassificationRules.map((rule, index) => {
                   const status = reclassificationRuleStatuses[index] ?? { valid: true, missing: [] }
                   const active = canRunReclassificationRule(rule) && status.valid
+                  const contextFields = getReclassificationRuleContextFields(rule)
                   return <div
-                    key={`${rule.name}-${rule.source_field}-${rule.context_field}-${index}`}
+                    key={`${rule.name}-${rule.source_field}-${contextFields.join('|')}-${index}`}
                     className={`labeling-rule-card reclassification-rule-card ${active ? 'active' : 'inactive'}${status.valid ? '' : ' missing-fields'}`}
                   >
                     <div className='labeling-rule-copy'>
@@ -2919,7 +2990,7 @@ export default function GigaChatPage() {
                       <div className='labeling-rule-description'>{rule.prompt}</div>
                       <div className='labeling-rule-meta'>
                         <span className={rule.source_field && status.missing.includes(rule.source_field) ? 'reclassification-field-missing' : ''}>Поле темы: {rule.source_field || '—'}</span>
-                        <span className={rule.context_field && status.missing.includes(rule.context_field) ? 'reclassification-field-missing' : ''}>Контекст: {rule.context_field || '—'}</span>
+                        <span className={contextFields.some((field) => status.missing.includes(field)) ? 'reclassification-field-missing' : ''}>Контекст: {contextFields.join(', ') || '—'}</span>
                         <span className={`reclassification-status-badge ${active ? 'active' : 'inactive'}`}>{active ? 'Активно' : 'Неактивно'}</span>
                       </div>
                     </div>
