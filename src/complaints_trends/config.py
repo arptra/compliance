@@ -81,9 +81,12 @@ class LLMConfig(AppBaseModel):
     system_prompt: str = "Ты обязан вернуть ТОЛЬКО JSON без markdown. Никаких комментариев."
     user_prompt_prefix: str = ""
     context_notes: str = ""
-    classification_prompt_notes: str = ""
     tagging_prompt_notes: str = ""
     rule_pack_prompt_notes: str = ""
+    reclassification_prompt_notes: str = ""
+    reclassification_source_field: str = ""
+    reclassification_context_field: str = ""
+    reclassification_prompt: str = ""
 
 
 class PrepareConfig(AppBaseModel):

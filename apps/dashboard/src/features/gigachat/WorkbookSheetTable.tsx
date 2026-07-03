@@ -28,6 +28,9 @@ export function WorkbookSheetTable({
   onExportRows,
   onSelectRuleHitRows,
   onSelectNoRuleHitRows,
+  reclassificationRequestsEnabled,
+  reclassificationRequestsAvailable,
+  onToggleReclassificationRequests,
   batchBusy,
   exportBusy,
   exportPending,
@@ -60,6 +63,9 @@ export function WorkbookSheetTable({
   onExportRows: (rows: Array<{ rowIndex: number; row: Record<string, unknown>; evaluation?: GigaChatRuleEvaluationRow }>) => void
   onSelectRuleHitRows: () => void
   onSelectNoRuleHitRows: () => void
+  reclassificationRequestsEnabled: boolean
+  reclassificationRequestsAvailable: boolean
+  onToggleReclassificationRequests: (checked: boolean) => void
   batchBusy?: boolean
   exportBusy?: boolean
   exportPending?: boolean
@@ -181,6 +187,15 @@ export function WorkbookSheetTable({
     </div>
 
     {!tableReadOnly ? <div className='transport-actions workbook-batch-actions'>
+      <label className='workbook-reclassification-toggle'>
+        <input
+          type='checkbox'
+          checked={reclassificationRequestsEnabled}
+          disabled={Boolean(busy) || !reclassificationRequestsAvailable}
+          onChange={(e) => onToggleReclassificationRequests(e.target.checked)}
+        />
+        <span>Отправлять запросы на переклассификацию</span>
+      </label>
       <label className='workbook-select-all'>
         <input type='checkbox' checked={allVisibleRowsSelected} disabled={Boolean(busy)} onChange={(e) => onToggleAllRows(e.target.checked)} />
         <span>Выбрать все</span>

@@ -21,6 +21,7 @@ from ..schemas import (
     GigaChatLabSettingsVersionResponse,
     GigaChatLabSettingsVersionsResponse,
     GigaChatLabSettingsVersionUpdateRequest,
+    GigaChatReclassificationRulesImportResponse,
     GigaChatRuleEvaluationRequest,
     GigaChatRuleEvaluationResponse,
     GigaChatTransportProbeRequest,
@@ -149,6 +150,18 @@ async def import_rule_packs(version_id: str, file: UploadFile = File(...), autho
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/lab/settings/reclassification-rules/import", response_model=GigaChatReclassificationRulesImportResponse)
+async def import_reclassification_rules(file: UploadFile = File(...), services=Depends(get_service_container)):
+    try:
+        content = await file.read()
+        return services["gigachat_lab"].import_reclassification_rules_workbook(
+            file.filename or "reclassification_rules.xlsx",
+            content,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

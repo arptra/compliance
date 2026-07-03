@@ -36,6 +36,8 @@ from ..schemas import (
     GigaChatRuleHit,
     GigaChatRulePack,
     GigaChatRulePackFilter,
+    GigaChatReclassificationRuleImportItem,
+    GigaChatReclassificationRulesImportResponse,
     GigaChatLabSettingField,
     GigaChatLabSettingOption,
     GigaChatLabSettingsResponse,
@@ -70,9 +72,20 @@ class _WorkbookUploadCancelled(Exception):
 class GigaChatLabService:
     DEFAULT_SYSTEM_PROMPT = (
         "Ты обязан вернуть только валидный JSON без markdown, без пояснений вне JSON и без служебного текста. "
-        "Размечай одно клиентское обращение за раз, используй все доступные поля строки и не выдумывай факты, классы или теги."
+        "Размечай одно клиентское обращение за раз, используй все доступные поля строки и не выдумывай факты, категории или теги."
     )
     DEFAULT_USER_PROMPT_PREFIX = (
+        "Разметь одну запись и верни JSON с полями: "
+        "client_first_message, short_summary, is_complaint, complaint_category, complaint_subcategory, "
+        "product_area, loan_product, severity, keywords, assigned_tags, local_tags, model_added_tags, "
+        "model_rejected_tags, reclassified_topic, confirmed_rule_hits, rejected_rule_hits, tag_decisions, "
+        "match_type, evidence, confidence, notes, evidence_columns. "
+        "Сначала определи, является ли запись жалобой. Затем выбери основную категорию, при необходимости подкатегорию, "
+        "назначь только разрешенные теги, при необходимости подтверди или отвергни подсказки rule-based движка, "
+        "оцени severity и confidence, а в notes кратко объясни решение. "
+        "Если категория неочевидна, верни пустую строку в complaint_category и объясни причину в notes."
+    )
+    LEGACY_CLASS_USER_PROMPT_PREFIX = (
         "Разметь одну запись и верни JSON с полями: "
         "client_first_message, short_summary, is_complaint, complaint_category, complaint_subcategory, "
         "product_area, loan_product, severity, keywords, assigned_tags, local_tags, model_added_tags, "
@@ -83,6 +96,7 @@ class GigaChatLabService:
         "оцени severity и confidence, а в notes кратко объясни решение. Возвращай только классы и теги из разрешенных списков. "
         "Если ни один разрешенный класс не подходит, верни пустую строку в complaint_category и объясни причину в notes."
     )
+    DEFAULT_RECLASSIFICATION_PROMPT = ""
     DEFAULT_CONTEXT_NOTES = (
         "Источник данных: Excel/CSV с клиентскими обращениями. "
         "Одна строка таблицы = одно обращение для разметки. "
@@ -94,8 +108,9 @@ class GigaChatLabService:
         "system_prompt",
         "user_prompt_prefix",
         "context_notes",
-        "classification_prompt_notes",
         "rule_pack_prompt_notes",
+        "reclassification_prompt_notes",
+        "reclassification_prompt",
     }
     RULE_FILTER_FIELD_ALIASES: dict[str, list[str]] = {
         "Трайб": ["Во. Группа"],
@@ -109,8 +124,8 @@ class GigaChatLabService:
         {"key": "system_prompt", "label": "System prompt", "input_type": "textarea", "section": "Промпты", "help_text": "Базовый system prompt для экспериментальной разметки."},
         {"key": "user_prompt_prefix", "label": "User prompt prefix", "input_type": "textarea", "section": "Промпты", "help_text": "Дополнительный текст перед пользовательским payload."},
         {"key": "context_notes", "label": "Context notes", "input_type": "textarea", "section": "Промпты", "help_text": "Текстовые инструкции про контекст, листы Excel и особенности эксперимента."},
-        {"key": "classification_prompt_notes", "label": "Классификации", "input_type": "textarea", "section": "Разметка", "help_text": "Правила корзин, категорий и подкатегорий для классификации."},
         {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
+        {"key": "reclassification_prompt_notes", "label": "Reclassification rules", "input_type": "textarea", "section": "Переклассификация", "help_text": "JSON-массив правил переклассификации: name, source_field, context_field, prompt."},
     ]
     _background_lock = threading.Lock()
     _background_cancel_flags: dict[str, threading.Event] = {}
@@ -139,36 +154,6 @@ class GigaChatLabService:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
-
-    @staticmethod
-    def _serialize_rule_items(items: list[dict[str, str]]) -> str:
-        return json.dumps(items, ensure_ascii=False, indent=2)
-
-    def _default_classification_rules(self) -> str:
-        items = [
-            {
-                "name": "Проблема с выдачей очередного транша по Образовательному кредиту",
-                "description": "Единственный класс для правила EDU_RECLASS_TRANCH. Выбирай только когда подтверждена проблема с очередным траншем или семестром по образовательному кредиту.",
-            },
-            {
-                "name": "Проблемы с зачислением средств/ оформлением-рассмотрением заявки",
-                "description": "Единственный класс для правила EDU_RECLASS_APPLICATION. Выбирай только когда подтверждена проблема с зачислением средств, оплатой обучения, вузом, периодом обучения, отчислением или заявкой по образовательному кредиту.",
-            },
-        ]
-        return self._serialize_rule_items(items)
-
-    def _default_tag_rules(self) -> str:
-        items = [
-            {
-                "name": "DRA",
-                "description": "Единственный разрешенный тег. Назначай только когда подтверждено правило DRA/ДРПА по словам про смерть, наследство, каникулы, реструктуризацию, приставов, СВО, суд, исполнительное производство, военный контур или банкротство.",
-            },
-            {
-                "name": "ИПОТЕКА",
-                "description": "Назначай, когда обращение относится к ипотеке, жилищному кредиту, кредиту под залог недвижимости, квартире/дому в залоге, закладной, эскроу, обременению, созаемщику или рефинансированию ипотечного кредита.",
-            },
-        ]
-        return self._serialize_rule_items(items)
 
     def _default_rule_packs(self) -> str:
         items = [
@@ -273,10 +258,13 @@ class GigaChatLabService:
         if not default_system_prompt or default_system_prompt == LLMConfig.model_fields["system_prompt"].default:
             default_system_prompt = self.DEFAULT_SYSTEM_PROMPT
 
-        default_user_prompt_prefix = str(llm.get("user_prompt_prefix", "") or "").strip() or self.DEFAULT_USER_PROMPT_PREFIX
+        default_user_prompt_prefix = str(llm.get("user_prompt_prefix", "") or "").strip()
+        if not default_user_prompt_prefix or default_user_prompt_prefix == self.LEGACY_CLASS_USER_PROMPT_PREFIX:
+            default_user_prompt_prefix = self.DEFAULT_USER_PROMPT_PREFIX
         default_context_notes = str(llm.get("context_notes", "") or "").strip() or self.DEFAULT_CONTEXT_NOTES
-        default_classification_notes = str(llm.get("classification_prompt_notes", "") or "").strip() or self._default_classification_rules()
         default_rule_pack_notes = str(llm.get("rule_pack_prompt_notes", "") or "").strip() or self._default_rule_packs()
+        default_reclassification_notes = str(llm.get("reclassification_prompt_notes", "") or "").strip()
+        default_reclassification_prompt = str(llm.get("reclassification_prompt", "") or "").strip() or self.DEFAULT_RECLASSIFICATION_PROMPT
         return {
             "model": llm.get("model", "GigaChat"),
             "temperature": llm.get("temperature", 0.2),
@@ -285,8 +273,11 @@ class GigaChatLabService:
             "system_prompt": default_system_prompt,
             "user_prompt_prefix": default_user_prompt_prefix,
             "context_notes": default_context_notes,
-            "classification_prompt_notes": default_classification_notes,
             "rule_pack_prompt_notes": default_rule_pack_notes,
+            "reclassification_prompt_notes": default_reclassification_notes,
+            "reclassification_source_field": str(llm.get("reclassification_source_field", "") or "").strip(),
+            "reclassification_context_field": str(llm.get("reclassification_context_field", "") or "").strip(),
+            "reclassification_prompt": default_reclassification_prompt,
         }
 
     def _load_saved_settings(self) -> dict[str, Any]:
@@ -311,6 +302,8 @@ class GigaChatLabService:
             if key not in defaults:
                 continue
             if key in self.DEFAULT_FALLBACK_ON_BLANK_KEYS and (value is None or (isinstance(value, str) and not value.strip())):
+                continue
+            if key == "user_prompt_prefix" and str(value or "").strip() == self.LEGACY_CLASS_USER_PROMPT_PREFIX:
                 continue
             values[key] = value
         return values, saved.get("saved_at")
@@ -720,6 +713,67 @@ class GigaChatLabService:
         )
         return self.save_settings_version(version_id, req, user=user)
 
+    def import_reclassification_rules_workbook(
+        self,
+        filename: str,
+        content: bytes,
+    ) -> GigaChatReclassificationRulesImportResponse:
+        suffix = Path(filename or "reclassification_rules.xlsx").suffix.lower()
+        if suffix == ".csv":
+            df = pd.read_csv(BytesIO(content), dtype=str, keep_default_na=False)
+        elif suffix in {".xlsx", ".xls", ".xlsm"}:
+            df = pd.read_excel(BytesIO(content), sheet_name=0, dtype=str, keep_default_na=False)
+        else:
+            raise ValueError("Загрузите Excel-файл с правилами переклассификации: .xlsx, .xls, .xlsm или .csv.")
+
+        df = self._drop_empty_unnamed_columns(df).fillna("")
+        column_map = {self._normalize_rule_pack_import_header(column): column for column in df.columns}
+
+        def find_column(*aliases: str) -> str | None:
+            for alias in aliases:
+                column = column_map.get(self._normalize_rule_pack_import_header(alias))
+                if column is not None:
+                    return str(column)
+            return None
+
+        name_column = find_column("name", "название", "название переклассификации", "topic", "тема")
+        source_column = find_column("src_field", "source_field", "source field", "поле исходной темы", "исходное поле")
+        context_column = find_column("context_field", "context field", "поле контекста", "контекст")
+        prompt_column = find_column("prompt_field", "prompt", "description", "описание", "описание переклассификации")
+        if not name_column or not source_column or not context_column or not prompt_column:
+            raise ValueError("В Excel должны быть колонки: name, src_field, context_field, prompt_field.")
+
+        rules: list[GigaChatReclassificationRuleImportItem] = []
+        for row_index, row in df.iterrows():
+            name = self._cell_text(row.get(name_column))
+            source_field = self._cell_text(row.get(source_column))
+            context_field = self._cell_text(row.get(context_column))
+            prompt = self._cell_text(row.get(prompt_column))
+            if not name and not source_field and not context_field and not prompt:
+                continue
+            if not name:
+                raise ValueError(f"Строка {row_index + 2}: заполните name.")
+            if not source_field and not context_field:
+                raise ValueError(f"Строка {row_index + 2}: заполните src_field или context_field.")
+            if not prompt:
+                raise ValueError(f"Строка {row_index + 2}: заполните prompt_field.")
+            rules.append(
+                GigaChatReclassificationRuleImportItem(
+                    name=name,
+                    source_field=source_field,
+                    context_field=context_field,
+                    prompt=prompt,
+                )
+            )
+
+        if not rules:
+            raise ValueError("В файле не найдено ни одного правила переклассификации.")
+        return GigaChatReclassificationRulesImportResponse(
+            filename=Path(filename or "reclassification_rules.xlsx").name,
+            imported_count=len(rules),
+            rules=rules,
+        )
+
     def _coerce_setting_value(self, key: str, value: Any) -> Any:
         meta = next((x for x in self.FIELD_DEFS if x["key"] == key), None)
         if meta is None:
@@ -797,11 +851,22 @@ class GigaChatLabService:
             values[key] = self._coerce_setting_value(key, value)
 
         columns = [str(column) for column in req.columns if str(column).strip()]
-        base_payload = req.payload_override or self._compose_final_payload(values, columns)
-        rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
-        rule_evaluation = self._evaluate_rule_hits_for_row(rule_packs, req.row, 0)
+        base_payload = (
+            req.payload_override
+            if req.payload_override and not req.reclassification_only
+            else (
+                self._compose_reclassification_payload(values, columns)
+                if req.reclassification_only
+                else self._compose_final_payload(values, columns)
+            )
+        )
+        rule_evaluation: GigaChatRuleEvaluationRow | None = None
+        if not req.reclassification_only:
+            rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
+            rule_evaluation = self._evaluate_rule_hits_for_row(rule_packs, req.row, 0)
         rendered_payload = self._render_payload_for_row(base_payload, req.row)
-        rendered_payload = self._inject_row_rule_context(rendered_payload, rule_evaluation)
+        if rule_evaluation is not None:
+            rendered_payload = self._inject_row_rule_context(rendered_payload, rule_evaluation)
 
         llm_cfg = self.cfg.llm.model_copy(deep=True)
         llm_cfg = self.apply_llm_overrides(llm_cfg)
@@ -823,6 +888,8 @@ class GigaChatLabService:
             parse_ok = True
         except Exception:
             parsed_payload = None
+        if req.reclassification_only:
+            parsed_payload = self._sanitize_reclassification_response(parsed_payload, values)
 
         return GigaChatLabRowRunResponse(
             transport=req.transport,
@@ -833,6 +900,15 @@ class GigaChatLabService:
             request_token_count=token_count,
             rule_evaluation=rule_evaluation,
         )
+
+    @classmethod
+    def _values_without_reclassification(cls, values: dict[str, Any]) -> dict[str, Any]:
+        next_values = dict(values)
+        next_values["reclassification_prompt_notes"] = "[]"
+        next_values["reclassification_source_field"] = ""
+        next_values["reclassification_context_field"] = ""
+        next_values["reclassification_prompt"] = cls.DEFAULT_RECLASSIFICATION_PROMPT
+        return next_values
 
     def list_background_tasks(self) -> GigaChatBackgroundTaskListResponse:
         tasks: list[GigaChatBackgroundTaskSummary] = []
@@ -915,18 +991,35 @@ class GigaChatLabService:
                 summary.current_label = f"Размечаем строку {index + 1} из {len(req.rows)}"
                 self._write_background_summary(summary)
                 try:
+                    primary_values = (
+                        self._values_without_reclassification(req.values)
+                        if req.reclassification_enabled
+                        else req.values
+                    )
                     result = self.run_row_prompt(GigaChatLabRowRunRequest(
                         transport=req.transport,
-                        values=req.values,
+                        values=primary_values,
                         columns=req.columns,
                         row=item.source_row,
-                        payload_override=req.payload_override,
+                        payload_override=None if req.reclassification_enabled else req.payload_override,
                         count_tokens=req.count_tokens,
                     ))
+                    reclassification_result = None
+                    if req.reclassification_enabled:
+                        reclassification_result = self.run_row_prompt(GigaChatLabRowRunRequest(
+                            transport=req.transport,
+                            values=req.values,
+                            columns=req.columns,
+                            row=item.source_row,
+                            payload_override=None,
+                            count_tokens=req.count_tokens,
+                            reclassification_only=True,
+                        ))
                     row_runs.append({
                         "row_index": item.row_index,
                         "source_row": item.source_row,
                         "result": result.model_dump(mode="json"),
+                        "reclassification_result": reclassification_result.model_dump(mode="json") if reclassification_result else None,
                         "error": None,
                     })
                 except Exception as exc:
@@ -935,6 +1028,7 @@ class GigaChatLabService:
                         "row_index": item.row_index,
                         "source_row": item.source_row,
                         "result": None,
+                        "reclassification_result": None,
                         "error": str(exc),
                     })
                 summary.completed_rows = index + 1
@@ -1858,29 +1952,6 @@ class GigaChatLabService:
         return df.loc[:, keep_columns]
 
     @staticmethod
-    def _parse_rule_items(raw: Any) -> list[dict[str, str]]:
-        text = str(raw or "").strip()
-        if not text:
-            return []
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            return [{"name": "", "description": text}]
-        if not isinstance(parsed, list):
-            return []
-        items: list[dict[str, str]] = []
-        for entry in parsed:
-            if not isinstance(entry, dict):
-                continue
-            items.append(
-                {
-                    "name": str(entry.get("name", "") or "").strip(),
-                    "description": str(entry.get("description", "") or "").strip(),
-                }
-            )
-        return [item for item in items if item["name"] or item["description"]]
-
-    @staticmethod
     def _split_rule_list(raw: Any) -> list[str]:
         if isinstance(raw, list):
             return [str(item).strip() for item in raw if str(item).strip()]
@@ -2097,21 +2168,6 @@ class GigaChatLabService:
         return GigaChatRuleEvaluationResponse(rule_packs=rule_packs, evaluations=evaluations)
 
     @classmethod
-    def _format_rule_lines(cls, raw: Any, *, label: str) -> str:
-        items = cls._parse_rule_items(raw)
-        if not items:
-            return f"{label}: список пока пустой."
-        lines = [f"{label}:"]
-        for item in items:
-            if item["name"] and item["description"]:
-                lines.append(f"- {item['name']}: {item['description']}")
-            elif item["name"]:
-                lines.append(f"- {item['name']}")
-            else:
-                lines.append(f"- {item['description']}")
-        return "\n".join(lines)
-
-    @classmethod
     def _format_rule_pack_lines(cls, raw: Any) -> str:
         rule_packs = cls._parse_rule_pack_items(raw)
         if not rule_packs:
@@ -2134,6 +2190,131 @@ class GigaChatLabService:
             if item.description:
                 lines.append(f"  Описание: {item.description}")
         return "\n".join(lines)
+
+    @classmethod
+    def _parse_reclassification_rules(cls, values: dict[str, Any]) -> list[dict[str, str]]:
+        raw = values.get("reclassification_prompt_notes", "")
+        explicit_rules_config = False
+        raw_items: list[Any] = []
+        if isinstance(raw, list):
+            explicit_rules_config = True
+            raw_items = raw
+        elif isinstance(raw, dict):
+            explicit_rules_config = True
+            raw_items = [raw]
+        else:
+            raw_text = str(raw or "").strip()
+            if raw_text:
+                explicit_rules_config = True
+                try:
+                    parsed = json.loads(raw_text)
+                except Exception:
+                    parsed = []
+                if isinstance(parsed, list):
+                    raw_items = parsed
+                elif isinstance(parsed, dict):
+                    raw_items = [parsed]
+
+        rules: list[dict[str, str]] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("title") or item.get("code") or "").strip()
+            source_field = str(item.get("source_field") or item.get("sourceField") or "").strip()
+            context_field = str(item.get("context_field") or item.get("contextField") or "").strip()
+            if not source_field and not context_field:
+                continue
+            prompt = str(item.get("prompt") or item.get("description") or "").strip()
+            rules.append({
+                "name": name,
+                "source_field": source_field,
+                "context_field": context_field,
+                "prompt": prompt,
+            })
+
+        if rules or explicit_rules_config:
+            return rules
+
+        source_field = str(values.get("reclassification_source_field", "") or "").strip()
+        context_field = str(values.get("reclassification_context_field", "") or "").strip()
+        if not source_field and not context_field:
+            return []
+        prompt = str(values.get("reclassification_prompt", "") or "").strip()
+        return [{
+            "name": "",
+            "source_field": source_field,
+            "context_field": context_field,
+            "prompt": prompt,
+        }]
+
+    def _format_reclassification_lines(self, values: dict[str, Any]) -> str:
+        rules = self._reclassification_choice_items(values)
+        if not rules:
+            return ""
+        lines = [
+            "Переклассификация: закрытый список допустимых итоговых тем.",
+            "- `reclassified_topic` может быть только точным значением `name` из списка ниже или пустой строкой.",
+            "- Не придумывай новые темы, не переформулируй названия и не возвращай описание.",
+        ]
+        for index, rule in enumerate(rules, start=1):
+            lines.extend([
+                f"{index}. name: {rule['name']}",
+                f"   description: {rule['description'] or 'без описания'}",
+            ])
+        return "\n".join(lines)
+
+    @classmethod
+    def _merge_prompt_columns(cls, columns: list[str], values: dict[str, Any]) -> list[str]:
+        merged: list[str] = []
+        for column in [
+            *columns,
+            *[
+                field
+                for rule in cls._parse_reclassification_rules(values)
+                for field in (rule["source_field"], rule["context_field"])
+            ],
+        ]:
+            if column and column not in merged:
+                merged.append(column)
+        return merged
+
+    @classmethod
+    def _reclassification_choice_items(cls, values: dict[str, Any]) -> list[dict[str, str]]:
+        items: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for rule in cls._parse_reclassification_rules(values):
+            name = str(rule.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            items.append({
+                "name": name,
+                "description": str(rule.get("prompt") or "").strip(),
+            })
+        return items
+
+    @classmethod
+    def _reclassification_prompt_columns(cls, values: dict[str, Any], fallback_columns: list[str]) -> list[str]:
+        merged: list[str] = []
+        for rule in cls._parse_reclassification_rules(values):
+            for key in ("source_field", "context_field"):
+                column = str(rule.get(key) or "").strip()
+                if column and column not in merged:
+                    merged.append(column)
+        if merged:
+            return merged
+        return list(fallback_columns)
+
+    @classmethod
+    def _sanitize_reclassification_response(cls, response_json: Any, values: dict[str, Any]) -> Any:
+        if not isinstance(response_json, dict):
+            return response_json
+        allowed_names = [item["name"] for item in cls._reclassification_choice_items(values)]
+        allowed_by_normalized = {name.strip().casefold(): name for name in allowed_names}
+        raw_topic = str(response_json.get("reclassified_topic") or "").strip()
+        sanitized = dict(response_json)
+        sanitized["reclassified_topic"] = allowed_by_normalized.get(raw_topic.casefold(), "")
+        return sanitized
 
     @staticmethod
     def _format_row_rule_context(evaluation: GigaChatRuleEvaluationRow) -> str:
@@ -2193,16 +2374,18 @@ class GigaChatLabService:
         user_prompt_prefix = str(values.get("user_prompt_prefix", getattr(self.cfg.llm, "user_prompt_prefix", "")) or "").strip()
         context_notes = str(values.get("context_notes", getattr(self.cfg.llm, "context_notes", "")) or "").strip()
 
-        class_rules = self._format_rule_lines(values.get("classification_prompt_notes", ""), label="Классификации")
         rule_pack_rules = self._format_rule_pack_lines(values.get("rule_pack_prompt_notes", ""))
-        placeholder_row = self._placeholder_row(columns)
+        reclassification_rules = self._format_reclassification_lines(values)
+        prompt_columns = self._merge_prompt_columns(columns, values)
+        placeholder_row = self._placeholder_row(prompt_columns)
 
         prompt_parts: list[str] = []
         if context_notes:
             prompt_parts.append(context_notes)
         if user_prompt_prefix:
             prompt_parts.append(user_prompt_prefix)
-        prompt_parts.append(class_rules)
+        if reclassification_rules:
+            prompt_parts.append(reclassification_rules)
         prompt_parts.append(rule_pack_rules)
         prompt_parts.append(
             "Semantic tag review:\n"
@@ -2214,7 +2397,7 @@ class GigaChatLabService:
             "`model_rejected_tags` = локальные теги, отвергнутые моделью. `assigned_tags` = финальные теги после подтверждения/добавления/отклонения.\n"
             "- Если тег добавлен по смыслу, evidence должен быть короткой фразой из строки или точным указанием поля, иначе тег не ставь."
         )
-        prompt_parts.append(f"Активные колонки для анализа: {', '.join(columns) if columns else 'не выбраны'}")
+        prompt_parts.append(f"Активные колонки для анализа: {', '.join(prompt_columns) if prompt_columns else 'не выбраны'}")
         prompt_parts.append(
             "Ниже шаблон одной записи. В реальном запросе на место плейсхолдеров будут подставлены значения выбранных колонок:"
         )
@@ -2231,6 +2414,48 @@ class GigaChatLabService:
             "max_tokens": max_tokens,
             "messages": [
                 {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "\n\n".join(prompt_parts)},
+            ],
+        }
+
+    def _compose_reclassification_payload(self, values: dict[str, Any], columns: list[str]) -> dict[str, Any]:
+        model = str(values.get("model", self.cfg.llm.model) or self.cfg.llm.model)
+        temperature = float(values.get("temperature", getattr(self.cfg.llm, "temperature", 0.2)) or 0.2)
+        top_p = float(values.get("top_p", getattr(self.cfg.llm, "top_p", 0.95)) or 0.95)
+        max_tokens = int(values.get("max_output_tokens", getattr(self.cfg.llm, "max_output_tokens", 2048)) or 2048)
+        system_prompt = str(values.get("system_prompt", self.DEFAULT_SYSTEM_PROMPT) or "").strip() or self.DEFAULT_SYSTEM_PROMPT
+        prompt_columns = self._reclassification_prompt_columns(values, columns)
+        placeholder_row = self._placeholder_row(prompt_columns)
+        allowed_topics = self._reclassification_choice_items(values)
+
+        prompt_parts = [
+            "Задача: выбрать новую тему обращения из закрытого списка `allowed_topics`.",
+            (
+                "Правила ответа:\n"
+                "1. Верни только JSON без markdown: {\"reclassified_topic\":\"...\"}.\n"
+                "2. Значение `reclassified_topic` должно точно совпадать с одним из `allowed_topics[].name`.\n"
+                "3. Если ни одна тема не подходит уверенно, исходная тема уже корректна или данных недостаточно, верни пустую строку.\n"
+                "4. Не придумывай новые темы, не переформулируй названия и не возвращай description."
+            ),
+            "allowed_topics:",
+            json.dumps(allowed_topics, ensure_ascii=False, indent=2),
+            "Данные строки:",
+            json.dumps(placeholder_row, ensure_ascii=False, indent=2),
+        ]
+
+        return {
+            "model": model,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        f"{system_prompt}\n"
+                        "Для этого запроса действует закрытый список: нельзя возвращать значения вне allowed_topics[].name."
+                    ),
+                },
                 {"role": "user", "content": "\n\n".join(prompt_parts)},
             ],
         }

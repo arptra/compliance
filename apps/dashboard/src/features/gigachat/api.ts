@@ -9,6 +9,7 @@ import type {
   GigaChatLabSettingsResponse,
   GigaChatLabSettingsVersionResponse,
   GigaChatLabSettingsVersionsResponse,
+  GigaChatReclassificationRulesImportResponse,
   GigaChatSettingsVersionStatus,
   GigaChatTransportName,
   GigaChatTransportProbeResponse,
@@ -83,6 +84,12 @@ export function importGigaChatRulePacks(versionId: string, file: File) {
     `/api/gigachat/lab/settings/versions/${encodeURIComponent(versionId)}/rule-packs/import`,
     form,
   )
+}
+
+export function importGigaChatReclassificationRules(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return apiPostForm<GigaChatReclassificationRulesImportResponse>('/api/gigachat/lab/settings/reclassification-rules/import', form)
 }
 
 export function uploadGigaChatWorkbook(form: FormData, signal?: AbortSignal) {
@@ -184,6 +191,7 @@ export function runGigaChatWorkbookRow(
   row: Record<string, unknown>,
   payloadOverride?: Record<string, unknown> | null,
   countTokens = false,
+  reclassificationOnly = false,
 ) {
   return apiPost<GigaChatLabRowRunResponse>('/api/gigachat/lab/run-row', {
     transport,
@@ -192,6 +200,7 @@ export function runGigaChatWorkbookRow(
     row,
     payload_override: payloadOverride ?? null,
     count_tokens: countTokens,
+    reclassification_only: reclassificationOnly,
   })
 }
 
@@ -208,6 +217,7 @@ export function startGigaChatBackgroundTask(payload: {
   sheet_name: string
   payload_override?: Record<string, unknown> | null
   count_tokens?: boolean
+  reclassification_enabled?: boolean
 }) {
   return apiPost<GigaChatBackgroundTaskSummary>('/api/gigachat/lab/background-tasks', payload)
 }

@@ -366,7 +366,6 @@ class GigaChatNormalizer:
                 "system_prompt": getattr(self.cfg, "system_prompt", SYSTEM_PROMPT),
                 "user_prompt_prefix": getattr(self.cfg, "user_prompt_prefix", ""),
                 "context_notes": getattr(self.cfg, "context_notes", ""),
-                "classification_prompt_notes": getattr(self.cfg, "classification_prompt_notes", ""),
                 "tagging_prompt_notes": getattr(self.cfg, "tagging_prompt_notes", ""),
             },
             sort_keys=True,
@@ -391,13 +390,10 @@ class GigaChatNormalizer:
     def _wrap_user_prompt(self, base_prompt: str) -> str:
         context_notes = str(getattr(self.cfg, "context_notes", "") or "").strip()
         user_prompt_prefix = str(getattr(self.cfg, "user_prompt_prefix", "") or "").strip()
-        classification_notes = self._format_labeling_notes(str(getattr(self.cfg, "classification_prompt_notes", "") or "").strip())
         tagging_notes = self._format_labeling_notes(str(getattr(self.cfg, "tagging_prompt_notes", "") or "").strip())
         parts: list[str] = []
         if context_notes:
             parts.append(f"Контекст эксперимента:\n{context_notes}")
-        if classification_notes:
-            parts.append(f"Правила классификации:\n{classification_notes}")
         if tagging_notes:
             parts.append(f"Правила тегирования:\n{tagging_notes}")
         if user_prompt_prefix:

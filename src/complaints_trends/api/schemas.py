@@ -376,6 +376,19 @@ class GigaChatRuleEvaluationResponse(BaseModel):
     evaluations: list[GigaChatRuleEvaluationRow] = Field(default_factory=list)
 
 
+class GigaChatReclassificationRuleImportItem(BaseModel):
+    name: str
+    source_field: str = ""
+    context_field: str = ""
+    prompt: str = ""
+
+
+class GigaChatReclassificationRulesImportResponse(BaseModel):
+    filename: str = ""
+    imported_count: int = 0
+    rules: list[GigaChatReclassificationRuleImportItem] = Field(default_factory=list)
+
+
 class GigaChatLabRowRunRequest(BaseModel):
     transport: Literal["mtls", "token"] = "mtls"
     values: dict[str, Any] = Field(default_factory=dict)
@@ -383,6 +396,7 @@ class GigaChatLabRowRunRequest(BaseModel):
     row: dict[str, Any] = Field(default_factory=dict)
     payload_override: dict[str, Any] | None = None
     count_tokens: bool = False
+    reclassification_only: bool = False
 
 
 class GigaChatLabRowRunResponse(BaseModel):
@@ -409,6 +423,7 @@ class GigaChatBackgroundTaskStartRequest(BaseModel):
     sheet_name: str = "data"
     payload_override: dict[str, Any] | None = None
     count_tokens: bool = False
+    reclassification_enabled: bool = False
 
 
 class GigaChatBackgroundTaskSummary(BaseModel):
@@ -437,6 +452,7 @@ class GigaChatBackgroundTaskRowRun(BaseModel):
     row_index: int
     source_row: dict[str, Any] = Field(default_factory=dict)
     result: GigaChatLabRowRunResponse | None = None
+    reclassification_result: GigaChatLabRowRunResponse | None = None
     error: str | None = None
 
 

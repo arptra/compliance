@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 
+import pandas as pd
 import yaml
 from fastapi.testclient import TestClient
 
@@ -87,14 +89,17 @@ def test_gigachat_lab_settings_expose_only_request_fields(tmp_path: Path):
     fields = {field["key"]: field for field in payload["fields"]}
 
     assert {"model", "temperature", "top_p", "max_output_tokens", "system_prompt", "user_prompt_prefix", "context_notes"} <= keys
-    assert {"classification_prompt_notes", "tagging_prompt_notes"} <= keys
+    assert "reclassification_prompt_notes" in keys
+    assert "reclassification_source_field" not in keys
+    assert "reclassification_context_field" not in keys
+    assert "reclassification_prompt" not in keys
+    assert "classification_prompt_notes" not in keys
+    assert "tagging_prompt_notes" not in keys
     assert "cert_file" not in keys
     assert "authorization_key_file" not in keys
     assert "mode" not in keys
     assert "валидный JSON" in str(fields["system_prompt"]["value"])
     assert "Одна строка таблицы = одно обращение" in str(fields["context_notes"]["value"])
-    assert "TECHNICAL" in str(fields["classification_prompt_notes"]["value"])
-    assert "mobile_app" in str(fields["tagging_prompt_notes"]["value"])
 
 
 def test_gigachat_final_prompt_uses_rules_and_columns(tmp_path: Path):
@@ -112,6 +117,33 @@ def test_gigachat_final_prompt_uses_rules_and_columns(tmp_path: Path):
                 "user_prompt_prefix": "Смотри на все поля, а не только на текст звонка.",
                 "classification_prompt_notes": '[{"name":"LOGIN_ISSUE","description":"Проблемы со входом и подтверждением."}]',
                 "tagging_prompt_notes": '[{"name":"otp","description":"Проблема связана с кодом подтверждения."}]',
+                "reclassification_prompt_notes": json.dumps(
+                    [
+                        {
+                            "name": "Проверка темы обращения",
+                            "source_field": "Во. Тема",
+                            "context_field": "Обр. Текст чата",
+                            "prompt": "Проверь, надо ли уточнить тему.",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                "rule_pack_prompt_notes": json.dumps(
+                    [
+                        {
+                            "code": "LOGIN_RULE",
+                            "description": "Подсказка по проблемам входа.",
+                            "enabled": True,
+                            "type": "assign_tag",
+                            "source_fields": ["Обр. Текст чата"],
+                            "keywords": ["вход"],
+                            "filters": [],
+                            "target_tag": "login",
+                            "target_topic": None,
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
             },
             "columns": ["Во. ID вопроса", "Обр. Текст чата", "Во. Продукт"],
         },
@@ -130,9 +162,15 @@ def test_gigachat_final_prompt_uses_rules_and_columns(tmp_path: Path):
     assert system_message == "SYSTEM CUSTOM"
     assert "Размечаем обращения розничного банка." in user_message
     assert "Смотри на все поля, а не только на текст звонка." in user_message
-    assert "LOGIN_ISSUE" in user_message
-    assert "otp" in user_message
+    assert "LOGIN_RULE" in user_message
+    assert "LOGIN_ISSUE" not in user_message
+    assert "otp" not in user_message
+    assert "Переклассификация" in user_message
+    assert "Проверка темы обращения" in user_message
+    assert "Во. Тема" in user_message
+    assert "Проверь, надо ли уточнить тему." in user_message
     assert "{{Во. ID вопроса}}" in user_message
+    assert "{{Во. Тема}}" in user_message
     assert "{{Обр. Текст чата}}" in user_message
     assert '"assigned_tags"' in user_message
 
@@ -143,8 +181,7 @@ def test_gigachat_final_prompt_save_writes_snapshot(tmp_path: Path):
         "/api/gigachat/lab/final-prompt/save",
         json={
             "values": {
-                "classification_prompt_notes": '[{"name":"PAYMENT","description":"Ошибки платежей."}]',
-                "tagging_prompt_notes": '[{"name":"mobile","description":"Проблема только в мобильном канале."}]',
+                "rule_pack_prompt_notes": '[{"code":"PAYMENT","description":"Ошибки платежей.","enabled":true,"type":"assign_tag","source_fields":["Обр. Текст чата"],"keywords":["платеж"],"filters":[],"target_tag":"payment","target_topic":null}]',
             },
             "columns": ["Обр. Текст чата"],
         },
@@ -187,6 +224,56 @@ def test_gigachat_rule_pack_keyword_keeps_trailing_space(tmp_path: Path):
     rows = response.json()["evaluations"]
     codes_by_row = [{hit["code"] for hit in row["hits"]} for row in rows]
     assert codes_by_row == [set(), {"SVO_SPACE"}, set()]
+
+
+def test_gigachat_import_reclassification_rules_from_excel(tmp_path: Path):
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    buffer = BytesIO()
+    pd.DataFrame(
+        [
+            {
+                "name": "Проблема с траншем",
+                "src_field": "Во. Подтематика",
+                "context_field": "Обр. Описание",
+                "prompt_field": "Задержка очередного транша или оплаты семестра.",
+            },
+            {
+                "name": "Проблема с заявкой",
+                "src_field": "Во. Тематика",
+                "context_field": "Обр. Результат суммаризации диалога",
+                "prompt_field": "Заявка на образовательный кредит зависла или не рассмотрена.",
+            },
+        ]
+    ).to_excel(buffer, index=False)
+    response = client.post(
+        "/api/gigachat/lab/settings/reclassification-rules/import",
+        files={
+            "file": (
+                "reclassification_rules.xlsx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported_count"] == 2
+    assert payload["filename"] == "reclassification_rules.xlsx"
+    assert payload["rules"] == [
+        {
+            "name": "Проблема с траншем",
+            "source_field": "Во. Подтематика",
+            "context_field": "Обр. Описание",
+            "prompt": "Задержка очередного транша или оплаты семестра.",
+        },
+        {
+            "name": "Проблема с заявкой",
+            "source_field": "Во. Тематика",
+            "context_field": "Обр. Результат суммаризации диалога",
+            "prompt": "Заявка на образовательный кредит зависла или не рассмотрена.",
+        },
+    ]
 
 
 def test_gigachat_run_row_renders_payload_and_returns_model_output(monkeypatch, tmp_path: Path):
@@ -235,3 +322,64 @@ def test_gigachat_run_row_renders_payload_and_returns_model_output(monkeypatch, 
     assert payload["parse_ok"] is True
     assert payload["response_json"]["category"] == "LOGIN_ISSUE"
     assert "Текст клиента: не приходит смс" in payload["request_payload"]["messages"][1]["content"]
+
+
+def test_gigachat_reclassification_run_uses_closed_topic_list(monkeypatch, tmp_path: Path):
+    class FakeTransportClient:
+        def chat(self, payload):
+            class _Msg:
+                def __init__(self, content):
+                    self.content = content
+
+            class _Choice:
+                def __init__(self, content):
+                    self.message = _Msg(content)
+
+            class _Resp:
+                def __init__(self, content):
+                    self.choices = [_Choice(content)]
+
+            user_message = payload["messages"][1]["content"]
+            assert "allowed_topics" in user_message
+            assert '"name": "Проблема с траншем"' in user_message
+            assert "Задержка очередного транша" in user_message
+            assert "Текущая тема" in user_message
+            assert "Контекст обращения" in user_message
+            assert "лишняя колонка" not in user_message
+            return _Resp('{"reclassified_topic": "Свободно придуманная тема"}')
+
+    monkeypatch.setattr(
+        "complaints_trends.api.services.gigachat_lab_service.build_gigachat_transport_client",
+        lambda cfg, transport=None: FakeTransportClient(),
+    )
+
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    rules = [
+        {
+            "name": "Проблема с траншем",
+            "source_field": "Текущая тема",
+            "context_field": "Контекст обращения",
+            "prompt": "Задержка очередного транша или оплаты семестра.",
+        }
+    ]
+    response = client.post(
+        "/api/gigachat/lab/run-row",
+        json={
+            "transport": "token",
+            "values": {"reclassification_prompt_notes": json.dumps(rules, ensure_ascii=False)},
+            "columns": ["Текущая тема", "Контекст обращения", "extra"],
+            "row": {
+                "Текущая тема": "Образовательный кредит",
+                "Контекст обращения": "Не пришел транш за семестр.",
+                "extra": "лишняя колонка",
+            },
+            "reclassification_only": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["parse_ok"] is True
+    assert payload["response_json"]["reclassified_topic"] == ""
+    request_user_message = payload["request_payload"]["messages"][1]["content"]
+    assert "Не пришел транш за семестр." in request_user_message
+    assert "лишняя колонка" not in request_user_message

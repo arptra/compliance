@@ -712,6 +712,56 @@ body { margin: 0; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+.row-run-pages {
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  align-items:center;
+  margin:12px 0;
+  padding:10px;
+  border:1px solid #e2e8f0;
+  border-radius:8px;
+  background:#f8fafc;
+}
+.row-run-page-tabs,
+.row-run-page-actions {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.row-run-page-tabs button,
+.row-run-page-actions button {
+  border:1px solid #cbd5e1;
+  background:#fff;
+  border-radius:8px;
+  padding:8px 12px;
+  cursor:pointer;
+}
+.row-run-page-tabs button.active {
+  background:#0f172a;
+  color:#fff;
+  border-color:#0f172a;
+}
+.row-run-page-actions button:disabled {
+  opacity:0.55;
+  cursor:default;
+}
+.row-run-page-actions span {
+  color:#475569;
+  font-weight:700;
+}
+.row-run-page-summary {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  margin:0 0 12px;
+  color:#475569;
+}
+.row-run-page-summary strong {
+  color:#0f172a;
+}
 .sheet-preview-grid { display:grid; gap:12px; margin-top:12px; }
 .sheet-preview-card { border:1px solid #e2e8f0; border-radius:8px; padding:12px; background:#f8fafc; display:grid; gap:10px; }
 .workbook-sheets-panel { display:grid; gap:12px; margin-top:12px; padding:12px; border:1px solid #dbeafe; border-radius:8px; background:#f8fbff; }
@@ -1119,6 +1169,25 @@ body { margin: 0; }
 .workbook-batch-actions {
   align-items:center;
 }
+.workbook-reclassification-toggle {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  padding:8px 10px;
+  border:1px solid #cbd5e1;
+  border-radius:8px;
+  background:#f8fafc;
+  color:#0f172a;
+  font-weight:600;
+}
+.workbook-reclassification-toggle:has(input:checked) {
+  border-color:#60a5fa;
+  background:#eff6ff;
+}
+.workbook-reclassification-toggle:has(input:disabled) {
+  color:#64748b;
+  background:#f1f5f9;
+}
 .rule-table-controls {
   display:flex;
   gap:14px;
@@ -1385,6 +1454,60 @@ body { margin: 0; }
 }
 .labeling-edit-modal .lab-field textarea {
   min-height:220px;
+}
+.reclassification-settings-modal {
+  width:min(860px, 96vw);
+}
+.reclassification-settings-form .lab-field textarea {
+  min-height:220px;
+}
+.reclassification-rule-card {
+  border-color:#bfdbfe;
+  background:#eff6ff;
+}
+.reclassification-rule-card.active {
+  border-color:#86efac;
+  background:#f0fdf4;
+}
+.reclassification-rule-card.inactive {
+  border-color:#fecaca;
+  background:#fff1f2;
+}
+.reclassification-rule-card.missing-fields {
+  box-shadow:0 0 0 1px #ef4444 inset;
+}
+.reclassification-field-missing {
+  color:#991b1b;
+  font-weight:700;
+}
+.reclassification-status-badge {
+  padding:3px 8px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+}
+.reclassification-status-badge.active {
+  background:#dcfce7;
+  color:#166534;
+}
+.reclassification-status-badge.inactive {
+  background:#fee2e2;
+  color:#991b1b;
+}
+.lab-field.missing-field > span:first-child {
+  color:#991b1b;
+}
+.missing-field-control {
+  border-color:#ef4444 !important;
+  background:#fff1f2 !important;
+  color:#7f1d1d !important;
+}
+.missing-field-help {
+  color:#991b1b !important;
+  font-weight:700;
+}
+.missing-field-option {
+  color:#991b1b;
 }
 .labeling-rule-meta {
   display:flex;

@@ -87,6 +87,19 @@ export type GigaChatLabSettingsVersionResponse = {
   values: Record<string, unknown>
 }
 
+export type GigaChatReclassificationRuleImportItem = {
+  name: string
+  source_field: string
+  context_field: string
+  prompt: string
+}
+
+export type GigaChatReclassificationRulesImportResponse = {
+  filename: string
+  imported_count: number
+  rules: GigaChatReclassificationRuleImportItem[]
+}
+
 export type GigaChatWorkbookSheetPreview = {
   name: string
   rows_total: number
@@ -239,6 +252,7 @@ export type GigaChatBackgroundTaskRowRun = {
   row_index: number
   source_row: Record<string, unknown>
   result?: GigaChatLabRowRunResponse | null
+  reclassification_result?: GigaChatLabRowRunResponse | null
   error?: string | null
 }
 

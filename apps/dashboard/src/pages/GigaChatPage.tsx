@@ -14,6 +14,7 @@ import {
   exportGigaChatWorkbookRows,
   getGigaChatLabSettingsVersion,
   getGigaChatStatus,
+  importGigaChatReclassificationRules,
   listGigaChatLabSettingsVersions,
   probeGigaChatTransport,
   previewGigaChatFinalPrompt,
@@ -27,7 +28,6 @@ import {
   uploadGigaChatWorkbook,
 } from '../features/gigachat/api'
 import { GigaChatProcessingOverlay } from '../features/gigachat/GigaChatProcessingOverlay'
-import { LabelingRulesEditor } from '../features/gigachat/LabelingRulesEditor'
 import { evaluateRulePacksLocally, parseRulePacks } from '../features/gigachat/rulePackMatcher'
 import { RulePackEditor } from '../features/gigachat/RulePackEditor'
 import { GigaChatSettingsForm } from '../features/gigachat/GigaChatSettingsForm'
@@ -58,13 +58,28 @@ import type {
 
 type WorkbookRowLimit = 10 | 20 | 100 | 'all'
 type GigaChatLabTab = 'workspace' | 'settings'
-type LabSetupTab = 'prompts' | 'labels' | 'rules'
+type LabSetupTab = 'prompts' | 'rules' | 'reclassification'
+type ReclassificationRule = {
+  name: string
+  source_field: string
+  context_field: string
+  prompt: string
+}
+type ReclassificationDraft = {
+  editingIndex: number | null
+  name: string
+  sourceField: string
+  contextField: string
+  prompt: string
+}
 const WORKBOOK_UPLOAD_TIMEOUT_MS = 15_000
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024
 const CHUNKED_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 const CHUNKED_UPLOAD_CONCURRENCY = 4
 const CHUNKED_UPLOAD_POLL_MS = 1000
 const RULE_EVALUATION_CHUNK_COUNT = 25
+const DEFAULT_RECLASSIFICATION_PROMPT = ''
+const RECLASSIFICATION_DESCRIPTION_PLACEHOLDER = 'Например: обращения про задержку очередного транша по образовательному кредиту, оплату семестра или проблемы с учебным периодом.'
 const VERSION_STATUS_LABELS: Record<GigaChatSettingsVersionStatus, string> = {
   draft: 'Черновая',
   test: 'Тестовая',
@@ -196,6 +211,23 @@ type BackgroundWorkbookUpload = {
   createdAt: string
 }
 
+type RowRunResultPage = {
+  id: 'classification' | 'reclassification'
+  title: string
+  description: string
+  result: GigaChatLabRowRunResponse
+}
+
+type ReclassificationSaveStatus = {
+  type: 'idle' | 'saving' | 'saved' | 'error'
+  message: string
+}
+
+type ReclassificationRuleFieldStatus = {
+  valid: boolean
+  missing: string[]
+}
+
 type RuleGuardIssue = {
   code: string
   missingFields: string[]
@@ -299,6 +331,111 @@ function fieldsToValues(fields: Array<{ key: string; value: unknown }>) {
 
 function stringifyJson(value: unknown) {
   return JSON.stringify(value, null, 2)
+}
+
+function normalizeReclassificationRule(value: unknown): ReclassificationRule | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const item = value as Record<string, unknown>
+  const name = String(item.name ?? item.title ?? item.code ?? '').trim()
+  const sourceField = String(item.source_field ?? item.sourceField ?? '').trim()
+  const contextField = String(item.context_field ?? item.contextField ?? '').trim()
+  const prompt = String(item.prompt ?? item.description ?? '').trim()
+  if (!sourceField && !contextField) return null
+  return {
+    name,
+    source_field: sourceField,
+    context_field: contextField,
+    prompt,
+  }
+}
+
+function parseReclassificationRules(value: unknown, fallbackValues?: Record<string, unknown>): ReclassificationRule[] {
+  const rawItems: unknown[] = []
+  let explicitRulesConfig = false
+  if (Array.isArray(value)) {
+    explicitRulesConfig = true
+    rawItems.push(...value)
+  } else if (typeof value === 'string' && value.trim()) {
+    explicitRulesConfig = true
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (Array.isArray(parsed)) rawItems.push(...parsed)
+      else rawItems.push(parsed)
+    } catch {
+      rawItems.length = 0
+    }
+  } else if (value && typeof value === 'object') {
+    explicitRulesConfig = true
+    rawItems.push(value)
+  }
+
+  const parsedItems = rawItems
+    .map((item) => normalizeReclassificationRule(item))
+    .filter((item): item is ReclassificationRule => Boolean(item))
+  if (parsedItems.length) return parsedItems
+  if (explicitRulesConfig) return []
+
+  const sourceField = String(fallbackValues?.reclassification_source_field ?? '').trim()
+  const contextField = String(fallbackValues?.reclassification_context_field ?? '').trim()
+  if (!sourceField && !contextField) return []
+  return [{
+    name: '',
+    source_field: sourceField,
+    context_field: contextField,
+    prompt: String(fallbackValues?.reclassification_prompt ?? '').trim(),
+  }]
+}
+
+function serializeReclassificationRules(items: ReclassificationRule[]) {
+  return JSON.stringify(items, null, 2)
+}
+
+function formatReclassificationRuleTitle(rule: ReclassificationRule) {
+  return rule.name || `${rule.source_field || 'Без поля темы'} → ${rule.context_field || 'без поля контекста'}`
+}
+
+function canRunReclassificationRule(rule: ReclassificationRule) {
+  return Boolean(
+    rule.name.trim()
+    && rule.prompt.trim()
+    && (rule.source_field.trim() || rule.context_field.trim()),
+  )
+}
+
+function getReclassificationRuleFieldStatus(
+  rule: ReclassificationRule,
+  availableFields?: string[] | null,
+): ReclassificationRuleFieldStatus {
+  if (!availableFields) return { valid: true, missing: [] }
+  const available = new Set(availableFields)
+  const configuredFields = [rule.source_field, rule.context_field]
+    .map((field) => field.trim())
+    .filter(Boolean)
+  const missing = configuredFields.filter((field) => !available.has(field))
+  return { valid: missing.length === 0, missing }
+}
+
+function canRunReclassificationRuleOnSheet(rule: ReclassificationRule, availableFields?: string[] | null) {
+  return canRunReclassificationRule(rule) && getReclassificationRuleFieldStatus(rule, availableFields).valid
+}
+
+function withRunnableReclassificationRules(values: Record<string, unknown>, availableFields?: string[] | null) {
+  const rules = parseReclassificationRules(values.reclassification_prompt_notes, values)
+    .filter((rule) => canRunReclassificationRuleOnSheet(rule, availableFields))
+  return {
+    ...values,
+    reclassification_prompt_notes: serializeReclassificationRules(rules),
+  }
+}
+
+function withoutReclassificationSettings(values: Record<string, unknown>) {
+  return {
+    ...values,
+    reclassification_prompt_notes: '[]',
+    reclassification_source_field: '',
+    reclassification_context_field: '',
+    reclassification_prompt: DEFAULT_RECLASSIFICATION_PROMPT,
+  }
 }
 
 function buildSheetRowKey(uploadId: string, sheetName: string, rowIndex: number) {
@@ -685,7 +822,13 @@ export default function GigaChatPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
-  const labelingFieldKeys = new Set(['classification_prompt_notes', 'rule_pack_prompt_notes'])
+  const hiddenLabSettingKeys = new Set([
+    'rule_pack_prompt_notes',
+    'reclassification_prompt_notes',
+    'reclassification_source_field',
+    'reclassification_context_field',
+    'reclassification_prompt',
+  ])
   const statusQ = useQuery({
     queryKey: ['gigachat-status'],
     queryFn: getGigaChatStatus,
@@ -730,6 +873,17 @@ export default function GigaChatPage() {
   const [settingsCollapsed, setSettingsCollapsed] = useState(false)
   const [versionInfoOpen, setVersionInfoOpen] = useState(false)
   const [activeSetupTab, setActiveSetupTab] = useState<LabSetupTab>('rules')
+  const [reclassificationOpen, setReclassificationOpen] = useState(false)
+  const [reclassificationSaveStatus, setReclassificationSaveStatus] = useState<ReclassificationSaveStatus>({ type: 'idle', message: '' })
+  const [reclassificationImporting, setReclassificationImporting] = useState(false)
+  const [reclassificationImportInputVersion, setReclassificationImportInputVersion] = useState(0)
+  const [reclassificationDraft, setReclassificationDraft] = useState<ReclassificationDraft>({
+    editingIndex: null,
+    name: '',
+    sourceField: '',
+    contextField: '',
+    prompt: '',
+  })
   const [uploadCollapsed, setUploadCollapsed] = useState(false)
   const [workbookCollapsed, setWorkbookCollapsed] = useState(false)
   const [resultCollapsed, setResultCollapsed] = useState(false)
@@ -753,7 +907,8 @@ export default function GigaChatPage() {
   const [finalPromptBaseText, setFinalPromptBaseText] = useState('')
   const [finalPromptOverrideText, setFinalPromptOverrideText] = useState<string | null>(null)
   const [rowRunModalOpen, setRowRunModalOpen] = useState(false)
-  const [rowRunResult, setRowRunResult] = useState<GigaChatLabRowRunResponse | null>(null)
+  const [rowRunResultPages, setRowRunResultPages] = useState<RowRunResultPage[]>([])
+  const [activeRowRunResultPage, setActiveRowRunResultPage] = useState(0)
   const [workbookRowLimit, setWorkbookRowLimit] = useState<WorkbookRowLimit>('all')
   const [includedPromptColumns, setIncludedPromptColumns] = useState<string[]>([])
   const [selectedSheetRowKeys, setSelectedSheetRowKeys] = useState<string[]>([])
@@ -773,6 +928,7 @@ export default function GigaChatPage() {
   const [backgroundResultProgress, setBackgroundResultProgress] = useState<{ loadedBytes: number; totalBytes: number | null } | null>(null)
   const [exportProgress, setExportProgress] = useState<{ label: string; loadedBytes: number; totalBytes: number | null } | null>(null)
   const [backgroundTaskError, setBackgroundTaskError] = useState<string | null>(null)
+  const [sendReclassificationRequests, setSendReclassificationRequests] = useState(false)
   const [processingOverlay, setProcessingOverlay] = useState<ProcessingOverlayState | null>(null)
   const [ruleGuardIssues, setRuleGuardIssues] = useState<RuleGuardIssue[]>([])
   const [pendingRuleGuardAction, setPendingRuleGuardAction] = useState<PendingRuleGuardAction | null>(null)
@@ -893,7 +1049,6 @@ export default function GigaChatPage() {
 
   useEffect(() => {
     setVersionInfoOpen(false)
-    setActiveSetupTab('rules')
   }, [selectedSettingsVersionId])
 
   useEffect(() => {
@@ -992,6 +1147,134 @@ export default function GigaChatPage() {
     persistSettingValue('rule_pack_prompt_notes', value)
   }
 
+  const reclassificationRules = useMemo(
+    () => parseReclassificationRules(settingValues.reclassification_prompt_notes, settingValues),
+    [settingValues],
+  )
+  const reclassificationRuleStatuses = useMemo(
+    () => reclassificationRules.map((rule) => getReclassificationRuleFieldStatus(rule, sheetData?.columns ?? null)),
+    [reclassificationRules, sheetData?.columns],
+  )
+  const reclassificationRequestsAvailable = reclassificationRules.some((rule) =>
+    canRunReclassificationRuleOnSheet(rule, sheetData?.columns ?? null)
+  )
+  const shouldSendReclassificationRequest = (valuesForRun: Record<string, unknown>) => (
+    sendReclassificationRequests
+    && parseReclassificationRules(valuesForRun.reclassification_prompt_notes, valuesForRun)
+      .some((rule) => canRunReclassificationRuleOnSheet(rule, sheetData?.columns ?? null))
+  )
+
+  const openReclassificationRule = (index: number | null) => {
+    const rule = index === null ? null : reclassificationRules[index]
+    setReclassificationSaveStatus({ type: 'idle', message: '' })
+    setReclassificationDraft({
+      editingIndex: index,
+      name: rule?.name ?? '',
+      sourceField: rule?.source_field ?? '',
+      contextField: rule?.context_field ?? '',
+      prompt: rule?.prompt ?? '',
+    })
+    setReclassificationOpen(true)
+  }
+
+  const persistReclassificationRules = (
+    nextRules: ReclassificationRule[],
+    closeModal = false,
+    messages?: {
+      saving?: string
+      saved?: (profileTitle: string) => string
+    },
+  ) => {
+    const nextValues = {
+      ...settingValues,
+      reclassification_prompt_notes: serializeReclassificationRules(nextRules),
+      reclassification_source_field: '',
+      reclassification_context_field: '',
+      reclassification_prompt: DEFAULT_RECLASSIFICATION_PROMPT,
+    }
+    setSettingValues(nextValues)
+    setReclassificationSaveStatus({
+      type: 'saving',
+      message: messages?.saving ?? (selectedVersionCanEdit
+        ? 'Сохраняем переклассификации в профиль...'
+        : personalProfileForSelectedVersion
+          ? `Записываем переклассификации в профиль "${personalProfileForSelectedVersion.title}"...`
+          : 'Создаем мой профиль и записываем переклассификации...'),
+    })
+    saveSettings.mutate(nextValues, {
+      onSuccess: (data) => {
+        setReclassificationSaveStatus({
+          type: 'saved',
+          message: messages?.saved?.(data.version.title) ?? `Переклассификации записаны в профиль "${data.version.title}".`,
+        })
+        setActiveSetupTab('reclassification')
+        if (closeModal) setReclassificationOpen(false)
+      },
+      onError: (error) => {
+        setReclassificationSaveStatus({
+          type: 'error',
+          message: formatLabError(error as Error, 'переклассификацию'),
+        })
+      },
+    })
+  }
+
+  const saveReclassificationRule = () => {
+    const nextRule: ReclassificationRule = {
+      name: reclassificationDraft.name.trim(),
+      source_field: reclassificationDraft.sourceField.trim(),
+      context_field: reclassificationDraft.contextField.trim(),
+      prompt: reclassificationDraft.prompt.trim(),
+    }
+    if (!nextRule.name || !nextRule.prompt || (!nextRule.source_field && !nextRule.context_field)) return
+    const fieldStatus = getReclassificationRuleFieldStatus(nextRule, sheetData?.columns ?? null)
+    if (!fieldStatus.valid) {
+      setReclassificationSaveStatus({
+        type: 'error',
+        message: `Нельзя сохранить активное правило: в загруженной таблице нет колонок ${fieldStatus.missing.join(', ')}.`,
+      })
+      return
+    }
+    const nextRules = [...reclassificationRules]
+    if (reclassificationDraft.editingIndex === null) {
+      nextRules.push(nextRule)
+    } else {
+      nextRules[reclassificationDraft.editingIndex] = nextRule
+    }
+    persistReclassificationRules(nextRules, true)
+  }
+
+  const removeReclassificationRule = (index: number) => {
+    persistReclassificationRules(reclassificationRules.filter((_, currentIndex) => currentIndex !== index))
+  }
+
+  const importReclassificationRulesFromFile = async (file: File | null | undefined) => {
+    if (!file || reclassificationImporting || saveSettings.isPending) return
+    setReclassificationImporting(true)
+    setReclassificationSaveStatus({ type: 'saving', message: `Читаем правила переклассификации из "${file.name}"...` })
+    try {
+      const data = await importGigaChatReclassificationRules(file)
+      const importedRules = data.rules.map((rule) => ({
+        name: rule.name.trim(),
+        source_field: rule.source_field.trim(),
+        context_field: rule.context_field.trim(),
+        prompt: rule.prompt.trim(),
+      }))
+      persistReclassificationRules(importedRules, false, {
+        saving: `Excel прочитан: ${data.imported_count}. Записываем правила переклассификации в профиль...`,
+        saved: (profileTitle) => `Из Excel загружено ${data.imported_count} правил и записано в профиль "${profileTitle}".`,
+      })
+    } catch (error) {
+      setReclassificationSaveStatus({
+        type: 'error',
+        message: formatLabError(error as Error, 'загрузку правил переклассификации'),
+      })
+    } finally {
+      setReclassificationImporting(false)
+      setReclassificationImportInputVersion((current) => current + 1)
+    }
+  }
+
   const createSettingsVersion = useMutation({
     mutationFn: () => createGigaChatLabSettingsVersion({
       title: versionDraft.title,
@@ -1042,7 +1325,8 @@ export default function GigaChatPage() {
         setAnnotatedTagFilter([])
         setAnnotatedRuleFilter([])
         setAnnotatedDecisionSourceFilter([])
-        setRowRunResult(null)
+        setRowRunResultPages([])
+        setActiveRowRunResultPage(0)
         setRowRunError(null)
         setBatchRunError(null)
       }
@@ -1231,6 +1515,66 @@ export default function GigaChatPage() {
     () => (sheetData ? sheetData.columns.filter((column) => includedPromptColumns.includes(column)) : []),
     [sheetData, includedPromptColumns],
   )
+  const currentSheetColumnSet = useMemo(() => new Set(sheetData?.columns ?? []), [sheetData?.columns])
+  const isReclassificationFieldMissing = (field: string) => (
+    Boolean(sheetData && field.trim() && !currentSheetColumnSet.has(field.trim()))
+  )
+  const reclassificationDraftSourceMissing = isReclassificationFieldMissing(reclassificationDraft.sourceField)
+  const reclassificationDraftContextMissing = isReclassificationFieldMissing(reclassificationDraft.contextField)
+  const reclassificationColumnOptions = useMemo(() => {
+    const columns = sheetData?.columns ?? []
+    return Array.from(new Set([
+      ...columns,
+      ...reclassificationRules.flatMap((rule) => [rule.source_field, rule.context_field]),
+      String(settingValues.reclassification_source_field ?? '').trim(),
+      String(settingValues.reclassification_context_field ?? '').trim(),
+      reclassificationDraft.sourceField.trim(),
+      reclassificationDraft.contextField.trim(),
+    ].filter(Boolean)))
+  }, [
+    sheetData?.columns,
+    reclassificationRules,
+    settingValues.reclassification_source_field,
+    settingValues.reclassification_context_field,
+    reclassificationDraft.sourceField,
+    reclassificationDraft.contextField,
+  ])
+  const reclassificationAvailableColumnOptions = useMemo(
+    () => reclassificationColumnOptions.filter((column) => !isReclassificationFieldMissing(column)),
+    [reclassificationColumnOptions, sheetData, currentSheetColumnSet],
+  )
+  const reclassificationMissingColumnOptions = useMemo(
+    () => reclassificationColumnOptions.filter((column) => isReclassificationFieldMissing(column)),
+    [reclassificationColumnOptions, sheetData, currentSheetColumnSet],
+  )
+  const hasReclassificationDraftMissingFields = reclassificationDraftSourceMissing || reclassificationDraftContextMissing
+  const canSaveReclassificationDraft = (
+    Boolean(reclassificationDraft.name.trim())
+    && Boolean(reclassificationDraft.prompt.trim())
+    && Boolean(reclassificationDraft.sourceField.trim() || reclassificationDraft.contextField.trim())
+    && !hasReclassificationDraftMissingFields
+  )
+  const renderReclassificationColumnOptions = (prefix: string) => <>
+    <option value=''>Не выбрано</option>
+    {reclassificationAvailableColumnOptions.length ? <optgroup label='Есть в загруженной таблице'>
+      {reclassificationAvailableColumnOptions.map((column) => <option
+        key={`${prefix}-available-${column}`}
+        value={column}
+      >
+        {column}
+      </option>)}
+    </optgroup> : null}
+    {reclassificationMissingColumnOptions.length ? <optgroup label='Нет в загруженной таблице'>
+      {reclassificationMissingColumnOptions.map((column) => <option
+        key={`${prefix}-missing-${column}`}
+        value={column}
+        className='missing-field-option'
+        disabled
+      >
+        {column} (нет в таблице)
+      </option>)}
+    </optgroup> : null}
+  </>
   const finalPromptRequestKey = useMemo(
     () => JSON.stringify({ values: settingValues, columns: finalPromptColumns }),
     [settingValues, finalPromptColumns],
@@ -1383,6 +1727,7 @@ export default function GigaChatPage() {
     rowIndex: number,
     row: Record<string, unknown>,
     workbook: GigaChatWorkbookSheetDataResponse,
+    reclassificationData?: GigaChatLabRowRunResponse | null,
   ): AnnotatedSheetRow => {
     const rowKey = buildSheetRowKey(workbook.upload_id, workbook.sheet_name, rowIndex)
     const localRuleHits = data.rule_evaluation?.hits.map((item) => item.code) ?? []
@@ -1394,8 +1739,9 @@ export default function GigaChatPage() {
     const matchType = extractMatchType(data.response_json)
     const evidence = extractEvidence(data.response_json)
     const tagDecisions = extractTagDecisionSummary(data.response_json)
-    const reclassifiedTopic = extractReclassifiedTopic(data.response_json)
-    const classification = extractClassification(data.response_json)
+    const secondPassReclassifiedTopic = extractReclassifiedTopic(reclassificationData?.response_json)
+    const reclassifiedTopic = secondPassReclassifiedTopic || extractReclassifiedTopic(data.response_json)
+    const classification = secondPassReclassifiedTopic || extractClassification(data.response_json)
     const finalTopic = reclassifiedTopic || classification
     const confirmedLocalTags = localTags.filter((tag) => {
       if (confirmedRuleHits.includes(tag)) return true
@@ -1411,7 +1757,9 @@ export default function GigaChatPage() {
         rejectedRuleHits.length ? `rejected: ${rejectedRuleHits.join(', ')}` : '',
       ].filter(Boolean).join('; ')
       : localRuleHits.length ? 'pending_in_model_response' : 'no_rule_hits'
-    const modelDecision = !data.parse_ok
+    const modelDecision = secondPassReclassifiedTopic
+      ? 'reclassified_by_second_request'
+      : !data.parse_ok
       ? 'raw_response'
       : modelAddedTags.length
         ? 'semantic_added'
@@ -1424,7 +1772,9 @@ export default function GigaChatPage() {
               : finalTopic
                 ? 'classified'
                 : 'empty_result'
-    const decisionSource = modelAddedTags.length
+    const decisionSource = secondPassReclassifiedTopic
+      ? 'llm_reclassification'
+      : modelAddedTags.length
       ? 'llm_semantic'
       : modelRejectedTags.length
         ? 'llm_rejected_rule'
@@ -1453,8 +1803,12 @@ export default function GigaChatPage() {
       reclassifiedTopic,
       finalTopic,
       decisionSource,
-      responseRaw: data.response_raw,
-      responseJson: data.response_json,
+      responseRaw: reclassificationData
+        ? `${data.response_raw}\n\n--- reclassification ---\n${reclassificationData.response_raw}`
+        : data.response_raw,
+      responseJson: reclassificationData
+        ? { classification: data.response_json, reclassification: reclassificationData.response_json }
+        : data.response_json,
       sourceRow: row,
     }
   }
@@ -1479,7 +1833,9 @@ export default function GigaChatPage() {
     setWorkbookRowLimit('all')
     setWorkbookCollapsed(false)
     setUploadCollapsed(true)
-    setAnnotatedRows(data.row_runs.flatMap((rowRun) => rowRun.result ? [buildAnnotatedRow(rowRun.result, rowRun.row_index, rowRun.source_row, data.workbook)] : []))
+    setAnnotatedRows(data.row_runs.flatMap((rowRun) => rowRun.result
+      ? [buildAnnotatedRow(rowRun.result, rowRun.row_index, rowRun.source_row, data.workbook, rowRun.reclassification_result ?? null)]
+      : []))
     setBackgroundTaskError(null)
     window.setTimeout(() => document.getElementById('gigachat-workbook-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
   }
@@ -1510,15 +1866,21 @@ export default function GigaChatPage() {
         .map((row, index) => ({ row_index: index, source_row: row }))
         .filter((item) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, item.row_index)))
       if (!selectedRows.length) throw new Error('Сначала выберите хотя бы одну строку.')
+      const baseValues = valuesForRun ?? settingValues
+      const useReclassification = shouldSendReclassificationRequest(baseValues)
+      const runValues = useReclassification
+        ? withRunnableReclassificationRules(baseValues, sheetData.columns)
+        : baseValues
       return startGigaChatBackgroundTask({
         transport: selectedTransport,
-        values: valuesForRun ?? settingValues,
+        values: runValues,
         columns: finalPromptColumns,
         rows: selectedRows,
         filename: sheetData.filename,
         sheet_name: sheetData.sheet_name,
-        payload_override: resolvePayloadOverride(),
+        payload_override: useReclassification ? null : resolvePayloadOverride(),
         count_tokens: tokenAccounting.enabled,
+        reclassification_enabled: useReclassification,
       })
     },
     onSuccess: () => {
@@ -1547,6 +1909,12 @@ export default function GigaChatPage() {
   }, [sheetData, includedPromptColumns.length])
 
   useEffect(() => {
+    if (!reclassificationRequestsAvailable && sendReclassificationRequests) {
+      setSendReclassificationRequests(false)
+    }
+  }, [reclassificationRequestsAvailable, sendReclassificationRequests])
+
+  useEffect(() => {
     if (!sheetData) {
       setSelectedSheetRowKeys([])
       setRuleEvaluationMap({})
@@ -1571,15 +1939,38 @@ export default function GigaChatPage() {
     }
   }, [searchParams])
 
-  const appendAnnotatedResult = (data: GigaChatLabRowRunResponse, rowIndex: number, row: Record<string, unknown>) => {
+  const appendAnnotatedResult = (
+    data: GigaChatLabRowRunResponse,
+    rowIndex: number,
+    row: Record<string, unknown>,
+    reclassificationData?: GigaChatLabRowRunResponse | null,
+  ) => {
     if (!sheetData) return
-    const annotatedRow = buildAnnotatedRow(data, rowIndex, row, sheetData)
+    const annotatedRow = buildAnnotatedRow(data, rowIndex, row, sheetData, reclassificationData)
     setAnnotatedRows((current) => {
       const next = current.filter((item) => item.rowKey !== annotatedRow.rowKey)
       next.unshift(annotatedRow)
       return next
     })
   }
+
+  const buildRowRunResultPages = (
+    data: GigaChatLabRowRunResponse,
+    reclassificationData?: GigaChatLabRowRunResponse | null,
+  ): RowRunResultPage[] => [
+    {
+      id: 'classification',
+      title: '1. Основной запрос',
+      description: 'Классификация строки, rule hits и теги.',
+      result: data,
+    },
+    ...(reclassificationData ? [{
+      id: 'reclassification' as const,
+      title: '2. Переклассификация',
+      description: 'Отдельный второй запрос только для проверки и замены темы.',
+      result: reclassificationData,
+    }] : []),
+  ]
 
   const resolvePayloadOverride = () => (
     finalPromptOverrideText
@@ -1616,6 +2007,50 @@ export default function GigaChatPage() {
       ...current,
       totalTokens: current.totalTokens + tokenCount,
     }))
+  }
+
+  const runWorkbookRowWithOptionalReclassification = async (
+    row: Record<string, unknown>,
+    valuesForRun: Record<string, unknown>,
+    payloadOverride: Record<string, unknown> | null,
+    onPrimaryComplete?: (data: GigaChatLabRowRunResponse) => void,
+  ): Promise<{
+    data: GigaChatLabRowRunResponse
+    reclassificationData: GigaChatLabRowRunResponse | null
+    reclassificationEnabled: boolean
+  }> => {
+    const reclassificationEnabled = shouldSendReclassificationRequest(valuesForRun)
+    const reclassificationValues = reclassificationEnabled
+      ? withRunnableReclassificationRules(valuesForRun, sheetData?.columns ?? null)
+      : valuesForRun
+    const primaryValues = reclassificationEnabled ? withoutReclassificationSettings(reclassificationValues) : valuesForRun
+    const primaryPayloadOverride = reclassificationEnabled ? null : payloadOverride
+    const data = await runGigaChatWorkbookRow(
+      selectedTransport,
+      primaryValues,
+      finalPromptColumns,
+      row,
+      primaryPayloadOverride,
+      tokenAccounting.enabled,
+    )
+    accumulateTokenCount(data.request_token_count)
+    onPrimaryComplete?.(data)
+
+    let reclassificationData: GigaChatLabRowRunResponse | null = null
+    if (reclassificationEnabled) {
+      reclassificationData = await runGigaChatWorkbookRow(
+        selectedTransport,
+        reclassificationValues,
+        finalPromptColumns,
+        row,
+        null,
+        tokenAccounting.enabled,
+        true,
+      )
+      accumulateTokenCount(reclassificationData.request_token_count)
+    }
+
+    return { data, reclassificationData, reclassificationEnabled }
   }
 
   const runWithRuleGuard = (action: PendingRuleGuardAction) => {
@@ -1657,20 +2092,24 @@ export default function GigaChatPage() {
     }
     setRowRunError(null)
     setRunRowBusyIndex(rowIndex)
-    startProcessingOverlay('Обработка одной жалобы', 1)
+    const useReclassification = shouldSendReclassificationRequest(valuesForRun)
+    const totalSteps = useReclassification ? 2 : 1
+    startProcessingOverlay('Обработка одной жалобы', totalSteps)
     try {
-      const data = await runGigaChatWorkbookRow(
-        selectedTransport,
-        valuesForRun,
-        finalPromptColumns,
+      const { data, reclassificationData } = await runWorkbookRowWithOptionalReclassification(
         row,
+        valuesForRun,
         resolvePayloadOverride(),
-        tokenAccounting.enabled,
+        () => {
+          if (useReclassification) {
+            updateProcessingOverlay(1, totalSteps, 'Классификация готова. Переклассифицируем тему...')
+          }
+        },
       )
-      accumulateTokenCount(data.request_token_count)
-      appendAnnotatedResult(data, rowIndex, row)
-      updateProcessingOverlay(1, 1, 'Жалоба обработана. Открываем результат...')
-      setRowRunResult(data)
+      appendAnnotatedResult(data, rowIndex, row, reclassificationData)
+      updateProcessingOverlay(totalSteps, totalSteps, 'Жалоба обработана. Открываем результат...')
+      setRowRunResultPages(buildRowRunResultPages(data, reclassificationData))
+      setActiveRowRunResultPage(0)
       setRowRunModalOpen(true)
     } catch (error) {
       setRowRunError(formatLabError(error as Error, 'строку'))
@@ -1697,29 +2136,46 @@ export default function GigaChatPage() {
 
     setBatchRunError(null)
     setBatchBusy(true)
-    startProcessingOverlay('Пакетная разметка жалоб', rowIndexes.length)
+    const useReclassification = shouldSendReclassificationRequest(valuesForRun)
+    const stepsPerRow = useReclassification ? 2 : 1
+    const totalSteps = rowIndexes.length * stepsPerRow
+    startProcessingOverlay('Пакетная разметка жалоб', totalSteps)
 
     try {
       const payloadOverride = resolvePayloadOverride()
-      let lastResult: GigaChatLabRowRunResponse | null = null
+      let lastResultPages: RowRunResultPage[] = []
+      let completedSteps = 0
       for (let idx = 0; idx < rowIndexes.length; idx += 1) {
         const rowIndex = rowIndexes[idx]
         const row = sheetData.rows[rowIndex]
-        updateProcessingOverlay(idx, rowIndexes.length, `Обрабатываем запись ${idx + 1} из ${rowIndexes.length}`)
-        const data = await runGigaChatWorkbookRow(selectedTransport, valuesForRun, finalPromptColumns, row, payloadOverride, tokenAccounting.enabled)
-        accumulateTokenCount(data.request_token_count)
-        appendAnnotatedResult(data, rowIndex, row)
-        lastResult = data
+        updateProcessingOverlay(completedSteps, totalSteps, `Обрабатываем запись ${idx + 1} из ${rowIndexes.length}`)
+        const { data, reclassificationData } = await runWorkbookRowWithOptionalReclassification(
+          row,
+          valuesForRun,
+          payloadOverride,
+          () => {
+            completedSteps += 1
+            if (useReclassification) {
+              updateProcessingOverlay(completedSteps, totalSteps, `Переклассифицируем тему ${idx + 1} из ${rowIndexes.length}`)
+            }
+          },
+        )
+        if (reclassificationData) {
+          completedSteps += 1
+        }
+        appendAnnotatedResult(data, rowIndex, row, reclassificationData)
+        lastResultPages = buildRowRunResultPages(data, reclassificationData)
         updateProcessingOverlay(
-          idx + 1,
-          rowIndexes.length,
+          completedSteps,
+          totalSteps,
           tokenAccounting.enabled && data.request_token_count
-            ? `Готово ${idx + 1} из ${rowIndexes.length}. Последний запрос: ${data.request_token_count} токенов`
+            ? `Готово ${idx + 1} из ${rowIndexes.length}. Последний основной запрос: ${data.request_token_count} токенов`
             : `Готово ${idx + 1} из ${rowIndexes.length}`,
         )
       }
-      if (lastResult) {
-        setRowRunResult(lastResult)
+      if (lastResultPages.length) {
+        setRowRunResultPages(lastResultPages)
+        setActiveRowRunResultPage(0)
       }
     } catch (error) {
       setBatchRunError(formatLabError(error as Error, errorContext))
@@ -1785,7 +2241,7 @@ export default function GigaChatPage() {
     String(statusQ.data?.model ?? '').trim(),
   ].filter(Boolean)))
   const requestSettingsFields = (selectedVersionQ.data?.fields ?? [])
-    .filter((field) => !labelingFieldKeys.has(field.key))
+    .filter((field) => !hiddenLabSettingKeys.has(field.key))
     .map((field) => {
       if (field.key !== 'model') return field
       const modelsHelpText = modelOptionsQ.isFetching
@@ -1936,6 +2392,10 @@ export default function GigaChatPage() {
     setRuleEvaluationProgress({ processed: 0, total: sheetData.rows.length })
     window.setTimeout(() => evaluateRulePacks.mutate(sheetData.rows), 0)
   }
+
+  const activeRowRunPageIndex = Math.min(activeRowRunResultPage, Math.max(0, rowRunResultPages.length - 1))
+  const activeRowRunPage = rowRunResultPages[activeRowRunPageIndex] ?? null
+  const activeRowRunResult = activeRowRunPage?.result ?? null
 
   return <div className='transport-page'>
     {loadBackgroundTaskResult.isPending ? <div className='background-result-lock' role='status' aria-live='polite'>
@@ -2107,7 +2567,7 @@ export default function GigaChatPage() {
       <div className='transport-section-head'>
         <div className='transport-section-title'>
           <h3>Настройки Lab</h3>
-          <p>Три рабочие зоны: промпты, справочники классов/тегов и локальные правила, которые проверяются до отправки в GigaChat.</p>
+          <p>Три рабочие зоны: промпты, переклассификация и локальные правила, которые проверяются до отправки в GigaChat.</p>
         </div>
         <button className='transport-collapse-button' onClick={() => setSettingsCollapsed((current) => !current)}>
           {settingsCollapsed ? 'Развернуть' : 'Свернуть'}
@@ -2254,12 +2714,155 @@ export default function GigaChatPage() {
             </button>
             <button
               type='button'
-              className={activeSetupTab === 'labels' ? 'active' : ''}
-              onClick={() => setActiveSetupTab('labels')}
+              className={activeSetupTab === 'reclassification' ? 'active' : ''}
+              onClick={() => setActiveSetupTab('reclassification')}
             >
-              Классы
+              Переклассификация
             </button>
           </div>
+
+          {reclassificationOpen ? <div className='sheet-modal-backdrop' onClick={() => setReclassificationOpen(false)}>
+            <div className='card sheet-modal reclassification-settings-modal' onClick={(event) => event.stopPropagation()}>
+              <div className='transport-section-head'>
+                <div className='transport-section-title'>
+                  <h3>{reclassificationDraft.editingIndex === null ? 'Добавить правило переклассификации' : 'Редактировать правило переклассификации'}</h3>
+                  <p>Настройте поля и инструкцию, которые попадут в итоговый prompt для проверки темы.</p>
+                </div>
+                <button className='transport-collapse-button' type='button' onClick={() => setReclassificationOpen(false)}>Закрыть</button>
+              </div>
+
+              <div className='labeling-edit-modal-form reclassification-settings-form'>
+                <label className='lab-field wide'>
+                  <span>Название переклассификации</span>
+                  <input
+                    type='text'
+                    value={reclassificationDraft.name}
+                    onChange={(event) => setReclassificationDraft((current) => ({ ...current, name: event.target.value }))}
+                    placeholder='Проблема с выдачей очередного транша по образовательному кредиту'
+                  />
+                  <span className='lab-field-help'>Это точное значение, которое GigaChat сможет вернуть в `reclassified_topic`.</span>
+                </label>
+
+                <label className={`lab-field ${reclassificationDraftSourceMissing ? 'missing-field' : ''}`}>
+                  <span>Поле исходной темы</span>
+                  <select
+                    className={reclassificationDraftSourceMissing ? 'missing-field-control' : ''}
+                    value={reclassificationDraft.sourceField}
+                    onChange={(event) => {
+                      setReclassificationDraft((current) => ({ ...current, sourceField: event.target.value }))
+                      setReclassificationSaveStatus({ type: 'idle', message: '' })
+                    }}
+                  >
+                    {renderReclassificationColumnOptions('reclassification-source')}
+                  </select>
+                  <span className={reclassificationDraftSourceMissing ? 'lab-field-help missing-field-help' : 'lab-field-help'}>
+                    {reclassificationDraftSourceMissing
+                      ? `Колонки "${reclassificationDraft.sourceField}" нет в текущем рабочем листе. Правило будет неактивным.`
+                      : 'Колонка, где хранится текущая/исходная тема обращения.'}
+                  </span>
+                </label>
+
+                <label className={`lab-field ${reclassificationDraftContextMissing ? 'missing-field' : ''}`}>
+                  <span>Поле контекста</span>
+                  <select
+                    className={reclassificationDraftContextMissing ? 'missing-field-control' : ''}
+                    value={reclassificationDraft.contextField}
+                    onChange={(event) => {
+                      setReclassificationDraft((current) => ({ ...current, contextField: event.target.value }))
+                      setReclassificationSaveStatus({ type: 'idle', message: '' })
+                    }}
+                  >
+                    {renderReclassificationColumnOptions('reclassification-context')}
+                  </select>
+                  <span className={reclassificationDraftContextMissing ? 'lab-field-help missing-field-help' : 'lab-field-help'}>
+                    {reclassificationDraftContextMissing
+                      ? `Колонки "${reclassificationDraft.contextField}" нет в текущем рабочем листе. Правило будет неактивным.`
+                      : 'Колонка с текстом, суммаризацией или другим контекстом для проверки темы.'}
+                  </span>
+                </label>
+
+                <label className='lab-field wide'>
+                  <span>Описание переклассификации</span>
+                  <textarea
+                    value={reclassificationDraft.prompt}
+                    onChange={(event) => setReclassificationDraft((current) => ({ ...current, prompt: event.target.value }))}
+                    placeholder={RECLASSIFICATION_DESCRIPTION_PLACEHOLDER}
+                  />
+                  <span className='lab-field-help'>Кратко опишите, по каким признакам выбирать эту тему. В prompt уйдут только название и это описание.</span>
+                </label>
+              </div>
+
+              {!sheetData ? <div className='lab-muted'>После загрузки рабочей тетради здесь появятся колонки текущего листа.</div> : null}
+              {reclassificationSaveStatus.message ? <div className={reclassificationSaveStatus.type === 'error' ? 'transport-error' : 'lab-muted'}>
+                {reclassificationSaveStatus.message}
+              </div> : null}
+
+              <div className='lab-settings-actions'>
+                <button
+                  className='primary'
+                  type='button'
+                  onClick={saveReclassificationRule}
+                  disabled={saveSettings.isPending || reclassificationImporting || !canSaveReclassificationDraft}
+                >
+                  {saveSettings.isPending || reclassificationImporting ? 'Записываем...' : 'Записать в профиль'}
+                </button>
+                <button type='button' onClick={() => setReclassificationOpen(false)} disabled={saveSettings.isPending || reclassificationImporting}>Отмена</button>
+              </div>
+            </div>
+          </div> : null}
+
+          {activeSetupTab === 'reclassification' ? <div className='lab-tab-panel'>
+            <section className='labeling-panel reclassification-rules-panel'>
+              <div className='labeling-panel-head'>
+                <h4>Переклассификация</h4>
+                <p>Правила, которые отправляют в GigaChat исходную тему, контекст и отдельную инструкцию для проверки, нужно ли заменить тему строки.</p>
+              </div>
+
+              <div className='transport-actions'>
+                <button type='button' onClick={() => openReclassificationRule(null)} disabled={saveSettings.isPending || reclassificationImporting}>+ Добавить правило</button>
+                <label className={`rule-pack-file-button ${saveSettings.isPending || reclassificationImporting ? 'disabled' : ''}`}>
+                  <span>{reclassificationImporting ? 'Читаем Excel...' : 'Загрузить из Excel'}</span>
+                  <input
+                    key={reclassificationImportInputVersion}
+                    type='file'
+                    accept='.xlsx,.xls,.xlsm,.csv'
+                    disabled={saveSettings.isPending || reclassificationImporting}
+                    onChange={(event) => importReclassificationRulesFromFile(event.target.files?.[0])}
+                  />
+                </label>
+              </div>
+              <div className='lab-muted'>Ожидаемые колонки: name, src_field, context_field, prompt_field.</div>
+              {reclassificationSaveStatus.message ? <div className={reclassificationSaveStatus.type === 'error' ? 'transport-error' : 'lab-muted'}>
+                {reclassificationSaveStatus.message}
+              </div> : null}
+
+              {reclassificationRules.length ? <div className='labeling-rules-list'>
+                {reclassificationRules.map((rule, index) => {
+                  const status = reclassificationRuleStatuses[index] ?? { valid: true, missing: [] }
+                  const active = canRunReclassificationRule(rule) && status.valid
+                  return <div
+                    key={`${rule.name}-${rule.source_field}-${rule.context_field}-${index}`}
+                    className={`labeling-rule-card reclassification-rule-card ${active ? 'active' : 'inactive'}${status.valid ? '' : ' missing-fields'}`}
+                  >
+                    <div className='labeling-rule-copy'>
+                      <div className='labeling-rule-name'>{formatReclassificationRuleTitle(rule)}</div>
+                      {!status.valid ? <div className='rule-pack-missing-fields'>Нет колонок: {status.missing.join(', ')}</div> : null}
+                      <div className='labeling-rule-description'>{rule.prompt}</div>
+                      <div className='labeling-rule-meta'>
+                        <span className={rule.source_field && status.missing.includes(rule.source_field) ? 'reclassification-field-missing' : ''}>Поле темы: {rule.source_field || '—'}</span>
+                        <span className={rule.context_field && status.missing.includes(rule.context_field) ? 'reclassification-field-missing' : ''}>Контекст: {rule.context_field || '—'}</span>
+                        <span className={`reclassification-status-badge ${active ? 'active' : 'inactive'}`}>{active ? 'Активно' : 'Неактивно'}</span>
+                      </div>
+                    </div>
+                    <div className='labeling-rule-actions'>
+                      <button className='labeling-remove-button' type='button' onClick={() => openReclassificationRule(index)} disabled={saveSettings.isPending || reclassificationImporting}>Редактировать</button>
+                      <button className='labeling-remove-button' type='button' onClick={() => removeReclassificationRule(index)} disabled={saveSettings.isPending || reclassificationImporting}>Удалить</button>
+                    </div>
+                  </div>
+                })}
+              </div> : <div className='lab-muted'>Правила переклассификации пока не добавлены.</div>}
+            </section>
+          </div> : null}
 
           {activeSetupTab === 'prompts' ? <div className='lab-tab-panel'>
             <GigaChatSettingsForm
@@ -2270,22 +2873,6 @@ export default function GigaChatPage() {
               onChange={(key, value) => setSettingValues((current) => ({ ...current, [key]: value }))}
               onPersist={persistSettingValue}
               onSave={() => saveSettings.mutate(undefined)}
-            />
-          </div> : null}
-
-          {activeSetupTab === 'labels' ? <div className='lab-tab-panel'>
-            <LabelingRulesEditor
-              title='Классы'
-              description='Список классов для классификации: корзины, категории, подкатегории и краткие правила, как их выбирать.'
-              addLabel='Добавить класс'
-              clearLabel='Сбросить все классы'
-              nameLabel='Класс'
-              value={settingValues.classification_prompt_notes}
-              onChange={(value) => setSettingValues((current) => ({ ...current, classification_prompt_notes: value }))}
-              onPersist={(value) => persistSettingValue('classification_prompt_notes', value)}
-              onClear={() => persistSettingValue('classification_prompt_notes', '[]')}
-              persistBusy={saveSettings.isPending}
-              persistError={saveSettings.isError ? formatLabError(saveSettings.error as Error, 'классы') : null}
             />
           </div> : null}
 
@@ -2747,6 +3334,9 @@ export default function GigaChatPage() {
               return [...rest, ...keys]
             })
           }}
+          reclassificationRequestsEnabled={sendReclassificationRequests}
+          reclassificationRequestsAvailable={reclassificationRequestsAvailable}
+          onToggleReclassificationRequests={setSendReclassificationRequests}
           onRunSelectedRows={() => runWithRuleGuard((valuesForRun) => handleRunSelectedRows(valuesForRun))}
           onRunAllRows={() => runWithRuleGuard((valuesForRun) => handleRunAllRows(valuesForRun))}
           onRunSelectedRowsInBackground={() => runWithRuleGuard((valuesForRun) => startBackgroundTask.mutate(valuesForRun))}
@@ -3326,29 +3916,62 @@ export default function GigaChatPage() {
       </div>
     </div> : null}
 
-    {rowRunModalOpen && rowRunResult ? <div className='sheet-modal-backdrop' onClick={() => setRowRunModalOpen(false)}>
+    {rowRunModalOpen && activeRowRunPage && activeRowRunResult ? <div className='sheet-modal-backdrop' onClick={() => setRowRunModalOpen(false)}>
       <div className='card sheet-modal' onClick={(e) => e.stopPropagation()}>
         <div className='transport-section-head'>
           <div className='transport-section-title'>
             <h3>Запрос в GigaChat по строке</h3>
-            <p>Здесь видно, какой payload был отправлен в GigaChat и что модель вернула в ответ.</p>
+            <p>Здесь видно, какие payload были отправлены в GigaChat и что модель вернула в ответ.</p>
           </div>
           <button className='transport-collapse-button' onClick={() => setRowRunModalOpen(false)}>Закрыть</button>
         </div>
+        <div className='row-run-pages'>
+          <div className='row-run-page-tabs' role='tablist' aria-label='Запросы GigaChat по строке'>
+            {rowRunResultPages.map((page, index) => <button
+              key={page.id}
+              type='button'
+              className={index === activeRowRunPageIndex ? 'active' : ''}
+              onClick={() => setActiveRowRunResultPage(index)}
+            >
+              {page.title}
+            </button>)}
+          </div>
+          <div className='row-run-page-actions'>
+            <button
+              type='button'
+              onClick={() => setActiveRowRunResultPage((current) => Math.max(0, current - 1))}
+              disabled={activeRowRunPageIndex <= 0}
+            >
+              Назад
+            </button>
+            <span>{activeRowRunPageIndex + 1} из {rowRunResultPages.length}</span>
+            <button
+              type='button'
+              onClick={() => setActiveRowRunResultPage((current) => Math.min(rowRunResultPages.length - 1, current + 1))}
+              disabled={activeRowRunPageIndex >= rowRunResultPages.length - 1}
+            >
+              Дальше
+            </button>
+          </div>
+        </div>
+        <div className='row-run-page-summary'>
+          <strong>{activeRowRunPage.title}</strong>
+          <span>{activeRowRunPage.description}</span>
+        </div>
         <div className='lab-settings-meta'>
-          <div><b>Transport:</b> <code>{rowRunResult.transport}</code></div>
-          <div><b>JSON parse:</b> {rowRunResult.parse_ok ? 'успешно' : 'не удалось распарсить'}</div>
-          <div><b>Токены запроса:</b> {rowRunResult.request_token_count ?? 'не считали'}</div>
-          <div><b>Rule hits:</b> {rowRunResult.rule_evaluation?.hits.length ? rowRunResult.rule_evaluation.hits.map((item) => item.code).join(', ') : 'нет'}</div>
+          <div><b>Transport:</b> <code>{activeRowRunResult.transport}</code></div>
+          <div><b>JSON parse:</b> {activeRowRunResult.parse_ok ? 'успешно' : 'не удалось распарсить'}</div>
+          <div><b>Токены запроса:</b> {activeRowRunResult.request_token_count ?? 'не считали'}</div>
+          <div><b>Rule hits:</b> {activeRowRunResult.rule_evaluation?.hits.length ? activeRowRunResult.rule_evaluation.hits.map((item) => item.code).join(', ') : 'нет'}</div>
         </div>
         <div className='row-run-grid'>
           <section className='row-run-panel'>
             <h4>Что ушло в GigaChat</h4>
-            <pre className='final-prompt-json'>{stringifyJson(rowRunResult.request_payload)}</pre>
+            <pre className='final-prompt-json'>{stringifyJson(activeRowRunResult.request_payload)}</pre>
           </section>
           <section className='row-run-panel'>
             <h4>Что вернул GigaChat</h4>
-            <pre className='final-prompt-json'>{rowRunResult.parse_ok ? stringifyJson(rowRunResult.response_json) : rowRunResult.response_raw}</pre>
+            <pre className='final-prompt-json'>{activeRowRunResult.parse_ok ? stringifyJson(activeRowRunResult.response_json) : activeRowRunResult.response_raw}</pre>
           </section>
         </div>
       </div>
