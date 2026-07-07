@@ -9,6 +9,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from complaints_trends.api import create_app
+from complaints_trends.api.schemas import GigaChatBackgroundTaskStartRequest
 from complaints_trends.api.services.gigachat_lab_service import GigaChatLabService
 
 
@@ -43,6 +44,16 @@ def test_gigachat_status_exposes_mtls_and_token(tmp_path: Path):
     assert names == {"mtls", "token"}
     assert any(item["name"] == "mtls" and item["ready"] is True for item in payload["transports"])
     assert any(item["name"] == "token" and item["ready"] is True for item in payload["transports"])
+
+
+def test_gigachat_background_task_async_workers_schema_limits():
+    assert GigaChatBackgroundTaskStartRequest(async_workers=4).async_workers == 4
+    for value in (0, 33):
+        try:
+            GigaChatBackgroundTaskStartRequest(async_workers=value)
+        except Exception:
+            continue
+        raise AssertionError(f"async_workers={value} should be rejected")
 
 
 def test_gigachat_probe_uses_selected_transport(monkeypatch, tmp_path: Path):
@@ -101,6 +112,37 @@ def test_gigachat_lab_settings_expose_only_request_fields(tmp_path: Path):
     assert "mode" not in keys
     assert "валидный JSON" in str(fields["system_prompt"]["value"])
     assert "Одна строка таблицы = одно обращение" in str(fields["context_notes"]["value"])
+
+
+def test_gigachat_settings_version_saves_new_rule_pack_exclusion_field(tmp_path: Path):
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    created = client.post(
+        "/api/gigachat/lab/settings/versions",
+        json={
+            "title": "Old private profile",
+            "version_id": "old_private_profile",
+            "visibility": "private",
+            "created_by": "test",
+            "base_version_id": "default",
+        },
+    )
+    assert created.status_code == 200
+
+    save_response = client.post(
+        "/api/gigachat/lab/settings/versions/old_private_profile",
+        json={
+            "updated_by": "test",
+            "values": {
+                "rule_pack_exclusion_notes": json.dumps(["DRA"], ensure_ascii=False),
+            },
+        },
+    )
+    assert save_response.status_code == 200
+    assert json.loads(save_response.json()["values"]["rule_pack_exclusion_notes"]) == ["DRA"]
+
+    loaded = client.get("/api/gigachat/lab/settings/versions/old_private_profile")
+    assert loaded.status_code == 200
+    assert json.loads(loaded.json()["values"]["rule_pack_exclusion_notes"]) == ["DRA"]
 
 
 def test_gigachat_final_prompt_uses_rules_and_columns(tmp_path: Path):
@@ -192,6 +234,80 @@ def test_gigachat_final_prompt_save_writes_snapshot(tmp_path: Path):
     assert payload["saved"] is True
     assert payload["saved_path"]
     assert Path(payload["saved_path"]).exists()
+
+
+def test_gigachat_rule_pack_exclusions_skip_api_prompt_but_keep_local_hits(monkeypatch, tmp_path: Path):
+    captured: dict[str, dict] = {}
+
+    class FakeTransportClient:
+        def chat(self, payload):
+            captured["payload"] = payload
+
+            class _Msg:
+                def __init__(self, content):
+                    self.content = content
+
+            class _Choice:
+                def __init__(self, content):
+                    self.message = _Msg(content)
+
+            class _Resp:
+                def __init__(self, content):
+                    self.choices = [_Choice(content)]
+
+            return _Resp('{"ok": true}')
+
+    monkeypatch.setattr(
+        "complaints_trends.api.services.gigachat_lab_service.build_gigachat_transport_client",
+        lambda cfg, transport=None: FakeTransportClient(),
+    )
+
+    rules = [
+        {
+            "code": "VISIBLE_RULE",
+            "description": "Остается в prompt.",
+            "enabled": True,
+            "type": "assign_tag",
+            "source_fields": ["text"],
+            "keywords": ["видимый"],
+            "filters": [],
+            "target_tag": "visible",
+            "target_topic": None,
+        },
+        {
+            "code": "EXCLUDED_RULE",
+            "description": "Не должен уходить в GigaChat.",
+            "enabled": True,
+            "type": "assign_tag",
+            "source_fields": ["text"],
+            "keywords": ["скрытый"],
+            "filters": [],
+            "target_tag": "excluded",
+            "target_topic": None,
+        },
+    ]
+    client = TestClient(create_app(str(_setup(tmp_path))))
+    response = client.post(
+        "/api/gigachat/lab/run-row",
+        json={
+            "transport": "token",
+            "values": {
+                "rule_pack_prompt_notes": json.dumps(rules, ensure_ascii=False),
+                "rule_pack_exclusion_notes": json.dumps(["EXCLUDED_RULE"], ensure_ascii=False),
+            },
+            "columns": ["text"],
+            "row": {"text": "видимый и скрытый кейс"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    hit_codes = {hit["code"] for hit in payload["rule_evaluation"]["hits"]}
+    assert hit_codes == {"VISIBLE_RULE", "EXCLUDED_RULE"}
+
+    user_message = captured["payload"]["messages"][1]["content"]
+    assert "VISIBLE_RULE" in user_message
+    assert "EXCLUDED_RULE" not in user_message
 
 
 def test_gigachat_rule_pack_keyword_keeps_trailing_space(tmp_path: Path):

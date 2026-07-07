@@ -218,6 +218,7 @@ export function startGigaChatBackgroundTask(payload: {
   payload_override?: Record<string, unknown> | null
   count_tokens?: boolean
   reclassification_enabled?: boolean
+  async_workers?: number
 }) {
   return apiPost<GigaChatBackgroundTaskSummary>('/api/gigachat/lab/background-tasks', payload)
 }

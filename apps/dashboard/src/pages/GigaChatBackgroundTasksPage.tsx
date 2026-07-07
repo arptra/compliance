@@ -71,6 +71,7 @@ export default function GigaChatBackgroundTasksPage() {
               <div><span>Старт</span><strong>{formatDate(task.started_at)}</strong></div>
               <div><span>Финиш</span><strong>{formatDate(task.finished_at)}</strong></div>
               <div><span>Ошибок строк</span><strong>{task.failed_rows}</strong></div>
+              <div><span>Workers</span><strong>{task.async_workers || 1}</strong></div>
             </div>
 
             <div className='lab-muted'>{task.current_label || '—'}</div>

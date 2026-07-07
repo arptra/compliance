@@ -78,6 +78,8 @@ const CHUNKED_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024
 const CHUNKED_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 const CHUNKED_UPLOAD_CONCURRENCY = 4
 const CHUNKED_UPLOAD_POLL_MS = 1000
+const RULE_PACK_EXCLUSION_SETTING_KEY = 'rule_pack_exclusion_notes'
+const SETTINGS_VERSION_STORAGE_KEY = 'gigachat_lab_settings_profile_version_id'
 const RULE_EVALUATION_CHUNK_COUNT = 25
 const DEFAULT_RECLASSIFICATION_PROMPT = ''
 const RECLASSIFICATION_DESCRIPTION_PLACEHOLDER = 'Например: обращения про задержку очередного транша по образовательному кредиту, оплату семестра или проблемы с учебным периодом.'
@@ -261,7 +263,11 @@ type RuleGuardIssue = {
 type PendingRuleGuardAction = (values: Record<string, unknown>) => void | Promise<void>
 
 const TOKEN_ACCOUNTING_STORAGE_KEY = 'gigachat-lab-token-accounting'
+const ASYNC_WORKERS_STORAGE_KEY = 'gigachat-lab-async-workers'
 const WORKBOOK_UPLOAD_BACKGROUND_STORAGE_KEY = 'gigachat-lab-background-workbook-uploads'
+const DEFAULT_ASYNC_WORKERS = 4
+const MAX_ASYNC_WORKERS = 32
+const ASYNC_WORKER_SLIDER_MAX = 16
 const DEFAULT_RULE_PACK_PROMPT_NOTES = JSON.stringify([
   {
     code: 'DRA',
@@ -536,6 +542,63 @@ function disableRulesWithMissingFields(values: Record<string, unknown>, columns:
   }
 }
 
+function parseRulePackExclusions(raw: unknown) {
+  const normalize = (item: unknown) => {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>
+      return String(record.code ?? record.name ?? record.value ?? '').trim()
+    }
+    return String(item ?? '').trim()
+  }
+  const unique = (items: unknown[]) => Array.from(new Set(items.map(normalize).filter(Boolean)))
+
+  if (Array.isArray(raw)) return unique(raw)
+  const text = String(raw ?? '').trim()
+  if (!text) return []
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (Array.isArray(parsed)) return unique(parsed)
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      const items = record.codes ?? record.items ?? record.rule_packs
+      return Array.isArray(items) ? unique(items) : unique([record])
+    }
+    return unique([parsed])
+  } catch {
+    return unique(text.replace(/\r/gu, '\n').split(/\n|,/u))
+  }
+}
+
+function serializeRulePackExclusions(codes: string[]) {
+  return JSON.stringify(Array.from(new Set(codes.map((code) => code.trim()).filter(Boolean))), null, 2)
+}
+
+function withSerializedRulePackExclusions(values: Record<string, unknown>, codesOverride?: string[]) {
+  const codes = codesOverride ?? parseRulePackExclusions(values[RULE_PACK_EXCLUSION_SETTING_KEY])
+  return {
+    ...values,
+    [RULE_PACK_EXCLUSION_SETTING_KEY]: serializeRulePackExclusions(codes),
+  }
+}
+
+function preserveRulePackExclusionValue(serverValues: Record<string, unknown>, submittedValues: Record<string, unknown>) {
+  if (Object.prototype.hasOwnProperty.call(serverValues, RULE_PACK_EXCLUSION_SETTING_KEY)) return serverValues
+  if (!Object.prototype.hasOwnProperty.call(submittedValues, RULE_PACK_EXCLUSION_SETTING_KEY)) return serverValues
+  return {
+    ...serverValues,
+    [RULE_PACK_EXCLUSION_SETTING_KEY]: submittedValues[RULE_PACK_EXCLUSION_SETTING_KEY],
+  }
+}
+
+function readStoredSettingsVersionId() {
+  if (typeof window === 'undefined') return null
+  return window.localStorage.getItem(SETTINGS_VERSION_STORAGE_KEY)
+}
+
+function loadStoredSettingsVersionId() {
+  return readStoredSettingsVersionId() || ''
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -563,6 +626,17 @@ function loadTokenAccountingState(): TokenAccountingState {
   }
 }
 
+function clampAsyncWorkerCount(value: unknown): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return DEFAULT_ASYNC_WORKERS
+  return Math.max(1, Math.min(MAX_ASYNC_WORKERS, Math.round(parsed)))
+}
+
+function loadAsyncWorkerCount(): number {
+  if (typeof window === 'undefined') return DEFAULT_ASYNC_WORKERS
+  return clampAsyncWorkerCount(window.localStorage.getItem(ASYNC_WORKERS_STORAGE_KEY))
+}
+
 function loadBackgroundWorkbookUploads(): BackgroundWorkbookUpload[] {
   if (typeof window === 'undefined') return []
   try {
@@ -580,6 +654,22 @@ function loadBackgroundWorkbookUploads(): BackgroundWorkbookUpload[] {
   } catch {
     return []
   }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  workerCount: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  const parallelism = Math.min(clampAsyncWorkerCount(workerCount), items.length)
+  let cursor = 0
+  await Promise.all(Array.from({ length: parallelism }, async () => {
+    while (cursor < items.length) {
+      const index = cursor
+      cursor += 1
+      await worker(items[index], index)
+    }
+  }))
 }
 
 function extractClassification(responseJson: unknown) {
@@ -894,6 +984,7 @@ export default function GigaChatPage() {
   const { user } = useAuth()
   const hiddenLabSettingKeys = new Set([
     'rule_pack_prompt_notes',
+    RULE_PACK_EXCLUSION_SETTING_KEY,
     'reclassification_prompt_notes',
     'reclassification_source_field',
     'reclassification_context_field',
@@ -905,7 +996,7 @@ export default function GigaChatPage() {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
-  const [selectedSettingsVersionId, setSelectedSettingsVersionId] = useState('default')
+  const [selectedSettingsVersionId, setSelectedSettingsVersionId] = useState(loadStoredSettingsVersionId)
   const [versionCreateOpen, setVersionCreateOpen] = useState(false)
   const [versionDraft, setVersionDraft] = useState({
     title: '',
@@ -947,6 +1038,9 @@ export default function GigaChatPage() {
   const [reclassificationSaveStatus, setReclassificationSaveStatus] = useState<ReclassificationSaveStatus>({ type: 'idle', message: '' })
   const [reclassificationImporting, setReclassificationImporting] = useState(false)
   const [reclassificationImportInputVersion, setReclassificationImportInputVersion] = useState(0)
+  const [rulePackExclusionDraft, setRulePackExclusionDraft] = useState('')
+  const [rulePackExclusionCodesDraft, setRulePackExclusionCodesDraft] = useState<string[]>([])
+  const rulePackExclusionSelectRef = useRef<HTMLSelectElement | null>(null)
   const [reclassificationDraft, setReclassificationDraft] = useState<ReclassificationDraft>({
     editingIndex: null,
     name: '',
@@ -962,6 +1056,7 @@ export default function GigaChatPage() {
     token: false,
   })
   const [settingValues, setSettingValues] = useState<Record<string, unknown>>({})
+  const settingValuesVersionIdRef = useRef<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [fileInputVersion, setFileInputVersion] = useState(0)
   const [workbookUploadProgress, setWorkbookUploadProgress] = useState<WorkbookUploadProgressState | null>(null)
@@ -1004,6 +1099,7 @@ export default function GigaChatPage() {
   const [pendingRuleGuardAction, setPendingRuleGuardAction] = useState<PendingRuleGuardAction | null>(null)
   const [pendingRuleGuardValues, setPendingRuleGuardValues] = useState<Record<string, unknown> | null>(null)
   const [tokenAccounting, setTokenAccounting] = useState<TokenAccountingState>(() => loadTokenAccountingState())
+  const [asyncWorkerCount, setAsyncWorkerCount] = useState(() => loadAsyncWorkerCount())
   const lastAutoPreviewKeyRef = useRef<string | null>(null)
   const lastResolvedPreviewKeyRef = useRef<string | null>(null)
   const workbookUploadAbortRef = useRef<AbortController | null>(null)
@@ -1079,8 +1175,17 @@ export default function GigaChatPage() {
   }, [tokenAccounting])
 
   useEffect(() => {
+    window.localStorage.setItem(ASYNC_WORKERS_STORAGE_KEY, String(asyncWorkerCount))
+  }, [asyncWorkerCount])
+
+  useEffect(() => {
     window.localStorage.setItem(WORKBOOK_UPLOAD_BACKGROUND_STORAGE_KEY, JSON.stringify(backgroundWorkbookUploads))
   }, [backgroundWorkbookUploads])
+
+  useEffect(() => {
+    if (!selectedSettingsVersionId) return
+    window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, selectedSettingsVersionId)
+  }, [selectedSettingsVersionId])
 
   useEffect(() => {
     if (!currentUserDisplayName) return
@@ -1111,10 +1216,20 @@ export default function GigaChatPage() {
   useEffect(() => {
     const versions = versionsQ.data?.versions ?? []
     if (!versions.length) return
-    if (!versions.some((version) => version.version_id === selectedSettingsVersionId)) {
-      setSelectedSettingsVersionId(versions[0].version_id)
-      setVersionDraft((current) => ({ ...current, baseVersionId: versions[0].version_id }))
-    }
+    if (selectedSettingsVersionId && versions.some((version) => version.version_id === selectedSettingsVersionId)) return
+    const storedVersionId = readStoredSettingsVersionId()
+    const storedVersion = storedVersionId ? versions.find((version) => version.version_id === storedVersionId) : null
+    const latestPrivateVersion = versions
+      .filter((version) => version.can_edit && version.visibility === 'private')
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.updated_at || left.created_at || '') || 0
+        const rightTime = Date.parse(right.updated_at || right.created_at || '') || 0
+        return rightTime - leftTime
+      })[0]
+    const nextVersionId = (storedVersion ?? latestPrivateVersion ?? versions[0]).version_id
+    window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, nextVersionId)
+    setSelectedSettingsVersionId(nextVersionId)
+    setVersionDraft((current) => ({ ...current, baseVersionId: nextVersionId }))
   }, [selectedSettingsVersionId, versionsQ.data])
 
   useEffect(() => {
@@ -1123,8 +1238,19 @@ export default function GigaChatPage() {
 
   useEffect(() => {
     if (!selectedVersionQ.data?.fields?.length) return
+    const versionId = selectedVersionQ.data.version.version_id
     const values = fieldsToValues(selectedVersionQ.data.fields)
-    setSettingValues(values)
+    const previousVersionId = settingValuesVersionIdRef.current
+    setSettingValues((current) => {
+      const nextValues = previousVersionId === versionId
+        ? preserveRulePackExclusionValue(values, current)
+        : values
+      settingValuesVersionIdRef.current = versionId
+      return nextValues
+    })
+    if (previousVersionId !== versionId) {
+      setRulePackExclusionCodesDraft(parseRulePackExclusions(values[RULE_PACK_EXCLUSION_SETTING_KEY]))
+    }
   }, [selectedVersionQ.data])
 
   const probe = useMutation({
@@ -1144,9 +1270,9 @@ export default function GigaChatPage() {
       if (!sourceVersion) {
         throw new Error('Версия настроек еще не загружена.')
       }
-      const values = valuesOverride ?? settingValues
+      const values = withSerializedRulePackExclusions(valuesOverride ?? settingValues, rulePackExclusionCodesDraft)
       if (sourceVersion.can_edit) {
-        return saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
+        const saved = await saveGigaChatLabSettingsVersion(selectedSettingsVersionId, {
           title: sourceVersion.title,
           description: sourceVersion.description,
           status: sourceVersion.status,
@@ -1154,6 +1280,7 @@ export default function GigaChatPage() {
           updated_by: currentUserDisplayName,
           values,
         })
+        return { ...saved, values: preserveRulePackExclusionValue(saved.values, values) }
       }
 
       const existingPersonalVersion = (versionsQ.data?.versions ?? []).find((version) =>
@@ -1162,7 +1289,7 @@ export default function GigaChatPage() {
         && version.base_version_id === sourceVersion.version_id
       )
       if (existingPersonalVersion) {
-        return saveGigaChatLabSettingsVersion(existingPersonalVersion.version_id, {
+        const saved = await saveGigaChatLabSettingsVersion(existingPersonalVersion.version_id, {
           title: existingPersonalVersion.title,
           description: existingPersonalVersion.description,
           status: existingPersonalVersion.status,
@@ -1170,6 +1297,7 @@ export default function GigaChatPage() {
           updated_by: currentUserDisplayName,
           values,
         })
+        return { ...saved, values: preserveRulePackExclusionValue(saved.values, values) }
       }
 
       const baseTitle = sourceVersion.title || selectedSettingsVersionId || 'Профиль настроек'
@@ -1182,7 +1310,7 @@ export default function GigaChatPage() {
         created_by: currentUserDisplayName,
         base_version_id: selectedSettingsVersionId,
       })
-      return saveGigaChatLabSettingsVersion(created.version.version_id, {
+      const saved = await saveGigaChatLabSettingsVersion(created.version.version_id, {
         title: created.version.title,
         description: created.version.description,
         status: created.version.status,
@@ -1190,6 +1318,7 @@ export default function GigaChatPage() {
         updated_by: currentUserDisplayName,
         values,
       })
+      return { ...saved, values: preserveRulePackExclusionValue(saved.values, values) }
     },
     onSuccess: async (data) => {
       qc.setQueryData(['gigachat-lab-settings-version', data.version.version_id], data)
@@ -1200,7 +1329,10 @@ export default function GigaChatPage() {
         ],
       }))
       setSelectedSettingsVersionId(data.version.version_id)
+      window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, data.version.version_id)
+      settingValuesVersionIdRef.current = data.version.version_id
       setSettingValues(data.values)
+      setRulePackExclusionCodesDraft(parseRulePackExclusions(data.values[RULE_PACK_EXCLUSION_SETTING_KEY]))
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', data.version.version_id] })
       await qc.invalidateQueries({ queryKey: ['gigachat-status'] })
@@ -1208,13 +1340,35 @@ export default function GigaChatPage() {
   })
 
   const persistSettingValue = (key: string, value: unknown) => {
-    const nextValues = { ...settingValues, [key]: value }
+    const nextValues = withSerializedRulePackExclusions({ ...settingValues, [key]: value }, rulePackExclusionCodesDraft)
     setSettingValues(nextValues)
     saveSettings.mutate(nextValues)
   }
 
   const persistRulePacks = (value: string) => {
     persistSettingValue('rule_pack_prompt_notes', value)
+  }
+
+  const updateRulePackExclusionsDraft = (codes: string[]) => {
+    const nextCodes = parseRulePackExclusions(codes)
+    setRulePackExclusionCodesDraft(nextCodes)
+    setSettingValues((current) => withSerializedRulePackExclusions(current, nextCodes))
+  }
+
+  const addRulePackExclusion = () => {
+    const code = (
+      activeRulePackExclusionDraft
+      || rulePackExclusionSelectRef.current?.value
+      || availableRulePackExclusionOptions[0]?.code
+      || ''
+    ).trim()
+    if (!code) return
+    updateRulePackExclusionsDraft([...rulePackExclusionCodes.filter((item) => item !== code), code])
+    setRulePackExclusionDraft('')
+  }
+
+  const removeRulePackExclusion = (code: string) => {
+    updateRulePackExclusionsDraft(rulePackExclusionCodes.filter((item) => item !== code))
   }
 
   const reclassificationRules = useMemo(
@@ -1364,7 +1518,10 @@ export default function GigaChatPage() {
     }),
     onSuccess: async (data) => {
       setSelectedSettingsVersionId(data.version.version_id)
+      window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, data.version.version_id)
+      settingValuesVersionIdRef.current = data.version.version_id
       setSettingValues(data.values)
+      setRulePackExclusionCodesDraft(parseRulePackExclusions(data.values[RULE_PACK_EXCLUSION_SETTING_KEY]))
       setVersionCreateOpen(false)
       setVersionDraft((current) => ({ ...current, title: '', versionId: '', description: '', visibility: 'private', createdBy: currentUserDisplayName }))
       await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
@@ -1377,6 +1534,7 @@ export default function GigaChatPage() {
       qc.removeQueries({ queryKey: ['gigachat-lab-settings-version', deletedVersionId] })
       qc.setQueryData(['gigachat-lab-settings-versions'], data)
       const nextVersionId = data.versions[0]?.version_id ?? 'default'
+      window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, nextVersionId)
       setSelectedSettingsVersionId(nextVersionId)
       setVersionDraft((current) => ({ ...current, baseVersionId: nextVersionId }))
       setVersionInfoOpen(false)
@@ -1939,6 +2097,25 @@ export default function GigaChatPage() {
     window.setTimeout(() => document.getElementById('gigachat-workbook-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
   }
 
+  const buildExcludedRuleHitMap = (
+    rows: Array<{ rowIndex: number; row: Record<string, unknown> }>,
+    valuesForRun: Record<string, unknown>,
+  ) => {
+    const excludedCodes = new Set(parseRulePackExclusions(valuesForRun[RULE_PACK_EXCLUSION_SETTING_KEY]))
+    if (!excludedCodes.size || !rows.length) return new Map<number, string[]>()
+    const evaluations = evaluateRulePacksLocally(valuesForRun, rows.map((item) => item.row)).evaluations
+    const excludedByRow = new Map<number, string[]>()
+    evaluations.forEach((evaluation, localIndex) => {
+      const excludedHits = evaluation.hits
+        .map((hit) => hit.code)
+        .filter((code) => excludedCodes.has(code))
+      if (excludedHits.length) {
+        excludedByRow.set(rows[localIndex].rowIndex, Array.from(new Set(excludedHits)))
+      }
+    })
+    return excludedByRow
+  }
+
   const loadBackgroundTaskResult = useMutation({
     mutationFn: (taskId: string) => {
       setBackgroundResultProgress({ loadedBytes: 0, totalBytes: null })
@@ -1966,6 +2143,14 @@ export default function GigaChatPage() {
         .filter((item) => selectedSheetRowKeySet.has(buildSheetRowKey(sheetData.upload_id, sheetData.sheet_name, item.row_index)))
       if (!selectedRows.length) throw new Error('Сначала выберите хотя бы одну строку.')
       const baseValues = valuesForRun ?? settingValues
+      const excludedRows = buildExcludedRuleHitMap(
+        selectedRows.map((item) => ({ rowIndex: item.row_index, row: item.source_row })),
+        baseValues,
+      )
+      const rowsForGigaChat = selectedRows.filter((item) => !excludedRows.has(item.row_index))
+      if (!rowsForGigaChat.length) {
+        throw new Error('Все выбранные строки исключены из отправки в GigaChat по настройкам исключений.')
+      }
       const useReclassification = shouldSendReclassificationRequest(baseValues)
       const runValues = useReclassification
         ? withRunnableReclassificationRules(baseValues, sheetData.columns)
@@ -1974,12 +2159,13 @@ export default function GigaChatPage() {
         transport: selectedTransport,
         values: runValues,
         columns: finalPromptColumns,
-        rows: selectedRows,
+        rows: rowsForGigaChat,
         filename: sheetData.filename,
         sheet_name: sheetData.sheet_name,
         payload_override: useReclassification ? null : resolvePayloadOverride(),
         count_tokens: tokenAccounting.enabled,
         reclassification_enabled: useReclassification,
+        async_workers: asyncWorkerCount,
       })
     },
     onSuccess: () => {
@@ -2190,6 +2376,11 @@ export default function GigaChatPage() {
       return
     }
     setRowRunError(null)
+    const excludedHits = buildExcludedRuleHitMap([{ rowIndex, row }], valuesForRun).get(rowIndex) ?? []
+    if (excludedHits.length) {
+      setRowRunError(`Строка не отправлена в GigaChat: сработали исключенные rule packs ${excludedHits.join(', ')}.`)
+      return
+    }
     setRunRowBusyIndex(rowIndex)
     const useReclassification = shouldSendReclassificationRequest(valuesForRun)
     const totalSteps = useReclassification ? 2 : 1
@@ -2233,45 +2424,72 @@ export default function GigaChatPage() {
       return
     }
 
+    const excludedRows = buildExcludedRuleHitMap(
+      rowIndexes.map((rowIndex) => ({ rowIndex, row: sheetData.rows[rowIndex] })),
+      valuesForRun,
+    )
+    const runnableRowIndexes = rowIndexes.filter((rowIndex) => !excludedRows.has(rowIndex))
+    if (!runnableRowIndexes.length) {
+      setBatchRunError('Все выбранные строки исключены из отправки в GigaChat по настройкам исключений.')
+      return
+    }
+
     setBatchRunError(null)
     setBatchBusy(true)
     const useReclassification = shouldSendReclassificationRequest(valuesForRun)
     const stepsPerRow = useReclassification ? 2 : 1
-    const totalSteps = rowIndexes.length * stepsPerRow
+    const totalSteps = runnableRowIndexes.length * stepsPerRow
     startProcessingOverlay('Пакетная разметка жалоб', totalSteps)
 
     try {
       const payloadOverride = resolvePayloadOverride()
       let lastResultPages: RowRunResultPage[] = []
       let completedSteps = 0
-      for (let idx = 0; idx < rowIndexes.length; idx += 1) {
-        const rowIndex = rowIndexes[idx]
+      let completedRows = 0
+      let firstError: Error | null = null
+      const workerCount = Math.min(asyncWorkerCount, runnableRowIndexes.length)
+      await runWithConcurrency(runnableRowIndexes, asyncWorkerCount, async (rowIndex, idx) => {
+        if (firstError) return
         const row = sheetData.rows[rowIndex]
-        updateProcessingOverlay(completedSteps, totalSteps, `Обрабатываем запись ${idx + 1} из ${rowIndexes.length}`)
-        const { data, reclassificationData } = await runWorkbookRowWithOptionalReclassification(
-          row,
-          valuesForRun,
-          payloadOverride,
-          () => {
-            completedSteps += 1
-            if (useReclassification) {
-              updateProcessingOverlay(completedSteps, totalSteps, `Переклассифицируем тему ${idx + 1} из ${rowIndexes.length}`)
-            }
-          },
-        )
-        if (reclassificationData) {
-          completedSteps += 1
-        }
-        appendAnnotatedResult(data, rowIndex, row, reclassificationData)
-        lastResultPages = buildRowRunResultPages(data, reclassificationData)
         updateProcessingOverlay(
           completedSteps,
           totalSteps,
-          tokenAccounting.enabled && data.request_token_count
-            ? `Готово ${idx + 1} из ${rowIndexes.length}. Последний основной запрос: ${data.request_token_count} токенов`
-            : `Готово ${idx + 1} из ${rowIndexes.length}`,
+          `В работе ${workerCount} workers. Обрабатываем запись ${idx + 1} из ${runnableRowIndexes.length}`,
         )
-      }
+        try {
+          const { data, reclassificationData } = await runWorkbookRowWithOptionalReclassification(
+            row,
+            valuesForRun,
+            payloadOverride,
+            () => {
+              completedSteps += 1
+              updateProcessingOverlay(
+                completedSteps,
+                totalSteps,
+                useReclassification
+                  ? `Основной запрос готов. Переклассифицируем тему ${idx + 1} из ${runnableRowIndexes.length}`
+                  : `Готово запросов: ${completedSteps} из ${totalSteps}`,
+              )
+            },
+          )
+          if (reclassificationData) {
+            completedSteps += 1
+          }
+          appendAnnotatedResult(data, rowIndex, row, reclassificationData)
+          lastResultPages = buildRowRunResultPages(data, reclassificationData)
+          completedRows += 1
+          updateProcessingOverlay(
+            completedSteps,
+            totalSteps,
+            tokenAccounting.enabled && data.request_token_count
+              ? `Готово ${completedRows} из ${runnableRowIndexes.length}. Workers: ${workerCount}. Последний основной запрос: ${data.request_token_count} токенов`
+              : `Готово ${completedRows} из ${runnableRowIndexes.length}. Workers: ${workerCount}`,
+          )
+        } catch (error) {
+          if (!firstError) firstError = error as Error
+        }
+      })
+      if (firstError) throw firstError
       if (lastResultPages.length) {
         setRowRunResultPages(lastResultPages)
         setActiveRowRunResultPage(0)
@@ -2442,10 +2660,41 @@ export default function GigaChatPage() {
     () => Object.values(ruleEvaluationMap).filter((evaluation) => evaluation.hits.length).length,
     [ruleEvaluationMap],
   )
-  const rulePackOptions = useMemo(
-    () => parseRulePacks(settingValues.rule_pack_prompt_notes).map((item) => item.code).filter(Boolean),
+  const parsedRulePacks = useMemo(
+    () => parseRulePacks(settingValues.rule_pack_prompt_notes),
     [settingValues.rule_pack_prompt_notes],
   )
+  const rulePackOptions = useMemo(
+    () => parsedRulePacks.map((item) => item.code).filter(Boolean),
+    [parsedRulePacks],
+  )
+  const rulePackByCode = useMemo(
+    () => new Map(parsedRulePacks.map((item) => [item.code, item])),
+    [parsedRulePacks],
+  )
+  const rulePackExclusionCodes = useMemo(
+    () => rulePackExclusionCodesDraft,
+    [rulePackExclusionCodesDraft],
+  )
+  const rulePackExclusionSet = useMemo(() => new Set(rulePackExclusionCodes), [rulePackExclusionCodes])
+  const availableRulePackExclusionOptions = useMemo(
+    () => parsedRulePacks.filter((item) => item.code && !rulePackExclusionSet.has(item.code)),
+    [parsedRulePacks, rulePackExclusionSet],
+  )
+  const activeRulePackExclusionDraft = rulePackExclusionDraft
+  const excludedRulePackEntries = useMemo(
+    () => rulePackExclusionCodes.map((code) => ({ code, rule: rulePackByCode.get(code) ?? null })),
+    [rulePackByCode, rulePackExclusionCodes],
+  )
+  useEffect(() => {
+    const nextDraft = availableRulePackExclusionOptions[0]?.code ?? ''
+    if (!rulePackExclusionDraft) {
+      if (nextDraft) setRulePackExclusionDraft(nextDraft)
+      return
+    }
+    if (availableRulePackExclusionOptions.some((item) => item.code === rulePackExclusionDraft)) return
+    setRulePackExclusionDraft(nextDraft)
+  }, [availableRulePackExclusionOptions, rulePackExclusionDraft])
   const ruleValidationSummary = useMemo(() => {
     if (!sheetData) return null
     const hasExpectedHits = sheetData.columns.includes('Expected rule hits')
@@ -2632,6 +2881,46 @@ export default function GigaChatPage() {
         onToggle={toggleTransportCard}
       />)}
     </div> : null}
+
+    <section className='card transport-result async-requests-card'>
+      <div className='transport-section-head'>
+        <div className='transport-section-title'>
+          <h3>Асинхронные запросы</h3>
+          <p>Количество параллельных запросов к GigaChat для пакетной и фоновой разметки.</p>
+        </div>
+        <span className='async-workers-badge'>{asyncWorkerCount} workers</span>
+      </div>
+      <div className='async-workers-grid'>
+        <label className='lab-field async-workers-field'>
+          <span>Воркеров</span>
+          <input
+            type='number'
+            min={1}
+            max={MAX_ASYNC_WORKERS}
+            step={1}
+            value={asyncWorkerCount}
+            onChange={(event) => setAsyncWorkerCount(clampAsyncWorkerCount(event.target.value))}
+          />
+          <small className='lab-field-help'>1 = последовательный режим. Настройка применяется к выбранному транспорту: {selected?.title ?? selectedTransport}.</small>
+        </label>
+        <label className='lab-field async-workers-slider'>
+          <span>Параллельность</span>
+          <input
+            type='range'
+            min={1}
+            max={ASYNC_WORKER_SLIDER_MAX}
+            step={1}
+            value={Math.min(asyncWorkerCount, ASYNC_WORKER_SLIDER_MAX)}
+            onChange={(event) => setAsyncWorkerCount(clampAsyncWorkerCount(event.target.value))}
+          />
+          <small className='lab-field-help'>Для боевого API поднимайте постепенно: слишком много workers может упереться в лимиты.</small>
+        </label>
+        <div className='async-workers-summary'>
+          <strong>{asyncWorkerCount === 1 ? 'Последовательно' : 'Параллельно'}</strong>
+          <span>{asyncWorkerCount === 1 ? 'Следующий запрос стартует после завершения предыдущего.' : `До ${asyncWorkerCount} строк могут быть в работе одновременно.`}</span>
+        </div>
+      </div>
+    </section>
 
     <section className='card transport-result' id='gigachat-workbook-section'>
       <div className='transport-section-head'>
@@ -3031,7 +3320,10 @@ export default function GigaChatPage() {
               currentUserDisplayName={currentUserDisplayName}
               onImportComplete={async (data) => {
                 setSelectedSettingsVersionId(data.version.version_id)
+                window.localStorage.setItem(SETTINGS_VERSION_STORAGE_KEY, data.version.version_id)
+                settingValuesVersionIdRef.current = data.version.version_id
                 setSettingValues(data.values)
+                setRulePackExclusionCodesDraft(parseRulePackExclusions(data.values[RULE_PACK_EXCLUSION_SETTING_KEY]))
                 await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-versions'] })
                 await qc.invalidateQueries({ queryKey: ['gigachat-lab-settings-version', data.version.version_id] })
               }}
@@ -3215,6 +3507,81 @@ export default function GigaChatPage() {
         </div> : null}
       </> : null}
     </section>
+
+    {selectedVersionQ.data ? <section className='card transport-result rule-pack-exclusions-card'>
+      <div className='transport-section-head'>
+        <div className='transport-section-title'>
+          <h3>Исключения GigaChat</h3>
+          <p>Эти rule packs остаются в локальной проверке и рабочей таблице, но не попадают в prompt и API GigaChat.</p>
+        </div>
+      </div>
+
+      <div className='rule-pack-exclusion-controls'>
+        <label className='lab-field rule-pack-exclusion-field'>
+          <span>Добавить правило в исключения</span>
+          <select
+            ref={rulePackExclusionSelectRef}
+            value={activeRulePackExclusionDraft}
+            onChange={(event) => setRulePackExclusionDraft(event.target.value)}
+            disabled={!availableRulePackExclusionOptions.length || saveSettings.isPending}
+          >
+            {availableRulePackExclusionOptions.length
+              ? availableRulePackExclusionOptions.map((rule) => <option key={rule.code} value={rule.code}>{rule.code}</option>)
+              : <option value=''>Нет доступных rule packs</option>}
+          </select>
+        </label>
+        <button
+          className='rule-pack-exclusion-add-button'
+          type='button'
+          onClick={addRulePackExclusion}
+          disabled={!availableRulePackExclusionOptions.length || saveSettings.isPending}
+        >
+          Добавить
+        </button>
+      </div>
+
+      {saveSettings.isError ? <div className='transport-error'>{formatLabError(saveSettings.error as Error, 'исключения')}</div> : null}
+
+      <div className='rule-pack-exclusions-summary'>
+        <div className='rule-pack-exclusions-summary-head'>
+          <h4>Правила без отправки в GigaChat</h4>
+          <p>Записи, где сработают эти rule packs, не будут отправляться в GigaChat; в локальной проверке и рабочей таблице они останутся видимыми.</p>
+        </div>
+        {excludedRulePackEntries.length ? <div className='labeling-rules-list rule-pack-exclusions-list'>
+          {excludedRulePackEntries.map(({ code, rule }) => {
+            const actionText = rule
+              ? rule.type === 'assign_tag'
+                ? rule.target_tag
+                : rule.target_topic
+              : ''
+            return <div key={code} className={`labeling-rule-card rule-pack-exclusion-card ${rule ? 'active' : 'missing-fields'}`}>
+              <div className='labeling-rule-copy'>
+                <div className='labeling-rule-name'>{code}</div>
+                {!rule ? <div className='rule-pack-missing-fields'>Rule pack не найден в текущем списке правил.</div> : null}
+                <div className='labeling-rule-description'>
+                  {rule?.description || 'Исключение будет записано в профиль при сохранении. Локальная проверка продолжит показывать срабатывания этого rule pack.'}
+                </div>
+                <div className='labeling-rule-meta'>
+                  <span>В API GigaChat: не отправляется</span>
+                  <span>В таблице: показывается</span>
+                  {rule ? <span>{rule.type}{actionText ? ` -> ${actionText}` : ''}</span> : null}
+                </div>
+              </div>
+              <div className='labeling-rule-actions'>
+                <button
+                  className='labeling-remove-button'
+                  type='button'
+                  onClick={() => removeRulePackExclusion(code)}
+                  disabled={saveSettings.isPending}
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          })}
+        </div> : <div className='rule-pack-exclusions-empty'>Исключения пока не добавлены. Все активные rule packs попадают в prompt и API GigaChat.</div>}
+      </div>
+    </section> : null}
 
     <section className='card transport-result rule-validation-card'>
       <div className='transport-section-head'>

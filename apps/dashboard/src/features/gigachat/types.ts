@@ -239,6 +239,7 @@ export type GigaChatBackgroundTaskSummary = {
   total_rows: number
   completed_rows: number
   failed_rows: number
+  async_workers: number
   progress: number
   current_label: string
   error?: string | null

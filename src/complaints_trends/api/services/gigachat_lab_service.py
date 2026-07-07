@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import math
 import re
@@ -22,6 +23,7 @@ from ...gigachat_api import build_gigachat_transport_client
 from ...gigachat_mtls import SYSTEM_PROMPT
 from ..schemas import (
     GigaChatAnnotatedExportRequest,
+    GigaChatBackgroundTaskInputRow,
     GigaChatBackgroundTaskListResponse,
     GigaChatBackgroundTaskResultResponse,
     GigaChatBackgroundTaskRowRun,
@@ -67,6 +69,10 @@ except Exception:  # pragma: no cover
 
 
 class _WorkbookUploadCancelled(Exception):
+    pass
+
+
+class _BackgroundTaskCancelled(Exception):
     pass
 
 
@@ -131,6 +137,7 @@ class GigaChatLabService:
         "user_prompt_prefix",
         "context_notes",
         "rule_pack_prompt_notes",
+        "rule_pack_exclusion_notes",
         "reclassification_prompt_notes",
         "reclassification_prompt",
     }
@@ -147,6 +154,7 @@ class GigaChatLabService:
         {"key": "user_prompt_prefix", "label": "User prompt prefix", "input_type": "textarea", "section": "Промпты", "help_text": "Дополнительный текст перед пользовательским payload."},
         {"key": "context_notes", "label": "Context notes", "input_type": "textarea", "section": "Промпты", "help_text": "Текстовые инструкции про контекст, листы Excel и особенности эксперимента."},
         {"key": "rule_pack_prompt_notes", "label": "Rule packs", "input_type": "textarea", "section": "Разметка", "help_text": "Локальные rule-based пакеты: фильтры по полям, словари и действия до GigaChat."},
+        {"key": "rule_pack_exclusion_notes", "label": "Rule pack exclusions", "input_type": "textarea", "section": "Разметка", "help_text": "JSON-массив code rule packs, которые остаются в локальной таблице, но не попадают в prompt/API GigaChat."},
         {"key": "reclassification_prompt_notes", "label": "Reclassification rules", "input_type": "textarea", "section": "Переклассификация", "help_text": "JSON-массив правил переклассификации: name, source_field, context_field/context_fields, prompt."},
     ]
     _background_lock = threading.Lock()
@@ -296,6 +304,7 @@ class GigaChatLabService:
             "user_prompt_prefix": default_user_prompt_prefix,
             "context_notes": default_context_notes,
             "rule_pack_prompt_notes": default_rule_pack_notes,
+            "rule_pack_exclusion_notes": "[]",
             "reclassification_prompt_notes": default_reclassification_notes,
             "reclassification_source_field": str(llm.get("reclassification_source_field", "") or "").strip(),
             "reclassification_context_field": str(llm.get("reclassification_context_field", "") or "").strip(),
@@ -556,8 +565,9 @@ class GigaChatLabService:
         if req.visibility is not None:
             payload["visibility"] = req.visibility
         values = self._values_from_version_payload(payload)
+        known_setting_keys = {str(field.get("key") or "") for field in self.FIELD_DEFS}
         for key, value in req.values.items():
-            if key in values:
+            if key in values or key in known_setting_keys:
                 values[key] = self._coerce_setting_value(key, value)
         payload["values"] = values
         payload["updated_by"] = req.updated_by or context["display_name"] or payload.get("updated_by") or payload.get("created_by") or ""
@@ -885,12 +895,17 @@ class GigaChatLabService:
             )
         )
         rule_evaluation: GigaChatRuleEvaluationRow | None = None
+        prompt_rule_evaluation: GigaChatRuleEvaluationRow | None = None
         if not req.reclassification_only:
             rule_packs = self._parse_rule_pack_items(values.get("rule_pack_prompt_notes", ""))
             rule_evaluation = self._evaluate_rule_hits_for_row(rule_packs, req.row, 0)
+            prompt_rule_evaluation = self._filter_rule_evaluation_for_prompt(
+                rule_evaluation,
+                self._parse_rule_pack_exclusions(values.get("rule_pack_exclusion_notes", "")),
+            )
         rendered_payload = self._render_payload_for_row(base_payload, req.row)
-        if rule_evaluation is not None:
-            rendered_payload = self._inject_row_rule_context(rendered_payload, rule_evaluation)
+        if prompt_rule_evaluation is not None:
+            rendered_payload = self._inject_row_rule_context(rendered_payload, prompt_rule_evaluation)
 
         llm_cfg = self.cfg.llm.model_copy(deep=True)
         llm_cfg = self.apply_llm_overrides(llm_cfg)
@@ -934,6 +949,14 @@ class GigaChatLabService:
         next_values["reclassification_prompt"] = cls.DEFAULT_RECLASSIFICATION_PROMPT
         return next_values
 
+    @staticmethod
+    def _coerce_async_workers(value: Any) -> int:
+        try:
+            workers = int(value)
+        except (TypeError, ValueError):
+            workers = 1
+        return max(1, min(32, workers))
+
     def list_background_tasks(self) -> GigaChatBackgroundTaskListResponse:
         tasks: list[GigaChatBackgroundTaskSummary] = []
         for meta_path in sorted(self.background_dir.glob("*/task.json"), reverse=True):
@@ -946,6 +969,7 @@ class GigaChatLabService:
         task_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
         task_dir = self.background_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
+        async_workers = self._coerce_async_workers(req.async_workers)
         summary = GigaChatBackgroundTaskSummary(
             task_id=task_id,
             status="queued",
@@ -953,7 +977,8 @@ class GigaChatLabService:
             sheet_name=req.sheet_name,
             created_at=self._now(),
             total_rows=len(req.rows),
-            current_label="Задача поставлена в очередь",
+            async_workers=async_workers,
+            current_label=f"Задача поставлена в очередь: {async_workers} workers",
         )
         (task_dir / "input.json").write_text(req.model_dump_json(indent=2), encoding="utf-8")
         self._write_background_summary(summary)
@@ -996,73 +1021,110 @@ class GigaChatLabService:
             row_runs=[GigaChatBackgroundTaskRowRun(**row) for row in payload.get("row_runs", [])],
         )
 
+    def _run_background_labeling_row(
+        self,
+        req: GigaChatBackgroundTaskStartRequest,
+        item: GigaChatBackgroundTaskInputRow,
+        cancel_flag: threading.Event,
+    ) -> dict[str, Any]:
+        if cancel_flag.is_set():
+            raise _BackgroundTaskCancelled()
+        primary_values = (
+            self._values_without_reclassification(req.values)
+            if req.reclassification_enabled
+            else req.values
+        )
+        result = self.run_row_prompt(GigaChatLabRowRunRequest(
+            transport=req.transport,
+            values=primary_values,
+            columns=req.columns,
+            row=item.source_row,
+            payload_override=None if req.reclassification_enabled else req.payload_override,
+            count_tokens=req.count_tokens,
+        ))
+        if cancel_flag.is_set():
+            raise _BackgroundTaskCancelled()
+        reclassification_result = None
+        if req.reclassification_enabled:
+            reclassification_result = self.run_row_prompt(GigaChatLabRowRunRequest(
+                transport=req.transport,
+                values=req.values,
+                columns=req.columns,
+                row=item.source_row,
+                payload_override=None,
+                count_tokens=req.count_tokens,
+                reclassification_only=True,
+            ))
+        return {
+            "row_index": item.row_index,
+            "source_row": item.source_row,
+            "result": result.model_dump(mode="json"),
+            "reclassification_result": reclassification_result.model_dump(mode="json") if reclassification_result else None,
+            "error": None,
+        }
+
     def _run_background_labeling(self, task_id: str, req: GigaChatBackgroundTaskStartRequest, cancel_flag: threading.Event) -> None:
         summary = self._read_background_summary(task_id)
         task_dir = self.background_dir / task_id
         source_rows = [item.source_row for item in req.rows]
-        row_runs: list[dict[str, Any]] = []
+        row_runs_by_position: dict[int, dict[str, Any]] = {}
+        async_workers = self._coerce_async_workers(req.async_workers)
         summary.status = "running"
         summary.started_at = self._now()
-        summary.current_label = "Фоновая разметка запущена"
+        summary.async_workers = async_workers
+        summary.current_label = f"Фоновая разметка запущена: {async_workers} workers"
         self._write_background_summary(summary)
 
         try:
-            for index, item in enumerate(req.rows):
-                if cancel_flag.is_set():
-                    summary.status = "cancelled"
-                    summary.current_label = "Задача отменена"
-                    break
-                summary.current_label = f"Размечаем строку {index + 1} из {len(req.rows)}"
-                self._write_background_summary(summary)
-                try:
-                    primary_values = (
-                        self._values_without_reclassification(req.values)
-                        if req.reclassification_enabled
-                        else req.values
-                    )
-                    result = self.run_row_prompt(GigaChatLabRowRunRequest(
-                        transport=req.transport,
-                        values=primary_values,
-                        columns=req.columns,
-                        row=item.source_row,
-                        payload_override=None if req.reclassification_enabled else req.payload_override,
-                        count_tokens=req.count_tokens,
-                    ))
-                    reclassification_result = None
-                    if req.reclassification_enabled:
-                        reclassification_result = self.run_row_prompt(GigaChatLabRowRunRequest(
-                            transport=req.transport,
-                            values=req.values,
-                            columns=req.columns,
-                            row=item.source_row,
-                            payload_override=None,
-                            count_tokens=req.count_tokens,
-                            reclassification_only=True,
-                        ))
-                    row_runs.append({
-                        "row_index": item.row_index,
-                        "source_row": item.source_row,
-                        "result": result.model_dump(mode="json"),
-                        "reclassification_result": reclassification_result.model_dump(mode="json") if reclassification_result else None,
-                        "error": None,
-                    })
-                except Exception as exc:
-                    summary.failed_rows += 1
-                    row_runs.append({
-                        "row_index": item.row_index,
-                        "source_row": item.source_row,
-                        "result": None,
-                        "reclassification_result": None,
-                        "error": str(exc),
-                    })
-                summary.completed_rows = index + 1
-                summary.progress = summary.completed_rows / summary.total_rows if summary.total_rows else 1
-                self._write_background_summary(summary)
+            if req.rows:
+                max_workers = min(async_workers, len(req.rows))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(self._run_background_labeling_row, req, item, cancel_flag): index
+                        for index, item in enumerate(req.rows)
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        index = futures[future]
+                        item = req.rows[index]
+                        try:
+                            row_runs_by_position[index] = future.result()
+                        except _BackgroundTaskCancelled:
+                            summary.status = "cancelled"
+                            summary.current_label = "Задача отменена"
+                            for pending in futures:
+                                pending.cancel()
+                            break
+                        except Exception as exc:
+                            summary.failed_rows += 1
+                            row_runs_by_position[index] = {
+                                "row_index": item.row_index,
+                                "source_row": item.source_row,
+                                "result": None,
+                                "reclassification_result": None,
+                                "error": str(exc),
+                            }
+                        summary.completed_rows = len(row_runs_by_position)
+                        summary.progress = summary.completed_rows / summary.total_rows if summary.total_rows else 1
+                        summary.current_label = (
+                            f"Готово {summary.completed_rows} из {summary.total_rows}; "
+                            f"workers: {max_workers}"
+                        )
+                        self._write_background_summary(summary)
+                        if cancel_flag.is_set():
+                            summary.status = "cancelled"
+                            summary.current_label = "Задача отменена"
+                            for pending in futures:
+                                pending.cancel()
+                            break
+            else:
+                summary.completed_rows = 0
+                summary.progress = 1
 
             if summary.status != "cancelled":
                 summary.status = "completed"
                 summary.current_label = "Готово"
             summary.finished_at = self._now()
+            row_runs = [row_runs_by_position[index] for index in sorted(row_runs_by_position)]
             workbook = GigaChatWorkbookSheetDataResponse(
                 upload_id=f"background-{task_id}",
                 filename=req.filename,
@@ -2202,8 +2264,65 @@ class GigaChatLabService:
         return GigaChatRuleEvaluationResponse(rule_packs=rule_packs, evaluations=evaluations)
 
     @classmethod
-    def _format_rule_pack_lines(cls, raw: Any) -> str:
+    def _parse_rule_pack_exclusions(cls, raw: Any) -> set[str]:
+        if raw is None:
+            return set()
+        items: list[Any]
+        if isinstance(raw, list):
+            items = raw
+        elif isinstance(raw, dict):
+            candidate = raw.get("codes") or raw.get("items") or raw.get("rule_packs")
+            items = candidate if isinstance(candidate, list) else [raw]
+        else:
+            text = str(raw or "").strip()
+            if not text:
+                return set()
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = cls._split_rule_list(text)
+            if isinstance(parsed, list):
+                items = parsed
+            elif isinstance(parsed, dict):
+                candidate = parsed.get("codes") or parsed.get("items") or parsed.get("rule_packs")
+                items = candidate if isinstance(candidate, list) else [parsed]
+            else:
+                items = [parsed]
+
+        codes: set[str] = set()
+        for item in items:
+            if isinstance(item, dict):
+                value = item.get("code") or item.get("name") or item.get("value")
+            else:
+                value = item
+            code = str(value or "").strip()
+            if code:
+                codes.add(code)
+        return codes
+
+    @staticmethod
+    def _filter_rule_evaluation_for_prompt(
+        evaluation: GigaChatRuleEvaluationRow,
+        excluded_codes: set[str],
+    ) -> GigaChatRuleEvaluationRow:
+        if not excluded_codes:
+            return evaluation
+        hits = [hit for hit in evaluation.hits if hit.code not in excluded_codes]
+        suggested_tags = list(dict.fromkeys([hit.target_tag for hit in hits if hit.target_tag]))
+        suggested_topics = list(dict.fromkeys([hit.target_topic for hit in hits if hit.target_topic]))
+        return GigaChatRuleEvaluationRow(
+            row_index=evaluation.row_index,
+            hits=hits,
+            suggested_tags=[str(item) for item in suggested_tags],
+            suggested_topics=[str(item) for item in suggested_topics],
+        )
+
+    @classmethod
+    def _format_rule_pack_lines(cls, raw: Any, exclusions_raw: Any = None) -> str:
         rule_packs = cls._parse_rule_pack_items(raw)
+        excluded_codes = cls._parse_rule_pack_exclusions(exclusions_raw)
+        if excluded_codes:
+            rule_packs = [item for item in rule_packs if item.code not in excluded_codes]
         if not rule_packs:
             return "Rule packs: список пока пустой."
         lines = ["Rule packs:"]
@@ -2423,7 +2542,10 @@ class GigaChatLabService:
         user_prompt_prefix = str(values.get("user_prompt_prefix", getattr(self.cfg.llm, "user_prompt_prefix", "")) or "").strip()
         context_notes = str(values.get("context_notes", getattr(self.cfg.llm, "context_notes", "")) or "").strip()
 
-        rule_pack_rules = self._format_rule_pack_lines(values.get("rule_pack_prompt_notes", ""))
+        rule_pack_rules = self._format_rule_pack_lines(
+            values.get("rule_pack_prompt_notes", ""),
+            values.get("rule_pack_exclusion_notes", ""),
+        )
         reclassification_rules = self._format_reclassification_lines(values)
         prompt_columns = self._merge_prompt_columns(columns, values)
         placeholder_row = self._placeholder_row(prompt_columns)

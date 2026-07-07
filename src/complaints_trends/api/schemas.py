@@ -425,6 +425,7 @@ class GigaChatBackgroundTaskStartRequest(BaseModel):
     payload_override: dict[str, Any] | None = None
     count_tokens: bool = False
     reclassification_enabled: bool = False
+    async_workers: int = Field(default=1, ge=1, le=32)
 
 
 class GigaChatBackgroundTaskSummary(BaseModel):
@@ -439,6 +440,7 @@ class GigaChatBackgroundTaskSummary(BaseModel):
     total_rows: int = 0
     completed_rows: int = 0
     failed_rows: int = 0
+    async_workers: int = 1
     progress: float = 0
     current_label: str = ""
     error: str | None = None
