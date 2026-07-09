@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 from uuid import uuid4
 
 import httpx
 
 from ..config import LLMConfig
+from .rate_limit import get_rate_limiter
 
 
 @dataclass
@@ -47,6 +49,8 @@ class AuthorizationKeyTokenProvider:
         self.verify = verify
         self.timeout = timeout
         self._token: OAuthToken | None = None
+        self._token_lock = threading.Lock()
+        self._oauth_limiter = get_rate_limiter(f"oauth:{oauth_url}")
         self._client = httpx.Client(verify=verify, timeout=timeout, trust_env=False)
 
     def _read_authorization_key(self) -> str:
@@ -105,24 +109,39 @@ class AuthorizationKeyTokenProvider:
         if self._token is not None and now < self._token.expires_at:
             return self._token.access_token
 
-        authorization_key = self._read_authorization_key()
-        response = self._client.post(
-            self.oauth_url,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Authorization": f"Basic {authorization_key}",
-                "RqUID": str(uuid4()),
-            },
-            data={"scope": self.scope},
-        )
-        response.raise_for_status()
-        payload = response.json()
-        access_token = str(payload.get("access_token") or "").strip()
-        if not access_token:
-            raise RuntimeError("OAuth response does not contain access_token")
-        self._token = OAuthToken(access_token=access_token, expires_at=self._coerce_expiry(payload))
-        return access_token
+        with self._token_lock:
+            now = datetime.now(timezone.utc)
+            if self._token is not None and now < self._token.expires_at:
+                return self._token.access_token
+
+            authorization_key = self._read_authorization_key()
+            response = None
+            for attempt in range(6):
+                self._oauth_limiter.wait()
+                response = self._client.post(
+                    self.oauth_url,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Authorization": f"Basic {authorization_key}",
+                        "RqUID": str(uuid4()),
+                    },
+                    data={"scope": self.scope},
+                )
+                if getattr(response, "status_code", 0) != 429:
+                    if getattr(response, "status_code", 0) < 400:
+                        self._oauth_limiter.record_success()
+                    break
+                self._oauth_limiter.backoff(response, attempt)
+            if response is None:
+                raise RuntimeError("OAuth request was not executed")
+            response.raise_for_status()
+            payload = response.json()
+            access_token = str(payload.get("access_token") or "").strip()
+            if not access_token:
+                raise RuntimeError("OAuth response does not contain access_token")
+            self._token = OAuthToken(access_token=access_token, expires_at=self._coerce_expiry(payload))
+            return access_token
 
 
 class _Msg:
@@ -144,6 +163,7 @@ class TokenAuthorizedHTTPXClient:
     def __init__(self, *, base_url: str, token_provider: AuthorizationKeyTokenProvider, verify: bool | str, timeout: float = 60.0):
         self._api_client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
         self._token_provider = token_provider
+        self._api_limiter = get_rate_limiter(f"api:{base_url}")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -153,13 +173,27 @@ class TokenAuthorizedHTTPXClient:
 
     def count_tokens(self, *, model: str, input_text: str) -> int | None:
         try:
-            response = self._api_client.post("/tokens/count", json={"model": model, "input": [input_text]}, headers=self._headers())
+            response = self._post_api_with_backoff("/tokens/count", json={"model": model, "input": [input_text]})
             if response.status_code >= 400:
                 return None
             data = response.json()
             return self._extract_token_count(data)
         except Exception:
             return None
+
+    def _post_api_with_backoff(self, path: str, *, json: dict) -> httpx.Response:
+        response = None
+        for attempt in range(6):
+            self._api_limiter.wait()
+            response = self._api_client.post(path, json=json, headers=self._headers())
+            if response.status_code != 429:
+                if response.status_code < 400:
+                    self._api_limiter.record_success()
+                return response
+            self._api_limiter.backoff(response, attempt)
+        if response is None:
+            raise RuntimeError("GigaChat request was not executed")
+        return response
 
     @classmethod
     def _extract_token_count(cls, data: object) -> int | None:
@@ -185,7 +219,7 @@ class TokenAuthorizedHTTPXClient:
         return None
 
     def chat(self, payload: dict) -> _ChatResp:
-        response = self._api_client.post("/chat/completions", json=payload, headers=self._headers())
+        response = self._post_api_with_backoff("/chat/completions", json=payload)
         response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"]

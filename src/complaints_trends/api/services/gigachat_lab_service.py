@@ -174,6 +174,8 @@ class GigaChatLabService:
         self.background_dir = Path("data/background")
         self.versions_dir = Path("data/gigachat_lab/versions")
         self.settings_path = self.base_dir / "settings.json"
+        self._transport_client_lock = threading.Lock()
+        self._transport_clients: dict[tuple[Any, ...], Any] = {}
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.chunked_uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -862,6 +864,31 @@ class GigaChatLabService:
                 setattr(llm_cfg, key, value)
         return llm_cfg
 
+    @staticmethod
+    def _transport_client_cache_key(llm_cfg: LLMConfig, transport: str | None) -> tuple[Any, ...]:
+        selected = str(transport or llm_cfg.mode or "mtls").strip().lower()
+        return (
+            selected,
+            llm_cfg.base_url,
+            llm_cfg.oauth_url,
+            llm_cfg.oauth_scope,
+            llm_cfg.authorization_key_file,
+            llm_cfg.ca_bundle_file,
+            llm_cfg.cert_file,
+            llm_cfg.key_file,
+            llm_cfg.verify_ssl_certs,
+            llm_cfg.key_file_password_env,
+        )
+
+    def _get_transport_client(self, llm_cfg: LLMConfig, transport: str | None) -> Any:
+        key = self._transport_client_cache_key(llm_cfg, transport)
+        with self._transport_client_lock:
+            client = self._transport_clients.get(key)
+            if client is None:
+                client = build_gigachat_transport_client(llm_cfg, transport=transport)
+                self._transport_clients[key] = client
+            return client
+
     def build_final_prompt(self, req: GigaChatFinalPromptRequest) -> GigaChatFinalPromptResponse:
         values = dict(self._effective_values()[0])
         for key, value in req.values.items():
@@ -915,7 +942,7 @@ class GigaChatLabService:
                 setattr(llm_cfg, key, value)
         llm_cfg.mode = req.transport
 
-        client = build_gigachat_transport_client(llm_cfg, transport=req.transport)
+        client = self._get_transport_client(llm_cfg, req.transport)
         token_count = None
         if req.count_tokens and hasattr(client, "count_tokens"):
             token_count = client.count_tokens(model=llm_cfg.model, input_text=self._payload_to_count_input(rendered_payload))

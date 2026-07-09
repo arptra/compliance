@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Response, UploadFile
 
 from ..deps import get_service_container
@@ -178,7 +179,21 @@ def evaluate_rule_packs(req: GigaChatRuleEvaluationRequest, services=Depends(get
 
 @router.post("/lab/run-row", response_model=GigaChatLabRowRunResponse)
 def run_row(req: GigaChatLabRowRunRequest, services=Depends(get_service_container)):
-    return services["gigachat_lab"].run_row_prompt(req)
+    try:
+        return services["gigachat_lab"].run_row_prompt(req)
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        response_text = (exc.response.text or exc.response.reason_phrase or "").strip()
+        if "<html" in response_text.lower():
+            response_text = exc.response.reason_phrase or ""
+        detail = f"GigaChat API вернул {status_code}"
+        if response_text:
+            detail = f"{detail}: {response_text[:500]}"
+        if status_code == 429:
+            detail = f"{detail}. API временно ограничил частоту запросов; уменьшите workers или повторите позже."
+        raise HTTPException(status_code=429 if status_code == 429 else 502, detail=detail) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/lab/background-tasks", response_model=GigaChatBackgroundTaskListResponse)

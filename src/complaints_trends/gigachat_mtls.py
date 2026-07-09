@@ -16,6 +16,7 @@ import httpx
 
 from .config import LLMConfig
 from .gigachat_api import build_gigachat_transport_client
+from .gigachat_api.rate_limit import get_rate_limiter
 from .gigachat_schema import NormalizeTicket
 from .questions_loader import load_questions, save_questions_taxonomy
 
@@ -236,16 +237,31 @@ class _ChatResp:
 class _HTTPXChatClient:
     def __init__(self, *, base_url: str, verify: bool | str | ssl.SSLContext, timeout: float = 60.0):
         self._client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
+        self._api_limiter = get_rate_limiter(f"api:{base_url}")
 
     def count_tokens(self, *, model: str, input_text: str) -> int | None:
         try:
-            response = self._client.post("/tokens/count", json={"model": model, "input": [input_text]})
+            response = self._post_api_with_backoff("/tokens/count", json={"model": model, "input": [input_text]})
             if response.status_code >= 400:
                 return None
             data = response.json()
             return self._extract_token_count(data)
         except Exception:
             return None
+
+    def _post_api_with_backoff(self, path: str, *, json: dict) -> httpx.Response:
+        response = None
+        for attempt in range(6):
+            self._api_limiter.wait()
+            response = self._client.post(path, json=json)
+            if response.status_code != 429:
+                if response.status_code < 400:
+                    self._api_limiter.record_success()
+                return response
+            self._api_limiter.backoff(response, attempt)
+        if response is None:
+            raise RuntimeError("GigaChat request was not executed")
+        return response
 
     @classmethod
     def _extract_token_count(cls, data: object) -> int | None:
@@ -271,7 +287,7 @@ class _HTTPXChatClient:
         return None
 
     def chat(self, payload: dict) -> _ChatResp:
-        response = self._client.post("/chat/completions", json=payload)
+        response = self._post_api_with_backoff("/chat/completions", json=payload)
         response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"]
