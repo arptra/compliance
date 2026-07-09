@@ -32,6 +32,203 @@ For future feature work use:
 - `07-new-feature-spec.md`
 - `08-implement-spec-task.md`
 
+## How To Apply In A Java Repo
+
+### 1. Prepare The Java Repo
+
+Open a terminal in the root of the target Java repository.
+
+Make sure the working tree is clean or intentionally contains only changes you
+want DeepSeek to see:
+
+```bash
+git status
+```
+
+Do not run these prompts from this prompt-pack repository. Run them from the Java
+repository that needs SDD/SoT.
+
+### 2. Run The Assessment First
+
+Send `00-global-rules.md` and then `01-assess-repository.md` to DeepSeek CLI.
+
+If your CLI keeps one continuous conversation, send them as two messages in the
+same session.
+
+If your CLI starts a fresh model context for every command, concatenate them:
+
+```bash
+cat /path/to/prompts/deepseek-sdd-sot/00-global-rules.md \
+  /path/to/prompts/deepseek-sdd-sot/01-assess-repository.md
+```
+
+Expected result: DeepSeek prints a repository assessment and does not edit files.
+
+Human check before moving on:
+
+- Did it identify Maven or Gradle correctly?
+- Did it identify Spring Boot or the actual framework correctly?
+- Did it list real modules and packages?
+- Did it mark unknown business intent as `UNKNOWN`?
+- Did it avoid editing files?
+
+If the assessment is wrong, correct it in the next prompt before continuing.
+
+### 3. Create The Foundation
+
+After the assessment is acceptable, send `02-create-sot-foundation.md`.
+
+If the CLI does not preserve context, prepend `00-global-rules.md` again:
+
+```bash
+cat /path/to/prompts/deepseek-sdd-sot/00-global-rules.md \
+  /path/to/prompts/deepseek-sdd-sot/02-create-sot-foundation.md
+```
+
+Expected result: DeepSeek creates the initial SoT/SDD folders and templates.
+
+Human check:
+
+- `AGENTS.md` is short and practical.
+- `docs/sot/open-questions.md` contains unknowns instead of invented answers.
+- `specs/_template/` files are concise and usable.
+- No production Java code changed.
+
+### 4. Fill Architecture From Evidence
+
+Send `03-fill-architecture-sot.md`.
+
+Expected result: architecture docs describe the actual repository, not an ideal
+generic Java service.
+
+Human check:
+
+- Important statements link to real packages, modules, configs, or tests.
+- `INFERRED_FROM_CODE` is used for inferred behavior.
+- `UNKNOWN` is used where business intent is missing.
+- ADRs are short and decision-focused.
+
+### 5. Create Current-State Specs
+
+Send `04-create-current-state-specs.md`.
+
+Expected result: up to 5 as-is specs under `specs/current-state/`.
+
+Human check:
+
+- Specs describe existing code behavior only.
+- Every requirement is marked `INFERRED_FROM_CODE`.
+- Missing tests are marked `MISSING_TEST`.
+- Missing contracts are marked `MISSING_CONTRACT`.
+
+### 6. Add Validation Scripts
+
+Send `05-add-sot-validation.md`.
+
+Expected result: lightweight scripts under `scripts/sot/`.
+
+Run the scripts manually after creation. The exact commands should be documented
+by DeepSeek in `scripts/sot/README.md`, but they will usually look like:
+
+```bash
+python3 scripts/sot/check-spec-format.py
+python3 scripts/sot/check-traceability.py
+python3 scripts/sot/check-req-id-in-changes.py
+```
+
+Human check:
+
+- Scripts are readable and safe.
+- Scripts do not require heavy dependencies.
+- Scripts report clear failures.
+- CI integration is documented, not forced, unless obvious and safe.
+
+### 7. Final Review
+
+Send `06-final-review.md`.
+
+Expected result: a final report and only small cleanup edits to generated docs.
+
+Human check:
+
+- No production code changed.
+- No generic filler remains.
+- Open questions are visible.
+- The next feature workflow is clear.
+
+### 8. Commit Manually
+
+These prompts intentionally tell DeepSeek not to commit or push.
+
+After human review, commit manually:
+
+```bash
+git status
+git diff
+git add AGENTS.md .ai docs specs scripts/sot
+git commit -m "Add SDD source of truth foundation"
+```
+
+Push only after reviewing the generated files.
+
+## How To Use For A New Feature
+
+Use `07-new-feature-spec.md` before coding.
+
+Replace:
+
+```text
+<PASTE BUSINESS REQUEST HERE>
+```
+
+with the real business request, then send the prompt to DeepSeek.
+
+Expected result: a new folder like:
+
+```text
+specs/REQ-2026-001-short-name/
+```
+
+DeepSeek should fill intake, requirements, acceptance criteria, design, tasks,
+traceability, test plan, and changelog.
+
+Do not code until `Ready For Implementation: YES`.
+
+## How To Implement One Task
+
+After a feature spec is ready, use `08-implement-spec-task.md`.
+
+Fill in:
+
+```text
+Task ID: <TASK-ID>
+Requirement ID: <REQ-ID>
+Spec folder: specs/<REQ-FOLDER>/
+```
+
+Run one task per prompt. This keeps context small and makes changes reviewable.
+
+Expected result:
+
+- relevant tests added or updated
+- smallest safe production change
+- `05-traceability.yml` updated
+- relevant tests run
+- no unrelated refactoring
+
+## Practical Tips For DeepSeek CLI
+
+- Keep one CLI session for prompts 1-6 if possible.
+- If the session resets, prepend `00-global-rules.md` to the current prompt.
+- If DeepSeek invents business meaning, stop and ask it to replace invented text
+  with `UNKNOWN`.
+- If DeepSeek edits production Java code during prompts 1-6, reject that output
+  and rerun with a stricter reminder.
+- If generated docs are too large, ask it to compress them instead of adding more
+  files.
+- If it cannot inspect the repository, do not continue. The prompts rely on repo
+  evidence.
+
 ## Operating Rules
 
 - Run prompts inside the target Java repo root.
