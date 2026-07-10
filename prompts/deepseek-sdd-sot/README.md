@@ -6,6 +6,9 @@ Source-of-Truth (SoT) foundation.
 
 For daily use, start with `START_HERE.md`.
 
+If you are not a developer and want a menu-driven workflow, read
+`USER_WORKFLOW_RU.md`.
+
 Use the numbered files only when you want to run a specific step manually.
 If your CLI session does not preserve context between runs, prepend
 `00-global-rules.md` to every numbered prompt.
@@ -29,7 +32,19 @@ Use one file:
 cat /path/to/prompts/deepseek-sdd-sot/START_HERE.md
 ```
 
+Russian one-liner to paste into the CLI:
+
+```text
+Прочитай файл `/path/to/prompts/deepseek-sdd-sot/START_HERE.md`, выполни его инструкции для текущей Java/Gradle-репы и начни с отчета `# SDD Repo State`.
+```
+
 Paste that into DeepSeek CLI inside the target Java repo.
+
+User-friendly Russian launch prompt:
+
+```text
+Прочитай файл `/path/to/prompts/deepseek-sdd-sot/START_HERE.md`, выполни его инструкции для текущей Java/Gradle-репы и веди меня через меню. Я не разработчик: задавай вопросы по одному, проси отвечать цифрами и не перечитывай весь проект без необходимости.
+```
 
 The prompt will:
 
@@ -39,7 +54,9 @@ The prompt will:
 4. load only context-map, context-packs, and the active spec;
 5. avoid rereading thousands of files;
 6. use Gradle/`./gradlew`;
-7. run unit tests after implementation and fix task-related failures.
+7. run unit tests after implementation and fix task-related failures;
+8. check `.ai/error-kb/` before debugging repeated failures;
+9. save verified fixes into `.ai/error-kb/` so they can be shared through git.
 
 ### Manual Foundation Workflow
 
@@ -60,6 +77,20 @@ For fresh CLI sessions and context maintenance use:
 
 - `09-resume-session.md`
 - `10-refresh-context-pack.md`
+
+For reusable failure fixes use:
+
+- `11-error-memory.md`
+
+For non-developer workflow guidance use:
+
+- `USER_WORKFLOW_RU.md`
+
+Russian note:
+
+```text
+Если CLI уперся в ошибку, попроси: `Прочитай 11-error-memory.md и сначала проверь .ai/error-kb, есть ли уже решение этой ошибки. Если решения нет, исправь ошибку и запиши найденное решение в .ai/error-kb для будущих запусков.`
+```
 
 ## How To Apply In A Java Repo
 
