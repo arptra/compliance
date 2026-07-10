@@ -4,7 +4,9 @@ This folder contains prompts for running a local model such as `deepseek-v4-flas
 inside an existing Java repository to create a Spec-Driven Development (SDD) and
 Source-of-Truth (SoT) foundation.
 
-Use each file as one CLI prompt, in numeric order.
+For daily use, start with `START_HERE.md`.
+
+Use the numbered files only when you want to run a specific step manually.
 If your CLI session does not preserve context between runs, prepend
 `00-global-rules.md` to every numbered prompt.
 
@@ -18,6 +20,28 @@ behavior can only be documented as `INFERRED_FROM_CODE`; missing intent must sta
 `UNKNOWN` and go to `docs/sot/open-questions.md`.
 
 ## Recommended Order
+
+### Normal Daily Workflow
+
+Use one file:
+
+```bash
+cat /path/to/prompts/deepseek-sdd-sot/START_HERE.md
+```
+
+Paste that into DeepSeek CLI inside the target Java repo.
+
+The prompt will:
+
+1. detect whether the repo is already initialized for SDD/SoT;
+2. ask whether to initialize if it is not initialized;
+3. ask for the feature/mode if it is initialized;
+4. load only context-map, context-packs, and the active spec;
+5. avoid rereading thousands of files;
+6. use Gradle/`./gradlew`;
+7. run unit tests after implementation and fix task-related failures.
+
+### Manual Foundation Workflow
 
 1. `00-global-rules.md`
 2. `01-assess-repository.md`
