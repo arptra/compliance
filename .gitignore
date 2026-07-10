@@ -6,8 +6,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
+.idea/
 
 # artifacts
+outputs/
 data/raw/*.xlsx
 data/interim/*
 !data/interim/.gitkeep
@@ -27,3 +29,4 @@ certs/*
 data/app.sqlite*
 data/auth.secret
 data/lake/
+key
