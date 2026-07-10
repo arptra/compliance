@@ -32,6 +32,11 @@ For future feature work use:
 - `07-new-feature-spec.md`
 - `08-implement-spec-task.md`
 
+For fresh CLI sessions and context maintenance use:
+
+- `09-resume-session.md`
+- `10-refresh-context-pack.md`
+
 ## How To Apply In A Java Repo
 
 ### 1. Prepare The Java Repo
@@ -216,10 +221,66 @@ Expected result:
 - relevant tests run
 - no unrelated refactoring
 
+## How To Resume After Closing DeepSeek CLI
+
+Do not ask DeepSeek to read the whole repo again.
+
+Open the Java repo and send:
+
+```bash
+cat /path/to/prompts/deepseek-sdd-sot/00-global-rules.md \
+  /path/to/prompts/deepseek-sdd-sot/09-resume-session.md
+```
+
+Then tell it the active work item:
+
+```text
+Continue spec: specs/REQ-2026-001-short-name/
+Current task: TASK-REQ-2026-001-02
+```
+
+Expected behavior:
+
+- DeepSeek reads only the SoT bootstrap files.
+- DeepSeek reads `.ai/context-map.yml`.
+- DeepSeek reads only relevant `.ai/context-packs/*`.
+- DeepSeek reads the active spec folder.
+- DeepSeek does not scan thousands of source files.
+- DeepSeek asks before loading extra source files.
+
+If DeepSeek says it needs the whole repo, stop it and rerun `09-resume-session.md`
+with the active spec/task stated explicitly.
+
+## How To Keep Context Packs Fresh
+
+If the repo changed and a context pack is stale, use `10-refresh-context-pack.md`.
+
+Fill:
+
+```text
+<CONTEXT_PACK_NAME>
+<WHY THIS PACK NEEDS UPDATING>
+```
+
+Example:
+
+```text
+Context pack to refresh:
+payments
+
+Reason for refresh:
+Payment status workflow changed in the last feature branch.
+```
+
+This updates one small pack instead of forcing DeepSeek to rediscover the whole
+repository.
+
 ## Practical Tips For DeepSeek CLI
 
 - Keep one CLI session for prompts 1-6 if possible.
 - If the session resets, prepend `00-global-rules.md` to the current prompt.
+- On every new session after the foundation exists, start with
+  `09-resume-session.md`.
 - If DeepSeek invents business meaning, stop and ask it to replace invented text
   with `UNKNOWN`.
 - If DeepSeek edits production Java code during prompts 1-6, reject that output
