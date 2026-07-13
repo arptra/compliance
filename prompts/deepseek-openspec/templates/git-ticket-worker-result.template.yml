@@ -1,0 +1,22 @@
+schema_version: 1
+worker_id: "WORK-git-ticket-example"
+mode: FULL_BATCH
+ticket_ids: []
+results:
+  - ticket_id: "PROJ-123"
+    status: completed
+    analysis_file: "analyses/PROJ-123.md"
+    ticket_signature: null
+    repository_revision: null
+    commit_ids: []
+    historical_paths: []
+    current_paths: []
+    test_paths: []
+    evidence_states: []
+    ambiguity: []
+    unknowns: []
+follow_up_requests: []
+sanitization:
+  secrets_copied: false
+  personal_data_copied: false
+  full_patches_copied: false

@@ -75,6 +75,20 @@ For any persisted grounded-answer record verify:
 - verified status has a passing grounding-validator result
 - `NOT_VERIFIED` contains no guessed answer disguised as a candidate
 
+## Git Ticket History Checks
+
+When `openspec/history/git-tickets/registry.json` exists, validate:
+
+- registry, meta, index, queue, and ticket JSON parse structurally
+- each indexed ticket file and analysis path resolves
+- queue/index statuses and ticket signatures agree
+- every completed analysis cites only commits associated with that ticket
+- shared multi-ticket commits and ref-only records are explicitly labeled
+- no full patches, secrets, personal data, or fabricated issue-tracker facts are
+  persisted
+
+An uninitialized Git ticket history is not an OpenSpec validation failure.
+
 ## Validation Result
 
 Return one:

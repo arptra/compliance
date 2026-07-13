@@ -28,6 +28,8 @@ repository by mistake.
 - When the user asks a factual repository question directly, route it to
   `15-answer-repository-question.md` without forcing them through a feature
   menu. Prompt-pack compatibility checks still run first.
+- Route requests to index/import Git tickets to `17-index-git-tickets.md` and
+  requests to show/explain one ticket to `18-explain-git-ticket.md`.
 
 ## Step 1 - Lightweight State Detection
 
@@ -47,6 +49,7 @@ Inspect repository markers without reading source bodies yet:
 - `openspec/specs/`
 - `openspec/changes/`
 - `openspec/error-kb/index.yml`
+- `openspec/history/git-tickets/registry.json` and queue summaries when present
 
 If available, run read-only OpenSpec listing commands. Do not install tools.
 
@@ -135,36 +138,68 @@ Use for `OPENSPEC_READY`, `OPENSPEC_READY_WITH_DECLARED_GAPS`, or
 # OpenSpec Workspace
 
 1. Ask a factual question about this repository.
-2. Describe a new feature or change.
-3. Describe a change and implement it after approval.
-4. Continue unfinished work.
-5. Fix a failing test, build, or runtime error.
-6. Refresh documentation after repository changes.
-7. Show system coverage, unknowns, or contradictions.
-8. Archive a completed change.
-9. Stop.
+2. Work with tickets found in Git history.
+3. Describe a new feature or change.
+4. Describe a change and implement it after approval.
+5. Continue unfinished work.
+6. Fix a failing test, build, or runtime error.
+7. Refresh documentation after repository changes.
+8. Show system coverage, unknowns, or contradictions.
+9. Archive a completed change.
+10. Stop.
 
-Reply with 1-9, ask a question, or write the requested change in one sentence.
+Reply with 1-10, ask a question, name a ticket, or write the requested change.
 ```
 
 Translate the menu. If status is `READY_WITH_DECLARED_GAPS`, add one short line
 with the number of declared gaps. Do not dump the gap list unless the user asks.
+If Git ticket queues contain pending/stale/failed items, add one short count line
+without reading all ticket records.
 
 Routing:
 
 - `1`: ask for the question if absent, then execute
   `15-answer-repository-question.md`.
-- `2`: execute `13-build-task-context.md` in `CHANGE_TASK` mode, then
-  `07-new-feature-spec.md`.
+- `2`: show the Git Ticket Menu below unless the user's intent already routes
+  directly to `17-index-git-tickets.md` or `18-explain-git-ticket.md`.
 - `3`: execute `13-build-task-context.md` in `CHANGE_TASK` mode, then
+  `07-new-feature-spec.md`.
+- `4`: execute `13-build-task-context.md` in `CHANGE_TASK` mode, then
   `07-new-feature-spec.md`; ask
   once before implementation, then use `08-implement-spec-task.md`.
-- `4`: execute `09-resume-session.md`.
-- `5`: execute `11-error-memory.md`, then debug within an approved change when
+- `5`: execute `09-resume-session.md`.
+- `6`: execute `11-error-memory.md`, then debug within an approved change when
   production behavior must be modified.
-- `6`: execute `10-refresh-openspec-context.md`.
-- `7`: summarize indexes or execute `14-audit-sdd-coverage.md` if stale.
-- `8`: validate tasks, tests, and deltas; ask once before archiving.
+- `7`: execute `10-refresh-openspec-context.md`.
+- `8`: summarize indexes or execute `14-audit-sdd-coverage.md` if stale.
+- `9`: validate tasks, tests, and deltas; ask once before archiving.
+
+## Git Ticket Menu
+
+```text
+# Git Ticket History
+
+1. Find/update all tickets from local Git history.
+2. Show one ticket with its code and description.
+3. List indexed tickets.
+4. Show indexing/analysis status.
+5. Back.
+
+Reply with 1-5 or write a ticket ID.
+```
+
+Translate the menu. Routing:
+
+- `1`: execute `17-index-git-tickets.md`; it asks only for the exact prefix when
+  absent.
+- `2`: execute `18-explain-git-ticket.md`; ask only for the ticket ID when
+  absent.
+- `3`: run the bundled script's `list` command for the selected/only prefix.
+- `4`: run the bundled script's `status` command and summarize queue counts.
+- `5`: return to Menu C.
+
+Do not read every ticket record to show this menu. Read registry/index/queue
+summaries only.
 
 ## Menu D - Partial Or Stale Context
 
@@ -245,10 +280,11 @@ Declared gaps: <count>
 Coverage audit: <PASS|PASS_WITH_DECLARED_GAPS>
 
 1. Ask a factual repository question.
-2. Start a new feature or change.
-3. Show the system map.
-4. Show declared gaps.
-5. Stop.
+2. Index tickets from Git history.
+3. Start a new feature or change.
+4. Show the system map.
+5. Show declared gaps.
+6. Stop.
 ```
 
 ## Normal Feature Work

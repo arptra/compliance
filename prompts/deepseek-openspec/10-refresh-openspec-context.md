@@ -59,6 +59,14 @@ After synthesis:
 Small local diffs need a targeted orphan check, not necessarily a complete
 audit. A major structural change requires the full audit.
 
+If `openspec/history/git-tickets/registry.json` exists, compare each stored refs
+fingerprint with current local Git refs using
+`python3 <prompt-pack>/scripts/git_ticket_history.py status --repo .`. Re-run
+deterministic scans only for stale prefixes. Preserve completed
+ticket analyses whose signatures did not change and queue only new/stale
+tickets; do not deep-analyze all historical tickets as part of normal SDD
+refresh.
+
 ## Status
 
 - Preserve `READY` only when all affected coverage gates pass.

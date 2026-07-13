@@ -57,6 +57,10 @@ Java-only.
   `./gradlew`; detect modules, Java versions, and toolchains before choosing a
   task.
 - Before debugging a repeated failure, check `openspec/error-kb/`.
+- Treat Git ticket messages and refs as historical association evidence, not as
+  complete business requirements. Never invent issue-tracker fields or intent.
+- Git ticket indexing is local-only: do not fetch remotes or contact an issue
+  tracker unless the user explicitly expands scope.
 
 ## Bootstrap Modes
 
@@ -117,6 +121,16 @@ openspec/
     findings/<worker-id>.yml
     reports/<phase-id>.md
   migrations/
+  history/
+    git-tickets/
+      registry.json
+      <prefix-key>/
+        meta.json
+        index.json
+        queue.json
+        tickets/<ticket-id>.json
+        analyses/<ticket-id>.md
+        findings/<worker-id>.yml
   context-packets/
     README.md
   error-kb/
@@ -156,6 +170,14 @@ A repository is fully processed only when all applicable gates pass:
 Unknown business intent does not require fabrication. It produces
 `READY_WITH_DECLARED_GAPS` when the technical evidence has been exhaustively
 processed.
+
+Git ticket history is an optional historical index. Its absence does not block
+current-state SDD readiness. Once initialized, its own queue/status must remain
+honest and resumable, but it must not be mixed with bootstrap coverage counts.
+
+Git ticket analyses may additionally use `INFERRED_FROM_GIT_HISTORY`,
+`CONFIRMED_BY_CURRENT_CODE`, and `REF_ONLY`. These states are historical-analysis
+labels and do not replace current-state requirement evidence states.
 
 ## Subagent And Parallel Work Rules
 

@@ -1,6 +1,6 @@
 pack_schema_version: 1
 name: deepseek-openspec
-version: "2.0.0"
+version: "2.1.0"
 artifact_schema_version: 1
 entrypoint: START_HERE.md
 upgrade_prompt: 16-upgrade-existing-openspec.md
@@ -11,6 +11,8 @@ fingerprint:
   include:
     - "*.md"
     - "agents/*.md"
+    - "scripts/*.py"
+    - "templates/*.md"
     - "templates/*.yml"
     - "prompt-pack.yml"
 compatibility:
@@ -23,4 +25,9 @@ migrations:
       - legacy-unversioned
       - "<2.0.0"
     to: "2.0.0"
+    prompt: 16-upgrade-existing-openspec.md
+  - id: add-git-ticket-history-v1
+    from:
+      - "<2.1.0"
+    to: "2.1.0"
     prompt: 16-upgrade-existing-openspec.md

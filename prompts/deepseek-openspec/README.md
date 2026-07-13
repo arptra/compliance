@@ -8,6 +8,9 @@ description lives in OpenSpec specs and machine-readable indexes; daily tasks
 receive a bounded context packet assembled from graph and evidence links.
 Factual repository answers use a claim-level grounding gate and return
 `NOT_VERIFIED` instead of inventing missing facts.
+An optional Git ticket history workflow extracts exact ticket IDs from local
+commit history and uses parallel agents to map each ticket to historical and
+current code.
 
 Java/Gradle has first-class command guidance, while bootstrap discovery also
 supports polyglot repositories and monorepos.
@@ -93,6 +96,8 @@ openspec/
     findings/
     reports/
   migrations/
+  history/
+    git-tickets/
   context-packets/
   error-kb/
 ```
@@ -157,6 +162,33 @@ For each non-trivial change:
 
 Task packets store references and short summaries, not copied source trees.
 
+## Git Ticket History
+
+Choose the Git ticket workflow or ask directly:
+
+```text
+Index all tickets from Git history.
+```
+
+The model asks one question for the exact prefix including its separator, for
+example `PROJ-`. It then runs the bundled deterministic parser over local
+`git log --all`, reflogs, Git notes, and ref names. It never fetches remotes.
+
+The parser groups exact IDs and stores compact records under
+`openspec/history/git-tickets/`. It does not persist full patches or commit
+bodies. DeepSeek subagents analyze new/stale tickets in cost-bounded parallel
+batches and create evidence-backed descriptions, historical code paths, current
+code locations, tests, contracts, and later evolution.
+
+After indexing, ask:
+
+```text
+Show PROJ-123 with its code and description.
+```
+
+Completed unchanged tickets are reused across CLI sessions. A rescan preserves
+completed analyses and queues only new/stale ticket signatures.
+
 ## Prompt Map
 
 - `START_HERE.md`: simple state-aware entry point and menus
@@ -177,7 +209,12 @@ Task packets store references and short summaries, not copied source trees.
 - `14-audit-sdd-coverage.md`: independent repository-to-SDD audit
 - `15-answer-repository-question.md`: evidence-gated factual repository answers
 - `16-upgrade-existing-openspec.md`: idempotent prompt-pack migration
+- `17-index-git-tickets.md`: deterministic Git ticket discovery and parallel
+  ticket analysis
+- `18-explain-git-ticket.md`: historical/current code explanation for one ticket
 - `agents/`: specialized worker contracts
+- `scripts/git_ticket_history.py`: dependency-free local Git parser and context
+  builder
 - `templates/`: machine-readable artifact templates
 
 ## Updating The Prompt Pack In Place

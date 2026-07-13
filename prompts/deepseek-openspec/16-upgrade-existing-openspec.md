@@ -112,6 +112,28 @@ Do not rescan unrelated domain implementation solely because the command index
 is new. Follow discovered links only when command behavior cannot otherwise be
 established.
 
+## Migration `add-git-ticket-history-v1`
+
+For pre-2.1.0 repositories:
+
+1. Register the optional `openspec/history/git-tickets/` artifact family in
+   project/OpenSpec metadata without creating fake ticket records.
+2. Add the Git ticket history rules and natural-language routes to the OpenSpec
+   section of `AGENTS.md`, preserving all existing instructions.
+3. Preserve any existing `openspec/history/git-tickets/registry.json`, ticket
+   records, analyses, and queue statuses.
+4. Validate `scripts/git_ticket_history.py` from the prompt pack with its
+   read-only `--help` command; do not copy it into the target repository or
+   create parser caches there.
+5. Do not scan Git history during migration. Ticket indexing begins only when
+   the user chooses the Git ticket workflow and supplies an exact prefix.
+6. Do not downgrade `READY` SDD coverage merely because the optional historical
+   ticket index has not been initialized.
+7. If a ticket index already exists, parse its JSON structures, preserve
+   completed analyses, and mark only records whose signatures or refs are stale.
+
+This migration is additive and must not trigger domain/bootstrap reanalysis.
+
 ## Future Overlay Updates
 
 Future prompt packs must:

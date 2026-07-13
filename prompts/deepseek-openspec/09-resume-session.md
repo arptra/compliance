@@ -13,6 +13,7 @@ Read:
 - `openspec/index/coverage.yml`
 - active change proposals and task lists
 - referenced task context packets
+- Git ticket registry and queue summaries when present
 - `openspec/error-kb/index.yml` only when relevant
 
 Do not reread source files until a selected queue item or task context packet
@@ -58,6 +59,11 @@ Translate to the user's language. For choice `1`, validate packet freshness
 before reading source or editing.
 
 If there are no active changes, show Menu C from `START_HERE.md`.
+
+Treat unfinished Git ticket analysis queues as resumable work. When the user
+chooses to continue them, execute `17-index-git-tickets.md` with the recorded
+prefix and process only pending/stale/failed items. Do not reread completed
+ticket analyses whose signatures are unchanged.
 
 ## Output Discipline
 
