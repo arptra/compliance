@@ -8,6 +8,7 @@ modules:
     source_roots: []
     test_roots: []
     entry_point_ids: []
+    command_ids: []
     deployable_unit_ids: []
     depends_on: []
     bounded_context_candidates: []

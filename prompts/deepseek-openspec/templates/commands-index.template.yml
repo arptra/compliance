@@ -1,0 +1,43 @@
+schema_version: 1
+repository_revision: null
+shards: []
+executables:
+  - id: "EXEC-example"
+    token: "example"
+    module_id: "module-example"
+    entry_point_artifact_id: "ART-path-to-entry"
+    command_ids: []
+commands:
+  - id: "CMD-example-run"
+    executable_id: "EXEC-example"
+    parent_command_id: null
+    tokens: ["example", "run"]
+    aliases: []
+    syntax: "example run [OPTIONS] INPUT"
+    capability_ids: []
+    parameters:
+      - id: "PARAM-example-run-force"
+        token: "--force"
+        aliases: []
+        kind: option
+        required: false
+        value_type: boolean
+        default: false
+        choices: []
+        repeatable: false
+        environment_variables: []
+        config_keys: []
+        precedence: []
+        deprecated: false
+        replacement: null
+        evidence_ids: []
+    exit_codes: []
+    runtime_help:
+      command: null
+      status: not_checked
+      evidence_id: null
+    evidence_ids: []
+    freshness:
+      content_hashes_current: false
+unknowns: []
+contradictions: []

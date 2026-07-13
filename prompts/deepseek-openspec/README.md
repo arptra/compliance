@@ -6,6 +6,8 @@ current-state SDD for repositories that cannot fit in one context window.
 The repository is processed in deterministic, resumable shards. The complete
 description lives in OpenSpec specs and machine-readable indexes; daily tasks
 receive a bounded context packet assembled from graph and evidence links.
+Factual repository answers use a claim-level grounding gate and return
+`NOT_VERIFIED` instead of inventing missing facts.
 
 Java/Gradle has first-class command guidance, while bootstrap discovery also
 supports polyglot repositories and monorepos.
@@ -66,6 +68,7 @@ finding file; a single coordinator validates and merges results.
 
 ```text
 openspec/
+  meta.yml
   project.md
   glossary.md
   architecture/
@@ -77,6 +80,8 @@ openspec/
     files/
     modules.yml
     capabilities.yml
+    commands.yml
+    commands/
     traceability.yml
     coverage.yml
     contradictions.yml
@@ -87,6 +92,7 @@ openspec/
     exclusions.yml
     findings/
     reports/
+  migrations/
   context-packets/
   error-kb/
 ```
@@ -97,6 +103,7 @@ states:
 ```text
 CONFIRMED_BY_CONTRACT
 CONFIRMED_BY_TEST
+CONFIRMED_BY_RUNTIME
 OBSERVED_IN_CODE
 INFERRED_FROM_CODE
 UNKNOWN
@@ -113,6 +120,28 @@ CONTRADICTED
 - `BLOCKED`: an external dependency prevents remaining work.
 
 The model must not call a repository ready while work remains unprocessed.
+
+## Verified Repository Questions
+
+The user may ask a question directly, for example:
+
+```text
+Which exact flag retries failed imports, and what is its default?
+```
+
+The model must:
+
+1. search fresh OpenSpec and command indexes;
+2. reopen linked current code/contracts/tests;
+3. search authoritative declarations if the index is missing or stale;
+4. use side-effect-free runtime help only when necessary;
+5. validate each atomic claim in a separate pass;
+6. return verified evidence, a conflict, or `NOT_VERIFIED`.
+
+Exact flags, aliases, defaults, choices, environment variables, config keys,
+API fields, build tasks, and paths cannot be reconstructed from conventions.
+The command-interface bootstrap worker records them in
+`openspec/index/commands.yml` with exact evidence.
 
 ## Normal Feature Work
 
@@ -146,8 +175,28 @@ Task packets store references and short summaries, not copied source trees.
 - `12-full-bootstrap-orchestrator.md`: complete bootstrap scheduler
 - `13-build-task-context.md`: retrieval and task packet builder
 - `14-audit-sdd-coverage.md`: independent repository-to-SDD audit
+- `15-answer-repository-question.md`: evidence-gated factual repository answers
+- `16-upgrade-existing-openspec.md`: idempotent prompt-pack migration
 - `agents/`: specialized worker contracts
 - `templates/`: machine-readable artifact templates
+
+## Updating The Prompt Pack In Place
+
+The prompt pack is versioned by `prompt-pack.yml`. The target repository stores
+the applied version and computed fingerprint in `openspec/meta.yml`.
+
+After prompt files are replaced or updated, start with the same
+`START_HERE.md`. It detects:
+
+- a newer version requiring migration;
+- changed files with the same version;
+- an unversioned legacy OpenSpec installation;
+- target artifact schemas newer than the current pack.
+
+`16-upgrade-existing-openspec.md` performs an idempotent, non-destructive
+migration. It preserves specs, active changes, queue state, worker findings,
+unknown fields, and user edits. New indexes are backfilled only from relevant
+artifacts instead of restarting full repository bootstrap.
 
 ## Safety Boundaries
 

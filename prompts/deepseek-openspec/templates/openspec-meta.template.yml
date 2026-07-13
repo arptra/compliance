@@ -1,0 +1,17 @@
+schema_version: 1
+prompt_pack:
+  name: deepseek-openspec
+  applied_version: null
+  applied_fingerprint: null
+  fingerprint_algorithm: sha256
+  fingerprint_format: path-null-size-null-content-null-v1
+  applied_at: null
+artifact_schema_version: 1
+migrations_applied: []
+migration_in_progress: null
+compatibility:
+  legacy_imported: false
+  newer_schema_detected: false
+last_validation:
+  result: null
+  repository_revision: null

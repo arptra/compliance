@@ -7,6 +7,7 @@ the user interaction to one short menu.
 
 Read:
 
+- current `prompt-pack.yml` and target `openspec/meta.yml`
 - `openspec/bootstrap/state.yml`
 - `openspec/bootstrap/work-queue.yml` summary
 - `openspec/index/coverage.yml`
@@ -16,6 +17,13 @@ Read:
 
 Do not reread source files until a selected queue item or task context packet
 identifies them.
+
+## Prompt-Pack Upgrade Takes Priority
+
+If version, fingerprint, or supported artifact schema differs, route to
+`16-upgrade-existing-openspec.md` before resuming bootstrap or active changes.
+Preserve the existing queue and task state. If target schemas are newer than the
+pack, stop and request the matching/newer pack instead of downgrading.
 
 ## Bootstrap Takes Priority
 

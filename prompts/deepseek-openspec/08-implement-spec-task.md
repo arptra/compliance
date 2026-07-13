@@ -37,6 +37,13 @@ Never pretend subagents ran if the environment does not provide them.
 
 ## Implementation Workflow
 
+Before running a repository-specific command, task, module selector, flag, or
+script, verify its exact token and parameters in the fresh command index,
+current build/parser declaration, or side-effect-free help/task listing. Do not
+infer a Gradle task path, npm script, CLI flag, default, or environment variable
+from conventions. If it cannot be verified, use safe discovery or report
+`NOT_VERIFIED` instead of executing a guessed command.
+
 1. Choose the next unchecked, dependency-ready task.
 2. State the files and behavior boundary before editing.
 3. Add or update tests first where practical.

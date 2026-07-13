@@ -21,6 +21,7 @@ Audit and report separate coverage for:
 - in-scope artifact analysis
 - modules, services, applications, and entry points
 - public APIs and commands
+- exact command parameters, defaults, aliases, config/env mappings, and evidence
 - events, consumers, producers, schedulers, and background jobs
 - data schemas, persistence boundaries, and migrations
 - external integrations
@@ -30,6 +31,7 @@ Audit and report separate coverage for:
 - runtime, configuration, observability, and deployment
 - capability-to-code links
 - capability-to-contract links where contracts exist
+- command-to-capability, command-to-artifact, and command-to-test links
 - capability-to-test links where tests exist
 - reverse artifact-to-capability links
 
@@ -43,6 +45,9 @@ Find:
 - in-scope files with no completed analysis
 - modules or deployable units absent from the system map
 - routes/controllers/handlers/commands with no capability
+- executable entry points, build tasks, flags, or dynamic commands missing from
+  the command index
+- command attributes whose exact evidence is missing or stale
 - schemas, migrations, topics, jobs, or integrations with no capability
 - significant test suites with no linked requirement
 - capability requirements with missing or stale evidence
@@ -104,5 +109,6 @@ Capabilities documented: <count>
 Orphan artifacts: <count>
 Blocking/material findings: <count>
 Declared gaps: <count>
+Command surfaces verified: <count>/<count>
 Repair work items created: <count>
 ```

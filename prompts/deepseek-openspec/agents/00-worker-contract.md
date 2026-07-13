@@ -17,6 +17,8 @@ Read `../00-global-rules.md` and this file before the role-specific prompt.
 
 - Production code and canonical OpenSpec files are read-only.
 - Write only the unique findings file assigned by the coordinator.
+- For ephemeral repository-question retrieval or grounding validation, return
+  only the assigned structured result when no findings file is assigned.
 - Do not edit `project.md`, `architecture/`, `specs/`, `index/`, bootstrap
   state, or the shared queue.
 - The coordinator validates and merges findings.
@@ -36,7 +38,8 @@ Read `../00-global-rules.md` and this file before the role-specific prompt.
 
 Before completing:
 
-1. account for every assigned artifact;
+1. account for every assigned artifact or every evidence record in an
+   ephemeral question assignment;
 2. mark each artifact `analyzed`, `excluded-with-evidence`, `needs-follow-up`, or
    `blocked`;
 3. ensure all findings have evidence;

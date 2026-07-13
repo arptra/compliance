@@ -1,0 +1,26 @@
+schema_version: 1
+id: "migration-id"
+from_version: null
+to_version: null
+status: planned
+started_at: null
+completed_at: null
+preflight:
+  existing_spec_ids: []
+  existing_change_ids: []
+  existing_queue_item_ids: []
+operations: []
+files_created: []
+files_merged:
+  - path: "openspec/path"
+    before_hash: null
+    after_hash: null
+backfill_work_item_ids: []
+validation:
+  structures_parse: false
+  existing_ids_preserved: false
+  queue_state_preserved: false
+  targeted_coverage_passed: false
+  production_files_unchanged: false
+  idempotent_second_pass: false
+notes: []

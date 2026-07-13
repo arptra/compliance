@@ -3,6 +3,10 @@
 Use after repository changes, stale evidence, a major merge, or an explicit
 user request. Read `00-global-rules.md` first. Do not change production code.
 
+Before repository refresh, compare current `prompt-pack.yml` with
+`openspec/meta.yml`. Run `16-upgrade-existing-openspec.md` first when required,
+so refresh uses the correct artifact contracts.
+
 ## Detect Change Set
 
 Prefer deterministic change evidence:
@@ -12,6 +16,7 @@ Prefer deterministic change evidence:
 - added, moved, renamed, and deleted paths
 - build/workspace manifest changes
 - contract/schema/migration changes
+- command registration, wrapper, build-task, environment, and config changes
 - changed tests and entry points
 
 If no reliable baseline exists, rebuild the manifest and compare records. Do
@@ -25,6 +30,7 @@ Use reverse traceability to map changed artifacts to:
 - capabilities and requirements
 - contracts, data entities, events, and jobs
 - tests
+- commands, parameters, environment/config mappings, and help evidence
 - reverse-dependent capabilities
 - cross-cutting and architecture records
 
@@ -43,6 +49,8 @@ than silently deleting intent.
 After synthesis:
 
 - refresh evidence hashes and repository revision
+- refresh affected command-index records and invalidate stale exact-answer
+  evidence
 - validate specs and bidirectional traceability
 - invalidate stale task context packets
 - run `14-audit-sdd-coverage.md` when topology, public contracts, data model,

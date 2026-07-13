@@ -11,6 +11,7 @@ capabilities:
     reverse_dependents: []
     modules: []
     contracts: []
+    commands: []
     evidence_ids: []
     unknown_ids: []
     contradiction_ids: []

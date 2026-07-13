@@ -5,6 +5,8 @@ nodes:
   modules: []
   artifacts: []
   contracts: []
+  commands: []
+  parameters: []
   tests: []
   unknowns: []
   contradictions: []

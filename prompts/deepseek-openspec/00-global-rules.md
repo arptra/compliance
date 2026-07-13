@@ -30,10 +30,17 @@ Java-only.
 - Do not edit production code during assessment, bootstrap, current-state
   specification, context refresh, or coverage audit.
 - Do not invent business requirements.
+- Do not invent repository facts, command names, parameters, defaults, aliases,
+  environment variables, config keys, API fields, build tasks, or paths.
+- For factual repository questions, use `15-answer-repository-question.md` and
+  answer only with claim-level evidence checked in the current turn.
+- If exact evidence cannot be found, return `NOT_VERIFIED` and the nearest
+  searched locations. A plausible guess is not a fallback.
 - Attach repository evidence to every discovered requirement.
 - Use these evidence states consistently:
   - `CONFIRMED_BY_CONTRACT`
   - `CONFIRMED_BY_TEST`
+  - `CONFIRMED_BY_RUNTIME`
   - `OBSERVED_IN_CODE`
   - `INFERRED_FROM_CODE`
   - `UNKNOWN`
@@ -75,6 +82,7 @@ the OpenSpec layout and a high-level project map, but must be labeled
 
 ```text
 openspec/
+  meta.yml
   project.md
   glossary.md
   architecture/
@@ -96,6 +104,8 @@ openspec/
     files/<shard>.yml
     modules.yml
     capabilities.yml
+    commands.yml
+    commands/<shard>.yml
     traceability.yml
     coverage.yml
     contradictions.yml
@@ -106,6 +116,7 @@ openspec/
     exclusions.yml
     findings/<worker-id>.yml
     reports/<phase-id>.md
+  migrations/
   context-packets/
     README.md
   error-kb/
@@ -130,14 +141,16 @@ A repository is fully processed only when all applicable gates pass:
    `openspec/specs/`.
 5. Every capability links to implementation evidence and, where present,
    contracts and tests.
-6. Authorization, security, audit, observability, reliability, configuration,
+6. Every current user/operator command surface is indexed with exact tokens,
+   parameters, and evidence, or recorded as a declared gap.
+7. Authorization, security, audit, observability, reliability, configuration,
    deployment, and data-lifecycle behavior are covered or declared not
    applicable.
-7. Orphan contracts, tests, entry points, and significant implementation areas
-   are resolved or recorded as declared gaps.
-8. The bootstrap work queue has no runnable or pending items.
-9. An independent coverage-auditor pass has completed.
-10. `openspec/index/coverage.yml` and `openspec/bootstrap/state.yml` agree on
+8. Orphan contracts, tests, commands, entry points, and significant
+   implementation areas are resolved or recorded as declared gaps.
+9. The bootstrap work queue has no runnable or pending items.
+10. An independent coverage-auditor pass has completed.
+11. `openspec/index/coverage.yml` and `openspec/bootstrap/state.yml` agree on
     the final status.
 
 Unknown business intent does not require fabrication. It produces
@@ -170,6 +183,31 @@ repository. Build it from capability IDs, graph dependencies, affected
 contracts, source paths, tests, relevant architecture decisions, and active
 change files. Expand the packet when evidence is missing or dependencies cross
 the initial boundary.
+
+## Grounded Repository Answers
+
+- Search fresh OpenSpec indexes first, then reopen linked code/contracts/tests.
+- If indexes are absent or stale, locate the authoritative declaration with
+  deterministic repository search.
+- Use safe runtime help only when it has no side effects and needs no production
+  access, installation, or secrets.
+- Exact command/config/API tokens must occur literally in current evidence.
+- Validate each atomic claim in a separate pass; use an independent grounding
+  worker when available.
+- Return `CONFLICTING_EVIDENCE` when current sources disagree and
+  `NOT_VERIFIED` when evidence is insufficient.
+
+## Prompt-Pack Upgrade Safety
+
+- Read `prompt-pack.yml` and compare its version/fingerprint with
+  `openspec/meta.yml` at session start.
+- Run `16-upgrade-existing-openspec.md` before normal work when an upgrade is
+  required.
+- Migrations are idempotent, additive by default, and preserve existing specs,
+  active changes, findings, queue state, unknown fields, and user edits.
+- Never downgrade target artifacts newer than the current pack supports.
+- Record a migration as applied only after validation and an idempotent dry
+  second pass succeed.
 
 ## Implementation Gate
 

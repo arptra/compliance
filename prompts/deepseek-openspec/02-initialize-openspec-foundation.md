@@ -24,6 +24,7 @@ Create missing directories and initial files:
 
 ```text
 openspec/
+  meta.yml
   project.md
   glossary.md
   architecture/
@@ -38,6 +39,8 @@ openspec/
     files/
     modules.yml
     capabilities.yml
+    commands.yml
+    commands/
     traceability.yml
     coverage.yml
     contradictions.yml
@@ -48,6 +51,7 @@ openspec/
     exclusions.yml
     findings/
     reports/
+  migrations/
   context-packets/README.md
   error-kb/
     README.md
@@ -85,6 +89,11 @@ orchestration_mode: NONE
 Include timestamps only when the environment can produce them reliably. Do not
 fabricate hashes, counts, owners, or runtime facts.
 
+Initialize `openspec/meta.yml` from the current `prompt-pack.yml` and
+`templates/openspec-meta.template.yml`. Compute the actual pack fingerprint;
+do not copy a placeholder. Record the version/fingerprint only after foundation
+validation succeeds.
+
 ## `project.md` Initial Content
 
 Include only confirmed lightweight facts:
@@ -95,6 +104,7 @@ Include only confirmed lightweight facts:
 - repository-native build and test commands when confirmed
 - current bootstrap mode and status
 - links to canonical indexes
+- command-index and verified-answer workflow
 - distinction between discovered current behavior and approved future changes
 
 Initialize `architecture/decisions.md` as an evidence-backed index of existing
@@ -102,6 +112,18 @@ ADR files and important architectural constraints. Do not invent decision
 rationale that is not present in repository history, docs, contracts, or code.
 
 Detailed architecture and behavior are filled by later bootstrap phases.
+
+## Foundation Validation
+
+Before recording the applied prompt-pack version/fingerprint:
+
+- parse `prompt-pack.yml`, `openspec/meta.yml`, bootstrap state, queue, and
+  initial indexes with structured parsers;
+- verify required prompt/template references exist;
+- verify the fingerprint was computed from the manifest include set;
+- verify no production file changed;
+- then store the applied version/fingerprint in both `openspec/meta.yml` and
+  bootstrap state.
 
 ## `AGENTS.md` Requirements
 
@@ -114,6 +136,9 @@ Add or merge rules requiring:
 - current-state evidence labels
 - error-memory lookup before repeated debugging
 - incremental index refresh after affected code changes
+- verified repository answers with exact evidence and `NOT_VERIFIED` instead of
+  unsupported guesses
+- prompt-pack migration before normal work when version/fingerprint changes
 
 ## Output
 

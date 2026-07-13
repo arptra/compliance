@@ -14,6 +14,7 @@ partition capability analysis.
 - applications, services, libraries, plugins, and shared modules
 - source/test roots and generated-source declarations
 - entry points, executable commands, server startup, workers, and schedulers
+- command/build-task definition roots for command-interface assignments
 - module and dependency direction
 - deployment-unit clues
 - ownership metadata such as CODEOWNERS when present

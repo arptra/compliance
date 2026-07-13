@@ -19,6 +19,7 @@ Maintain a concise repository-level map:
 - repository conventions and ownership evidence when present
 - build, test, validation, and local runtime commands
 - public contract and schema locations
+- executable/command index location and repository-question verification rules
 - links to system architecture, capability, coverage, and unknown indexes
 - bootstrap freshness and status
 

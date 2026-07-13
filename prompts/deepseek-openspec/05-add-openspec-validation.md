@@ -38,11 +38,15 @@ Validate:
 - every in-scope file has a classification and analysis status
 - every capability index entry has a matching spec
 - every traceability node and edge references existing IDs
+- every command token/parameter attribute has current evidence
+- every command-to-capability and command-to-artifact link resolves
 - reverse artifact-to-capability links can be resolved
 - unknown and contradiction IDs are unique
 - queue counts agree with actual queue items
 - coverage counts agree with manifest and traceability data
 - no secret values or private payloads were copied into artifacts
+- `openspec/meta.yml` matches the applied pack version/fingerprint and contains
+  no incomplete migration marked as applied
 
 Use a structured parser when the environment provides one. Do not validate YAML
 through ad hoc text matching alone.
@@ -59,6 +63,17 @@ Every active change must contain:
 - task context packet reference or a documented reason it was unnecessary
 
 Spec deltas must use OpenSpec delta headings and include requirement scenarios.
+
+## Grounded-Answer Checks
+
+For any persisted grounded-answer record verify:
+
+- each material claim has evidence
+- every cited path/symbol/excerpt exists and is fresh
+- exact tokens occur literally in cited current evidence
+- conflicts are not omitted
+- verified status has a passing grounding-validator result
+- `NOT_VERIFIED` contains no guessed answer disguised as a candidate
 
 ## Validation Result
 

@@ -13,6 +13,7 @@ topology, and artifact classes, then verify that OpenSpec represents them.
 - manifest classification and analysis completeness
 - module, deployable, and entry-point coverage
 - contract, schema, migration, event, job, integration, and test coverage
+- command trees, parameters, build/operator tasks, and exact command evidence
 - cross-cutting and runtime coverage
 - capability and requirement evidence quality
 - bidirectional traceability

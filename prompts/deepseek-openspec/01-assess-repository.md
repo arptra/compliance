@@ -17,6 +17,7 @@ interpret source code. Inspect:
 - source, test, schema, migration, infrastructure, and documentation roots
 - apparent generated, vendor, binary, cache, output, and secret-bearing paths
 - existing agent instructions
+- current `prompt-pack.yml`, `openspec/meta.yml`, and migration state
 - existing `openspec/` state and active changes
 
 Do not read every source body during assessment. This phase estimates and
@@ -35,6 +36,8 @@ complete in-scope analysis.
 - test frameworks and test roots
 - available OpenSpec CLI
 - available native subagent/worker tools
+- CLI frameworks, executable entry points, build task systems, and command-help
+  surfaces
 - obvious repository-local instructions and security restrictions
 
 ## Estimate Full Bootstrap
@@ -63,6 +66,9 @@ OPENSPEC_READY
 OPENSPEC_READY_WITH_DECLARED_GAPS
 OPENSPEC_ACTIVE_CHANGES
 OPENSPEC_NEEDS_REFRESH
+OPENSPEC_UPGRADE_REQUIRED
+PROMPT_PACK_DRIFT
+TARGET_NEWER_THAN_PACK
 ```
 
 ## Output

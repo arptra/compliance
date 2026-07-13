@@ -1,4 +1,6 @@
 schema_version: 1
+prompt_pack_version: null
+prompt_pack_fingerprint: null
 mode: FULL_BOOTSTRAP
 status: IN_PROGRESS
 phase: foundation

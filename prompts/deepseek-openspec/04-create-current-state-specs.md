@@ -13,6 +13,7 @@ Process completed domain and artifact findings from
 - candidate capabilities
 - evidence files
 - related contracts, tests, data, events, and cross-cutting findings
+- related command IDs and command-interface findings
 - known overlaps with other work items
 
 Do not impose an arbitrary limit on total capability specs. Limit each worker
@@ -72,6 +73,8 @@ Each spec must include:
 
 ## Data, Events, And External Contracts
 
+## Commands And Operator Interfaces
+
 ## Cross-Cutting Requirements
 
 ## Dependencies
@@ -92,6 +95,7 @@ For every synthesized capability update:
 
 - `openspec/index/capabilities.yml`
 - `openspec/index/traceability.yml` or its declared shard
+- `openspec/index/commands.yml` links for invokable behavior
 - relevant file-manifest analysis statuses
 - `openspec/index/unknowns.yml`
 - `openspec/index/contradictions.yml`
@@ -100,7 +104,7 @@ For every synthesized capability update:
 Traceability must support both directions:
 
 ```text
-capability -> requirements -> contracts/code/tests/dependencies
+capability -> requirements -> contracts/commands/code/tests/dependencies
 repository artifact -> capabilities/requirements
 ```
 

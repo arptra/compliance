@@ -13,11 +13,21 @@ Read these prompt-pack files before starting:
 4. `04-create-current-state-specs.md`
 5. `05-add-openspec-validation.md`
 6. `06-final-review.md`
-7. all role prompts under `agents/` that apply to the repository
-8. templates under `templates/`
+7. `15-answer-repository-question.md`
+8. `16-upgrade-existing-openspec.md`
+9. all role prompts under `agents/` that apply to the repository
+10. templates under `templates/`
 
 Resolve that list relative to this prompt pack. Resolve generated `openspec/`
 paths relative to the target repository root.
+
+## Phase 0 - Prompt-Pack Compatibility
+
+Read `prompt-pack.yml`. If an existing target has `openspec/meta.yml`, compare
+version, artifact schema, and computed pack fingerprint before resuming queue
+work. If `openspec/` exists without `meta.yml`, treat it as
+`LEGACY_UNVERSIONED`. Execute `16-upgrade-existing-openspec.md` when required.
+Never let a new prompt pack silently reinterpret an older queue or index schema.
 
 Do not change production code. Once approved, continue autonomously through all
 non-blocked phases. Keep the user informed with short progress summaries.
@@ -93,6 +103,7 @@ configuration
 infrastructure
 documentation
 build-tooling
+command-interface
 generated
 vendor-or-dependency
 binary
@@ -143,6 +154,8 @@ have:
 Create these global assignments when applicable:
 
 - repository cartography
+- command interfaces and build/operator tasks using
+  `agents/command-interface-analyzer.md`
 - contracts and data boundaries
 - test-derived behavior
 - runtime and cross-cutting behavior
@@ -189,10 +202,15 @@ Continue until no extraction item is pending or runnable.
 Use a single coordinator/synthesizer to avoid canonical write conflicts.
 
 1. Execute `03-fill-openspec-project-context.md` from validated findings.
-2. Group capability candidates by bounded context and resolve duplicates.
-3. Create synthesis work items for every candidate group.
-4. Execute `04-create-current-state-specs.md` in context-safe waves.
-5. Update capabilities, bidirectional traceability, unknowns, contradictions,
+2. Synthesize exact command records with
+   `templates/commands-index.template.yml` into
+   `openspec/index/commands.yml` and declared command shards using
+   command-interface findings.
+3. Link commands to entry points, artifacts, tests, capabilities, and evidence.
+4. Group capability candidates by bounded context and resolve duplicates.
+5. Create synthesis work items for every candidate group.
+6. Execute `04-create-current-state-specs.md` in context-safe waves.
+7. Update capabilities, bidirectional traceability, unknowns, contradictions,
    and manifest analysis status after each wave.
 
 When findings disagree, preserve both evidence records and create a

@@ -4,9 +4,9 @@ You are the coordinator for an OpenSpec-first workflow in an existing
 repository. This is the only prompt the user should need to start or resume a
 session.
 
-Read `00-global-rules.md` from this prompt pack before acting. Match the user's
-language. Keep the user interface simple even when the internal workflow uses
-many agents and thousands of files.
+Read `prompt-pack.yml` and `00-global-rules.md` from this prompt pack before
+acting. Match the user's language. Keep the user interface simple even when the
+internal workflow uses many agents and thousands of files.
 
 Resolve prompt, agent, and template references relative to the directory that
 contains this `START_HERE.md`. Resolve every `openspec/` path relative to the
@@ -25,6 +25,9 @@ repository by mistake.
 - Progress updates must be short: phase, completed/total work items, coverage,
   and blockers.
 - Never hide partial coverage behind the word "initialized".
+- When the user asks a factual repository question directly, route it to
+  `15-answer-repository-question.md` without forcing them through a feature
+  menu. Prompt-pack compatibility checks still run first.
 
 ## Step 1 - Lightweight State Detection
 
@@ -33,10 +36,14 @@ Inspect repository markers without reading source bodies yet:
 - root directory entries and tracked-file list
 - build/workspace manifests
 - `AGENTS.md` or equivalent agent instructions
+- `prompt-pack.yml`
+- `openspec/meta.yml`
+- `openspec/migrations/`
 - `openspec/project.md`
 - `openspec/bootstrap/state.yml`
 - `openspec/bootstrap/work-queue.yml`
 - `openspec/index/coverage.yml`
+- `openspec/index/commands.yml`
 - `openspec/specs/`
 - `openspec/changes/`
 - `openspec/error-kb/index.yml`
@@ -53,7 +60,14 @@ OPENSPEC_READY
 OPENSPEC_READY_WITH_DECLARED_GAPS
 OPENSPEC_ACTIVE_CHANGES
 OPENSPEC_NEEDS_REFRESH
+OPENSPEC_UPGRADE_REQUIRED
+PROMPT_PACK_DRIFT
+TARGET_NEWER_THAN_PACK
 ```
+
+Before choosing a normal repository state, compute the current pack fingerprint
+and compare it with `openspec/meta.yml`. Version/schema incompatibility takes
+priority over bootstrap, active-change, and ready-state menus.
 
 ## Menu A - First Run
 
@@ -120,16 +134,17 @@ Use for `OPENSPEC_READY`, `OPENSPEC_READY_WITH_DECLARED_GAPS`, or
 ```text
 # OpenSpec Workspace
 
-1. Describe a new feature or change.
-2. Describe a change and implement it after approval.
-3. Continue unfinished work.
-4. Fix a failing test, build, or runtime error.
-5. Refresh documentation after repository changes.
-6. Show system coverage, unknowns, or contradictions.
-7. Archive a completed change.
-8. Stop.
+1. Ask a factual question about this repository.
+2. Describe a new feature or change.
+3. Describe a change and implement it after approval.
+4. Continue unfinished work.
+5. Fix a failing test, build, or runtime error.
+6. Refresh documentation after repository changes.
+7. Show system coverage, unknowns, or contradictions.
+8. Archive a completed change.
+9. Stop.
 
-Reply with 1-8, or write the requested change in one sentence.
+Reply with 1-9, ask a question, or write the requested change in one sentence.
 ```
 
 Translate the menu. If status is `READY_WITH_DECLARED_GAPS`, add one short line
@@ -137,15 +152,19 @@ with the number of declared gaps. Do not dump the gap list unless the user asks.
 
 Routing:
 
-- `1`: execute `13-build-task-context.md`, then `07-new-feature-spec.md`.
-- `2`: execute `13-build-task-context.md`, then `07-new-feature-spec.md`; ask
+- `1`: ask for the question if absent, then execute
+  `15-answer-repository-question.md`.
+- `2`: execute `13-build-task-context.md` in `CHANGE_TASK` mode, then
+  `07-new-feature-spec.md`.
+- `3`: execute `13-build-task-context.md` in `CHANGE_TASK` mode, then
+  `07-new-feature-spec.md`; ask
   once before implementation, then use `08-implement-spec-task.md`.
-- `3`: execute `09-resume-session.md`.
-- `4`: execute `11-error-memory.md`, then debug within an approved change when
+- `4`: execute `09-resume-session.md`.
+- `5`: execute `11-error-memory.md`, then debug within an approved change when
   production behavior must be modified.
-- `5`: execute `10-refresh-openspec-context.md`.
-- `6`: summarize indexes or execute `14-audit-sdd-coverage.md` if stale.
-- `7`: validate tasks, tests, and deltas; ask once before archiving.
+- `6`: execute `10-refresh-openspec-context.md`.
+- `7`: summarize indexes or execute `14-audit-sdd-coverage.md` if stale.
+- `8`: validate tasks, tests, and deltas; ask once before archiving.
 
 ## Menu D - Partial Or Stale Context
 
@@ -167,6 +186,33 @@ Reply with 1-4.
 Choice `1` routes to the full bootstrap orchestrator in new or incremental
 mode. Choice `2` must carry a visible partial-context warning into any change
 proposal.
+
+## Menu E - Prompt-Pack Upgrade
+
+Use for `OPENSPEC_UPGRADE_REQUIRED` or `PROMPT_PACK_DRIFT`:
+
+```text
+# OpenSpec Update
+
+A newer or changed prompt pack was detected. Existing specifications and work
+will be preserved.
+
+1. Safely update OpenSpec metadata and indexes.
+2. Show the migration plan without changing files.
+3. Continue in compatibility mode without migration.
+4. Stop.
+
+Reply with 1-4.
+```
+
+Translate the menu. Choice `1` executes
+`16-upgrade-existing-openspec.md`. Choice `2` runs its preflight only. Choice
+`3` may answer read-only questions with a visible stale-pack warning, but must
+not mutate canonical OpenSpec artifacts or implement changes.
+
+For `TARGET_NEWER_THAN_PACK`, do not offer a downgrade. Tell the user that the
+target OpenSpec schema is newer and they must use the matching/newer prompt
+pack.
 
 ## Full Bootstrap Progress Format
 
@@ -191,16 +237,18 @@ Status: <running|retrying|blocked|complete>
 Status: <READY|READY_WITH_DECLARED_GAPS>
 Modules/services mapped: <count>
 Capabilities documented: <count>
+Command surfaces indexed: <count>
 Contracts and entry points mapped: <count>
 Tests linked: <count>
 Repository paths classified: <percent>
 Declared gaps: <count>
 Coverage audit: <PASS|PASS_WITH_DECLARED_GAPS>
 
-1. Start a new feature or change.
-2. Show the system map.
-3. Show declared gaps.
-4. Stop.
+1. Ask a factual repository question.
+2. Start a new feature or change.
+3. Show the system map.
+4. Show declared gaps.
+5. Stop.
 ```
 
 ## Normal Feature Work
@@ -218,3 +266,16 @@ For a new change:
 
 Do not solve context uncertainty by blindly loading the repository. Expand the
 packet through explicit dependency and evidence links.
+
+## Normal Repository Questions
+
+For a factual question:
+
+1. Build a `REPOSITORY_QUESTION` context.
+2. Search fresh specs/indexes and reopen linked evidence.
+3. Search code/contracts/tests when the spec is missing or stale.
+4. Use safe runtime help only when needed and side-effect-free.
+5. Validate every atomic claim independently.
+6. Answer with verified evidence, a conflict, or `NOT_VERIFIED`.
+
+Never invent an exact command, parameter, default, route, config key, or path.

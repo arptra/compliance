@@ -16,6 +16,8 @@ only from existing evidence. Missing evidence creates new work-queue items.
 3. Secret and private-data hygiene review.
 4. Check that production code was not changed during bootstrap.
 5. Check that bootstrap state, queue, and coverage index agree.
+6. Check command-interface coverage and command-to-code traceability.
+7. Check prompt-pack metadata and migration completion.
 
 ## Final Status Rules
 

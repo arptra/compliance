@@ -16,4 +16,5 @@ records:
     finding_ids: []
     capability_ids: []
     contract_ids: []
+    command_ids: []
     test_ids: []

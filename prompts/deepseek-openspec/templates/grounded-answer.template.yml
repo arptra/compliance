@@ -1,0 +1,30 @@
+schema_version: 1
+question: "Repository question"
+classification: []
+repository_revision: null
+status: NOT_VERIFIED
+answer: null
+claims:
+  - id: "CLAIM-1"
+    text: "Atomic repository fact"
+    exact_tokens: []
+    evidence_ids: []
+evidence:
+  - id: "ANSWER-EVID-1"
+    kind: code
+    path: "path/to/file"
+    symbol_or_key: null
+    lines: null
+    content_hash: null
+    excerpt: null
+    proves_claim_ids: []
+searches:
+  - target: "index, path, symbol, or safe command"
+    result: no_match
+conflicts: []
+nearest_locations: []
+unverified_candidates: []
+grounding_validation:
+  mode: coordinator_second_pass
+  result: null
+  failed_claim_ids: []

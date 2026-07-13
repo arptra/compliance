@@ -21,6 +21,12 @@ openspec/error-kb/
   signature.
 - If a verified solution matches the current failure, apply it and cite the
   entry ID.
+- Treat stored commands and parameters as historical evidence. Before reusing
+  them, verify exact tokens against the current command index, build/parser
+  declaration, or safe current help output.
+- Never adapt an old command by guessing renamed tasks, flags, modules, or
+  defaults. Return `NOT_VERIFIED` and search current code when exact evidence is
+  missing.
 - If no solution matches, debug normally.
 - After a new solution is verified, create or update an entry.
 - Update `openspec/error-kb/index.yml` whenever entries change.

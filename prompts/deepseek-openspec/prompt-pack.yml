@@ -1,0 +1,26 @@
+pack_schema_version: 1
+name: deepseek-openspec
+version: "2.0.0"
+artifact_schema_version: 1
+entrypoint: START_HERE.md
+upgrade_prompt: 16-upgrade-existing-openspec.md
+fingerprint:
+  algorithm: sha256
+  format: path-null-size-null-content-null-v1
+  follow_symlinks: false
+  include:
+    - "*.md"
+    - "agents/*.md"
+    - "templates/*.yml"
+    - "prompt-pack.yml"
+compatibility:
+  accepts_legacy_unversioned: true
+  minimum_artifact_schema_version: 1
+  refuses_artifact_schema_newer_than_pack: true
+migrations:
+  - id: add-versioning-and-grounded-answers-v1
+    from:
+      - legacy-unversioned
+      - "<2.0.0"
+    to: "2.0.0"
+    prompt: 16-upgrade-existing-openspec.md

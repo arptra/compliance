@@ -12,6 +12,8 @@ token_budget:
 direct_scope:
   capability_ids: []
   requirement_ids: []
+  command_ids: []
+  parameter_ids: []
 dependency_closure:
   capability_ids: []
   reverse_dependent_ids: []
@@ -24,6 +26,7 @@ cross_cutting_concerns: []
 source_files: []
 test_files: []
 contracts_and_schemas: []
+commands_and_parameters: []
 active_change_files: []
 unknown_ids: []
 contradiction_ids: []

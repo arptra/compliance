@@ -7,6 +7,8 @@ dimensions:
   in_scope_analysis: {covered: 0, total: 0, result: FAIL}
   modules_and_deployables: {covered: 0, total: 0, result: FAIL}
   entry_points_and_contracts: {covered: 0, total: 0, result: FAIL}
+  command_interfaces: {covered: 0, total: 0, result: FAIL}
+  command_attribute_evidence: {covered: 0, total: 0, result: FAIL}
   data_events_jobs_integrations: {covered: 0, total: 0, result: FAIL}
   tests_and_scenarios: {covered: 0, total: 0, result: FAIL}
   runtime_and_cross_cutting: {covered: 0, total: 0, result: FAIL}
@@ -23,6 +25,7 @@ orphan_counts:
   contracts: 0
   tests: 0
   entry_points: 0
+  commands: 0
 blocking_findings: []
 material_findings: []
 declared_gaps: []
