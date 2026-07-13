@@ -1,0 +1,31 @@
+schema_version: 1
+id: "task-or-change-id"
+request: "User request"
+created_at: null
+repository_revision: null
+coverage_status: IN_PROGRESS
+result: INSUFFICIENT
+token_budget:
+  model_context_limit: null
+  retrieval_budget: null
+  estimated_tokens: null
+direct_scope:
+  capability_ids: []
+  requirement_ids: []
+dependency_closure:
+  capability_ids: []
+  reverse_dependent_ids: []
+materials:
+  required_full: []
+  required_summary: []
+  optional_on_demand: []
+  excluded_with_reason: []
+cross_cutting_concerns: []
+source_files: []
+test_files: []
+contracts_and_schemas: []
+active_change_files: []
+unknown_ids: []
+contradiction_ids: []
+expansion_triggers: []
+freshness_checks: []

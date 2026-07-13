@@ -1,0 +1,16 @@
+schema_version: 1
+nodes:
+  capabilities: []
+  requirements: []
+  modules: []
+  artifacts: []
+  contracts: []
+  tests: []
+  unknowns: []
+  contradictions: []
+edges:
+  - from: "capability:domain-capability"
+    type: implemented_by
+    to: "artifact:path/to/source"
+    evidence_ids: []
+reverse_index_shards: []

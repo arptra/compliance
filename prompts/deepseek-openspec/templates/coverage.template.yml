@@ -1,0 +1,28 @@
+schema_version: 1
+status: IN_PROGRESS
+repository_revision: null
+audit_finding_file: null
+dimensions:
+  path_classification: {covered: 0, total: 0, result: FAIL}
+  in_scope_analysis: {covered: 0, total: 0, result: FAIL}
+  modules_and_deployables: {covered: 0, total: 0, result: FAIL}
+  entry_points_and_contracts: {covered: 0, total: 0, result: FAIL}
+  data_events_jobs_integrations: {covered: 0, total: 0, result: FAIL}
+  tests_and_scenarios: {covered: 0, total: 0, result: FAIL}
+  runtime_and_cross_cutting: {covered: 0, total: 0, result: FAIL}
+  capability_to_artifact_links: {covered: 0, total: 0, result: FAIL}
+  reverse_artifact_links: {covered: 0, total: 0, result: FAIL}
+gates:
+  manifest_complete: false
+  extraction_complete: false
+  synthesis_complete: false
+  traceability_valid: false
+  independent_audit_complete: false
+orphan_counts:
+  artifacts: 0
+  contracts: 0
+  tests: 0
+  entry_points: 0
+blocking_findings: []
+material_findings: []
+declared_gaps: []

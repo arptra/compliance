@@ -1,0 +1,19 @@
+schema_version: 1
+shard_id: "module-example"
+module_id: "module-example"
+path_prefixes: []
+records:
+  - id: "ART-path-to-file"
+    path: "path/to/file"
+    tracked: true
+    language: null
+    artifact_class: unknown
+    size_bytes: null
+    content_hash: null
+    scope_status: in-scope
+    exclusion_rule_id: null
+    analysis_status: pending
+    finding_ids: []
+    capability_ids: []
+    contract_ids: []
+    test_ids: []

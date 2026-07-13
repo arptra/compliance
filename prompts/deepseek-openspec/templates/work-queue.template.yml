@@ -1,0 +1,25 @@
+schema_version: 1
+updated_at: null
+summary:
+  total: 0
+  pending: 0
+  running: 0
+  completed: 0
+  retry: 0
+  blocked: 0
+items:
+  - id: "WORK-example"
+    phase: extraction
+    role_prompt: "agents/domain-capability-analyzer.md"
+    assignment:
+      module_ids: []
+      manifest_shards: []
+      artifact_ids: []
+      path_prefixes: []
+    non_overlap_rule: "Only process explicitly assigned artifacts"
+    depends_on: []
+    output_file: "openspec/bootstrap/findings/WORK-example.yml"
+    status: pending
+    attempts: 0
+    last_error: null
+    discovered_follow_ups: []

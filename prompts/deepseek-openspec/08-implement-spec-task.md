@@ -1,73 +1,103 @@
-# Implement One OpenSpec Task
+# Implement An Approved OpenSpec Task
 
-Use this prompt after an OpenSpec change exists and the user approves
-implementation.
+Use after an OpenSpec change exists and the user approved implementation. Read
+`00-global-rules.md` first.
 
-## Required Input
+## Restore The Task Boundary
 
-OpenSpec change:
+Read:
 
-```text
-openspec/changes/<change-id>/
-```
+- selected proposal, tasks, design, and spec deltas
+- selected change `context.yml`
+- affected current-state specs and graph records
+- relevant error-memory index entries
 
-If no change is provided, list active changes and ask the user to choose one.
+Re-run `13-build-task-context.md` when the packet is stale, the selected task is
+broader than the packet, source hashes changed, or implementation discovers a
+new cross-boundary dependency.
 
-## Read First
+Do not continue on an `INSUFFICIENT` context result.
 
-- `openspec/project.md`
-- selected `proposal.md`
-- selected `tasks.md`
-- selected `design.md` if present
-- selected change spec deltas
-- current specs for affected capabilities
-- `openspec/error-kb/index.yml` if present
+## Use Parallelism Safely
 
-Do not scan unrelated source files.
+When real subagents are available, use them for independent read-only work:
+
+- impact and reverse-dependency review
+- test discovery and test-plan review
+- contract/schema compatibility review
+- security, migration, reliability, and performance review
+- independent post-implementation review
+
+Parallel code edits are allowed only for explicitly separate tasks with
+non-overlapping file ownership and independent validation commands. Otherwise,
+the coordinator performs canonical edits after gathering worker findings.
+
+Use the highest safe runtime concurrency and reduce it after resource failures.
+Never pretend subagents ran if the environment does not provide them.
 
 ## Implementation Workflow
 
-1. Pick one unchecked task.
-2. Explain impacted files before editing.
+1. Choose the next unchecked, dependency-ready task.
+2. State the files and behavior boundary before editing.
 3. Add or update tests first where practical.
-4. Implement the smallest safe code change.
-5. Run relevant Gradle tests.
-6. If tests fail, check `openspec/error-kb/` before debugging.
-7. Fix task-related failures.
-8. Record new reusable failure fixes in `openspec/error-kb/`.
-9. Update `tasks.md` checkboxes.
-10. Run `openspec validate <change-id> --strict` if CLI is available.
+4. Implement the smallest change satisfying the approved requirement.
+5. Preserve unrelated user changes.
+6. Run the narrowest relevant repository-native tests.
+7. Run broader contract/module tests when blast radius crosses boundaries.
+8. On failure, search `openspec/error-kb/index.yml` by normalized fingerprint
+   before debugging from scratch.
+9. Record a verified reusable fix without secrets when a new recurring failure
+   is solved.
+10. Run an independent diff/spec/test review for risky changes.
+11. Update task checkboxes only after their verification succeeds.
+12. Validate the OpenSpec change and its context/traceability references.
 
-Gradle preference:
+For Gradle repositories, prefer the wrapper and targeted module tests:
 
 ```bash
 ./gradlew :module:test
 ```
 
-Fallback:
+Use broader tasks only when impact requires them.
 
-```bash
-./gradlew test
-```
+## New Scope During Implementation
+
+If implementation requires behavior outside the approved delta:
+
+- stop that part of implementation;
+- expand the task context packet;
+- update proposal/design/spec delta;
+- validate again;
+- ask for approval only when the user-visible or risk-bearing scope materially
+  changed.
+
+Do not silently widen the change.
+
+## After Each Task
+
+Record:
+
+- files changed
+- tests added or updated
+- commands and results
+- requirements satisfied
+- new or changed traceability links
+- error-memory entries used or created
+- remaining tasks
+
+Do not rewrite all current-state specs during implementation. Apply final
+deltas and incremental index freshness updates when the change is archived.
 
 ## Output
 
 ```text
-# OpenSpec Implementation Report
+# Implementation Progress
 
-## Change ID
-
-## Task Implemented
-
-## Files Changed
-
-## Tests Added/Updated
-
-## Gradle Commands Run
-
-## OpenSpec Validation
-
-## Error Memory Used Or Updated
-
-## Remaining Tasks
+Change: <change-id>
+Task: <task>
+Result: <completed|blocked|failed>
+Tests: <short result>
+OpenSpec validation: <result>
+Independent review: <result or unavailable>
+Remaining tasks: <count>
 ```

@@ -1,0 +1,17 @@
+schema_version: 1
+modules:
+  - id: "module-example"
+    name: "Module example"
+    kind: unknown
+    paths: []
+    build_manifests: []
+    source_roots: []
+    test_roots: []
+    entry_point_ids: []
+    deployable_unit_ids: []
+    depends_on: []
+    bounded_context_candidates: []
+    owner_evidence: []
+    evidence_ids: []
+entry_points: []
+deployable_units: []

@@ -1,33 +1,48 @@
-# Final OpenSpec Foundation Review
+# Final OpenSpec Bootstrap Review
 
-Use this prompt after OpenSpec initialization or major prompt updates.
+Use after full bootstrap synthesis or a major refresh. Read
+`00-global-rules.md`, then execute `14-audit-sdd-coverage.md` using an
+independent auditor worker when available.
 
-Do not make new changes unless they are small fixes to the artifacts being
-reviewed.
+Do not change production code. Small repairs to indexes and specs may be made
+only from existing evidence. Missing evidence creates new work-queue items.
 
-## Review Checklist
+## Required Reviews
 
-1. Does `openspec/project.md` exist and describe the repo accurately?
-2. Do `openspec/specs/` and `openspec/changes/` exist?
-3. Does `AGENTS.md` require OpenSpec before code changes?
-4. Does the workflow avoid reading the whole repo?
-5. Are unknown business facts marked `UNKNOWN`?
-6. Are inferred facts marked `INFERRED_FROM_CODE`?
-7. Is validation guidance present?
-8. Is `openspec/error-kb/` present?
-9. Are there accidental production code changes?
+1. Structural and traceability validation from
+   `05-add-openspec-validation.md`.
+2. Independent repository coverage audit from
+   `14-audit-sdd-coverage.md`.
+3. Secret and private-data hygiene review.
+4. Check that production code was not changed during bootstrap.
+5. Check that bootstrap state, queue, and coverage index agree.
+
+## Final Status Rules
+
+- `READY`: all completion gates pass and no declared gaps remain.
+- `READY_WITH_DECLARED_GAPS`: every in-scope area was processed and audited,
+  but explicit unknowns, contradictions, missing tests, or missing contracts
+  remain.
+- `IN_PROGRESS`: pending, runnable, failed, or unaudited work remains.
+- `BLOCKED`: only when an external dependency prevents further progress and all
+  non-blocked work has completed.
+
+Never use `READY` or `READY_WITH_DECLARED_GAPS` when manifest coverage is
+incomplete.
+
+## Finalize
+
+Update:
+
+- `openspec/index/coverage.yml`
+- `openspec/bootstrap/state.yml`
+- final bootstrap report under `openspec/bootstrap/reports/`
+- `openspec/project.md` status and freshness links
+
+Preserve worker findings for auditability unless repository policy explicitly
+requires their removal.
 
 ## Output
 
-```text
-# OpenSpec Foundation Review
-
-## Pass / Fail
-
-## Issues
-
-## Recommended Fixes
-
-## Ready For Feature Work
-YES/NO
-```
+Use the simple final format defined in `START_HERE.md`. Include only summary
+counts and the next numbered menu; keep detailed findings in repository files.

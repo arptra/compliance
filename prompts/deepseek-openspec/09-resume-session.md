@@ -1,42 +1,57 @@
 # Resume OpenSpec Session
 
-Use this prompt at the start of a fresh CLI session when the repository is
-already initialized for OpenSpec.
+Use at the start of a fresh CLI session. Read `00-global-rules.md` first. Keep
+the user interaction to one short menu.
 
-## Read Only
+## Read State, Not The Repository
 
-- `openspec/project.md`
-- active `openspec/changes/*/proposal.md`
-- active `openspec/changes/*/tasks.md`
-- `openspec/error-kb/index.yml` if it exists
+Read:
 
-Do not read all source files.
+- `openspec/bootstrap/state.yml`
+- `openspec/bootstrap/work-queue.yml` summary
+- `openspec/index/coverage.yml`
+- active change proposals and task lists
+- referenced task context packets
+- `openspec/error-kb/index.yml` only when relevant
 
-## Decide
+Do not reread source files until a selected queue item or task context packet
+identifies them.
 
-If there are no active changes, show the normal menu.
+## Bootstrap Takes Priority
 
-If there are active changes, show a numbered list and ask what to do:
+If bootstrap status is `IN_PROGRESS`:
 
-```text
-1. Continue next unfinished task.
-2. Show task list.
-3. Run tests and fix failures.
-4. Create new OpenSpec change.
-5. Archive completed change.
-6. Stop.
-```
+- detect abandoned `running` items;
+- preserve completed findings;
+- show Menu B from `START_HERE.md`;
+- choice `1` resumes `12-full-bootstrap-orchestrator.md` at the checkpoint.
 
-## Output
+If bootstrap is `BLOCKED`, show the blocker and the count of non-blocked work
+remaining. Offer to continue non-blocked work before asking for external help.
+
+## Active Changes
+
+If bootstrap is ready and active changes exist, show:
 
 ```text
 # OpenSpec Session Restored
 
-## Active Changes
+1. Continue the next unfinished task.
+2. Show active changes and task counts.
+3. Run tests and investigate failures.
+4. Start a new change.
+5. Refresh stale task context.
+6. Stop.
 
-## Suggested Next Task
-
-## Validation Status
-
-## Menu
+Reply with 1-6.
 ```
+
+Translate to the user's language. For choice `1`, validate packet freshness
+before reading source or editing.
+
+If there are no active changes, show Menu C from `START_HERE.md`.
+
+## Output Discipline
+
+Show counts, next task, validation status, and declared gaps. Do not dump worker
+findings, all specs, or all source paths unless requested.

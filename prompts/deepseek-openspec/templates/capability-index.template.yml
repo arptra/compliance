@@ -1,0 +1,19 @@
+schema_version: 1
+capabilities:
+  - id: "domain-capability"
+    name: "Capability name"
+    domain: "domain"
+    status: active
+    owners: []
+    spec: "openspec/specs/domain-capability/spec.md"
+    requirement_ids: []
+    depends_on: []
+    reverse_dependents: []
+    modules: []
+    contracts: []
+    evidence_ids: []
+    unknown_ids: []
+    contradiction_ids: []
+    freshness:
+      repository_revision: null
+      evidence_hashes_current: false

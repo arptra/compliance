@@ -1,0 +1,14 @@
+schema_version: 1
+kind: unknowns
+records:
+  - id: "UNKNOWN-example"
+    status: open
+    title: "Unknown or contradiction"
+    description: "What cannot be established or what conflicts"
+    capability_ids: []
+    requirement_ids: []
+    artifact_ids: []
+    evidence_ids: []
+    impact: null
+    resolution_needed_from: null
+    declared_gap: true

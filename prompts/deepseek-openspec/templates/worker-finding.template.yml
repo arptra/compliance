@@ -1,0 +1,38 @@
+schema_version: 1
+worker_id: "WORK-example"
+role: "domain-capability-analyzer"
+assignment_id: "WORK-example"
+status: completed
+assigned_artifact_count: 0
+accounting:
+  analyzed: []
+  excluded_with_evidence: []
+  needs_follow_up: []
+  blocked: []
+findings:
+  modules: []
+  entry_points: []
+  capability_candidates: []
+  requirement_candidates: []
+  contracts: []
+  data_entities: []
+  events_and_jobs: []
+  integrations: []
+  tests_and_scenarios: []
+  cross_cutting_rules: []
+  dependency_edges: []
+unknowns: []
+contradictions: []
+declared_gap_candidates: []
+follow_up_requests: []
+evidence:
+  - id: "EVID-example"
+    path: "path/to/file"
+    symbol_or_key: null
+    lines: null
+    evidence_state: OBSERVED_IN_CODE
+    supports: []
+sanitization:
+  secrets_copied: false
+  private_payloads_copied: false
+completion_notes: null

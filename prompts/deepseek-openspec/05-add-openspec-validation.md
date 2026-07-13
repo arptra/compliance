@@ -1,44 +1,88 @@
-# Add OpenSpec Validation Guidance
+# Validate OpenSpec Structure, Evidence, And Traceability
 
-Use this prompt to add lightweight validation guidance for OpenSpec workflows.
+Use during bootstrap, refresh, change creation, and final review. Do not change
+production business logic.
 
-Do not change production business logic.
+## OpenSpec CLI Validation
 
-## Preferred Validation
-
-If OpenSpec CLI is available:
+If available, use the relevant commands:
 
 ```bash
 openspec validate <change-id> --strict
 openspec validate --all --strict
 ```
 
-If CLI is not available, document file-level checks in `openspec/changes/README.md`.
+If unavailable, report that CLI validation was not run. Never treat CLI absence
+as evidence that the custom indexes are valid.
 
-## File-Level Checks
+## Current-State Spec Checks
 
-Each change should contain:
+Every capability spec must have:
+
+- unique capability ID
+- domain and scope
+- at least one requirement
+- stable requirement IDs unique within the repository
+- at least one scenario per requirement
+- allowed evidence state per requirement
+- at least one repository evidence reference per non-`UNKNOWN` requirement
+- dependencies represented in the traceability index
+- explicit unknowns and contradictions where applicable
+
+## Index Integrity Checks
+
+Validate:
+
+- every referenced path exists or is marked deleted/stale
+- every manifest shard is listed by `repository-manifest.yml`
+- every in-scope file has a classification and analysis status
+- every capability index entry has a matching spec
+- every traceability node and edge references existing IDs
+- reverse artifact-to-capability links can be resolved
+- unknown and contradiction IDs are unique
+- queue counts agree with actual queue items
+- coverage counts agree with manifest and traceability data
+- no secret values or private payloads were copied into artifacts
+
+Use a structured parser when the environment provides one. Do not validate YAML
+through ad hoc text matching alone.
+
+## Change Checks
+
+Every active change must contain:
 
 - `proposal.md`
 - `tasks.md`
-- at least one `specs/<capability>/spec.md`
-- `design.md` for broad, risky, cross-module, data model, API, auth, migration,
-  or performance-sensitive changes
+- at least one `specs/<capability-id>/spec.md`
+- `design.md` for broad, risky, cross-module, data-model, API, auth, migration,
+  concurrency, reliability, or performance-sensitive changes
+- task context packet reference or a documented reason it was unnecessary
 
-Each spec delta should include:
+Spec deltas must use OpenSpec delta headings and include requirement scenarios.
 
-- `ADDED`, `MODIFIED`, `REMOVED`, or `RENAMED` requirement section
-- at least one `### Requirement: ...`
-- at least one `#### Scenario: ...`
+## Validation Result
+
+Return one:
+
+```text
+PASS
+PASS_WITH_DECLARED_GAPS
+FAIL
+```
+
+Declared gaps must be explicit index records. Missing or silently skipped work
+is a failure, not a declared gap.
 
 ## Output
 
 ```text
-# OpenSpec Validation Guidance Updated
+# OpenSpec Validation
 
-## Files Updated
-
-## CLI Available
-
-## Manual Checks Documented
+Result: <result>
+OpenSpec CLI: <available/unavailable>
+Specs checked: <count>
+Index records checked: <count>
+Errors: <count>
+Declared gaps: <count>
+Required repairs: <short list>
 ```

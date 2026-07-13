@@ -1,0 +1,25 @@
+schema_version: 1
+mode: FULL_BOOTSTRAP
+status: IN_PROGRESS
+phase: foundation
+orchestration_mode: UNDETECTED
+orchestration_mechanism: null
+max_safe_concurrency: null
+repository_revision: null
+started_at: null
+updated_at: null
+counts:
+  repository_paths: 0
+  paths_classified: 0
+  in_scope_artifacts: 0
+  artifacts_analyzed: 0
+  work_items_total: 0
+  work_items_completed: 0
+  capabilities: 0
+  declared_gaps: 0
+  contradictions: 0
+last_completed_batch: null
+validation_result: null
+coverage_audit_result: null
+blockers: []
+history: []

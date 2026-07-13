@@ -1,0 +1,22 @@
+schema_version: 1
+repository_revision: null
+generated_at: null
+scope:
+  root: "."
+  policy: FULL_BOOTSTRAP
+counts:
+  paths_total: 0
+  paths_classified: 0
+  in_scope: 0
+  excluded: 0
+artifact_class_counts: {}
+shards:
+  - id: "module-example"
+    module_id: "module-example"
+    path_prefixes: []
+    file: "openspec/index/files/module-example.yml"
+    record_count: 0
+    in_scope_count: 0
+    analyzed_count: 0
+exclusion_rules_file: "openspec/bootstrap/exclusions.yml"
+unclassified_paths: []

@@ -1,0 +1,10 @@
+schema_version: 1
+rules:
+  - id: "EXCL-example"
+    path_patterns: []
+    artifact_classes: []
+    reason: "generated, vendor, binary, cache, output, VCS metadata, or secret-bearing"
+    evidence: []
+    matched_path_count: 0
+    approved_by_policy: true
+exceptions: []

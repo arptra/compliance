@@ -1,61 +1,86 @@
 # Assess Repository For OpenSpec
 
-Use this prompt to inspect a Java/Gradle repository before initializing or using
-OpenSpec.
+Use this prompt for a read-only assessment before initialization or when the
+user chooses to inspect the plan.
 
-## Inspect Only Lightweight Markers
+Read `00-global-rules.md` first. Do not create or modify files in this step.
 
-Read only:
+## Lightweight Discovery
 
-- `settings.gradle`, `settings.gradle.kts`
-- `build.gradle`, `build.gradle.kts`
-- `gradle.properties`
-- `gradlew`
-- `gradle/wrapper/gradle-wrapper.properties`
-- `AGENTS.md`
-- `openspec/project.md`
-- `openspec/specs/`
-- `openspec/changes/`
-- `openspec/error-kb/index.yml`
+Use deterministic filesystem and repository tools before asking the model to
+interpret source code. Inspect:
 
-If the OpenSpec CLI exists, run:
+- tracked and untracked path counts
+- top-level directories
+- build, workspace, dependency, and package manifests
+- language distribution by path and extension
+- source, test, schema, migration, infrastructure, and documentation roots
+- apparent generated, vendor, binary, cache, output, and secret-bearing paths
+- existing agent instructions
+- existing `openspec/` state and active changes
 
-```bash
-openspec list
-openspec list --specs
-```
+Do not read every source body during assessment. This phase estimates and
+partitions the future bootstrap; the approved full bootstrap performs the
+complete in-scope analysis.
 
-Do not install tools without asking.
+## Detect
+
+- monorepo or single project
+- languages and build systems
+- applications, services, modules, and shared libraries
+- likely deployment units
+- API/contract technologies
+- persistence and migration technologies
+- event, queue, scheduler, or background-job technologies
+- test frameworks and test roots
+- available OpenSpec CLI
+- available native subagent/worker tools
+- obvious repository-local instructions and security restrictions
+
+## Estimate Full Bootstrap
+
+Produce a provisional partition plan:
+
+- proposed manifest shards
+- proposed bounded contexts or module groups
+- worker roles that apply
+- candidate parallelism based on runtime capabilities
+- paths that should be excluded, with reasons
+- risks such as generated source, duplicated services, sparse tests, or missing
+  build metadata
+
+Do not promise elapsed time. Do not call the repository fully covered.
 
 ## Determine State
 
 Return one:
 
-- `UNINITIALIZED_OPENSPEC`
-- `OPENSPEC_READY`
-- `OPENSPEC_ACTIVE_CHANGES`
-- `OPENSPEC_NEEDS_REFRESH`
+```text
+UNINITIALIZED_OPENSPEC
+PARTIAL_CONTEXT
+FULL_BOOTSTRAP_IN_PROGRESS
+OPENSPEC_READY
+OPENSPEC_READY_WITH_DECLARED_GAPS
+OPENSPEC_ACTIVE_CHANGES
+OPENSPEC_NEEDS_REFRESH
+```
 
 ## Output
 
+Keep it short and user-facing:
+
 ```text
-# OpenSpec Repository Assessment
+# Repository Assessment
 
 ## State
 
-## Gradle / Java Snapshot
+## Repository Snapshot
 
-## OpenSpec Files Found
+## Proposed Analysis Partitions
 
-## OpenSpec Files Missing
+## Exclusions To Record
 
-## Active Changes
+## Risks Or Unknowns
 
-## Existing Specs
-
-## Recommended Next Action
-
-## Menu
+## Recommended Menu Choice
 ```
-
-Use a simple menu. Do not make changes in this step.

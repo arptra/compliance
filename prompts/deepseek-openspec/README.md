@@ -1,149 +1,157 @@
-# DeepSeek OpenSpec Prompt Pack
+# DeepSeek OpenSpec Prompt Pack For Large Repositories
 
-This folder contains prompts for running a local model such as
-`deepseek-v4-flash-262k` inside an existing Java/Gradle repository with an
-OpenSpec-first workflow.
+This prompt pack lets a local DeepSeek model build and use an evidence-backed
+current-state SDD for repositories that cannot fit in one context window.
 
-OpenSpec is the source of truth:
+The repository is processed in deterministic, resumable shards. The complete
+description lives in OpenSpec specs and machine-readable indexes; daily tasks
+receive a bounded context packet assembled from graph and evidence links.
+
+Java/Gradle has first-class command guidance, while bootstrap discovery also
+supports polyglot repositories and monorepos.
+
+## Start With One Prompt
+
+Open the local model CLI in the target repository root and enter:
+
+```text
+Read `/path/to/prompts/deepseek-openspec/START_HERE.md` and follow it for this repository. Keep the interface simple and respond in my language.
+```
+
+Replace the path with the real prompt-pack location. The user should not need
+to paste the numbered prompts manually.
+
+## First-Run Modes
+
+- `FULL_BOOTSTRAP` inventories every repository path, processes every in-scope
+  artifact in bounded waves, synthesizes current-state specs, builds
+  bidirectional traceability, and runs an independent coverage audit.
+- `QUICK_BOOTSTRAP` creates only a lightweight foundation and is always labeled
+  `PARTIAL_CONTEXT`.
+
+The simple first-run menu recommends full bootstrap. After one `YES`, the model
+continues through all non-blocked phases without requesting approval for each
+batch.
+
+## Why The Whole Repository Is Not Loaded
+
+Full coverage and full context are different things:
+
+```text
+repository inventory
+  -> bounded work queue
+  -> parallel evidence workers
+  -> structured findings
+  -> coordinator synthesis
+  -> traceability graph
+  -> independent coverage audit
+```
+
+No single worker sees the whole repository. The persistent queue and indexes
+provide system-level memory across workers, context windows, and CLI restarts.
+
+## Subagents
+
+The orchestrator detects whether the local CLI exposes real subagent tools.
+
+- With native subagents, independent assignments run at the highest safe
+  concurrency, starting conservatively when the runtime limit is unknown.
+- Without native subagents, the same assignments run as isolated sequential
+  batches with checkpoints.
+
+Workers never concurrently edit canonical specs. Each writes one structured
+finding file; a single coordinator validates and merges results.
+
+## Main OpenSpec Artifacts
 
 ```text
 openspec/
   project.md
-  specs/
-  changes/
+  glossary.md
+  architecture/
+    decisions.md
+  specs/<capability-id>/spec.md
+  changes/<change-id>/
+  index/
+    repository-manifest.yml
+    files/
+    modules.yml
+    capabilities.yml
+    traceability.yml
+    coverage.yml
+    contradictions.yml
+    unknowns.yml
+  bootstrap/
+    state.yml
+    work-queue.yml
+    exclusions.yml
+    findings/
+    reports/
+  context-packets/
   error-kb/
 ```
 
-For daily use, start with `START_HERE.md`.
-
-If you are not a developer and want a menu-driven workflow, read
-`USER_WORKFLOW_RU.md`.
-
-## Самая короткая строка для CLI
-
-Откройте DeepSeek CLI в корне Java/Gradle проекта и вставьте:
+Every discovered requirement carries repository evidence and one of these
+states:
 
 ```text
-Прочитай файл `/path/to/prompts/deepseek-openspec/START_HERE.md`, работай строго по OpenSpec для текущей Java/Gradle-репы и веди меня через меню. Я не разработчик: задавай вопросы по одному, проси отвечать цифрами и не перечитывай весь проект без необходимости.
+CONFIRMED_BY_CONTRACT
+CONFIRMED_BY_TEST
+OBSERVED_IN_CODE
+INFERRED_FROM_CODE
+UNKNOWN
+CONTRADICTED
 ```
 
-Replace `/path/to/prompts/deepseek-openspec/START_HERE.md` with the real path.
+## Completion Statuses
 
-## What The Start Prompt Does
+- `READY`: every applicable coverage gate passed with no declared gaps.
+- `READY_WITH_DECLARED_GAPS`: every in-scope area was processed, but explicit
+  unknowns, contradictions, missing tests, or missing contracts remain.
+- `IN_PROGRESS`: inventory, extraction, synthesis, validation, or audit work
+  remains.
+- `BLOCKED`: an external dependency prevents remaining work.
 
-1. Detects whether the repository has OpenSpec initialized.
-2. If not initialized, asks before creating `openspec/` files.
-3. If initialized, shows a small numbered menu.
-4. Creates every new feature as an OpenSpec change under
-   `openspec/changes/<change-id>/`.
-5. Validates changes with `openspec validate <change-id> --strict` when the CLI
-   is available.
-6. Implements only approved OpenSpec tasks.
-7. Runs Gradle unit tests after implementation.
-8. Checks `openspec/error-kb/` before debugging repeated failures.
-9. Saves verified failure fixes into `openspec/error-kb/` so they can be shared
-   through git.
+The model must not call a repository ready while work remains unprocessed.
 
-## Normal Menu
+## Normal Feature Work
 
-After initialization, DeepSeek should show:
+For each non-trivial change:
 
-```text
-1. Create a new OpenSpec change.
-2. Create an OpenSpec change and implement it after approval.
-3. Continue an existing OpenSpec change/task.
-4. Fix a failing test/build/error using OpenSpec error memory first.
-5. Refresh OpenSpec project context.
-6. Archive a completed OpenSpec change.
-```
+1. `13-build-task-context.md` selects affected capability specs, dependency
+   closure, contracts, code, tests, and cross-cutting rules.
+2. `07-new-feature-spec.md` creates the OpenSpec proposal, tasks, design, and
+   spec deltas.
+3. The user approves implementation once.
+4. `08-implement-spec-task.md` implements and verifies bounded tasks.
+5. Refresh/archive updates affected current-state specs and traceability.
 
-## Manual Prompt Order
+Task packets store references and short summaries, not copied source trees.
 
-Use numbered files only when you want to run a specific step manually.
+## Prompt Map
 
-1. `00-global-rules.md`
-2. `01-assess-repository.md`
-3. `02-initialize-openspec-foundation.md`
-4. `03-fill-openspec-project-context.md`
-5. `04-create-current-state-specs.md`
-6. `05-add-openspec-validation.md`
-7. `06-final-review.md`
+- `START_HERE.md`: simple state-aware entry point and menus
+- `00-global-rules.md`: evidence, coverage, security, and orchestration rules
+- `01-assess-repository.md`: read-only dry-run assessment
+- `02-initialize-openspec-foundation.md`: full or quick file foundation
+- `03-fill-openspec-project-context.md`: architecture synthesis
+- `04-create-current-state-specs.md`: capability-spec synthesis
+- `05-add-openspec-validation.md`: structural and traceability validation
+- `06-final-review.md`: final bootstrap status review
+- `07-new-feature-spec.md`: approved change specification
+- `08-implement-spec-task.md`: bounded implementation workflow
+- `09-resume-session.md`: checkpoint and active-task resume
+- `10-refresh-openspec-context.md`: diff/hash-driven incremental refresh
+- `11-error-memory.md`: reusable sanitized failure memory
+- `12-full-bootstrap-orchestrator.md`: complete bootstrap scheduler
+- `13-build-task-context.md`: retrieval and task packet builder
+- `14-audit-sdd-coverage.md`: independent repository-to-SDD audit
+- `agents/`: specialized worker contracts
+- `templates/`: machine-readable artifact templates
 
-For feature work:
+## Safety Boundaries
 
-- `07-new-feature-spec.md`
-- `08-implement-spec-task.md`
-
-For fresh CLI sessions and context maintenance:
-
-- `09-resume-session.md`
-- `10-refresh-openspec-context.md`
-
-For reusable failure fixes:
-
-- `11-error-memory.md`
-
-For non-developer workflow guidance:
-
-- `USER_WORKFLOW_RU.md`
-
-## OpenSpec Change Shape
-
-Each feature/change must live here:
-
-```text
-openspec/changes/<verb-led-change-id>/
-  proposal.md
-  tasks.md
-  design.md              # optional, required for broad or risky changes
-  specs/
-    <capability>/
-      spec.md
-```
-
-Change IDs should be kebab-case and verb-led:
-
-- `add-report-export`
-- `change-payment-status-flow`
-- `remove-legacy-auth`
-- `refactor-notification-sender`
-
-Spec deltas should use OpenSpec-style sections:
-
-```markdown
-## ADDED Requirements
-
-### Requirement: Export filtered report
-
-#### Scenario: User exports filtered report
-
-- GIVEN filtered report rows are visible
-- WHEN the user exports the report
-- THEN the exported file contains only filtered rows
-```
-
-Use `MODIFIED`, `REMOVED`, or `RENAMED` sections when changing existing
-behavior.
-
-## Implementation Rule
-
-Do not implement production Java code until:
-
-1. an OpenSpec change exists,
-2. `proposal.md`, `tasks.md`, and spec deltas are written,
-3. validation has passed or CLI absence has been reported,
-4. the user approved implementation.
-
-After implementation, run relevant Gradle tests:
-
-```bash
-./gradlew test
-```
-
-Prefer module tests when the module is clear:
-
-```bash
-./gradlew :module:test
-```
-
-Then update `tasks.md` checkboxes and report the result.
+Bootstrap and refresh do not edit production code. Generated/vendor trees,
+binaries, caches, outputs, and secret-bearing content are excluded with an
+explicit recorded reason. Commit, push, deletion, installation, and destructive
+commands still require an explicit user request.

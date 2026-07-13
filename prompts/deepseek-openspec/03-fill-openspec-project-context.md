@@ -1,43 +1,83 @@
-# Fill OpenSpec Project Context
+# Build OpenSpec Project And Architecture Context
 
-Use this prompt to improve `openspec/project.md`.
+Use during full bootstrap synthesis or targeted refresh. Read
+`00-global-rules.md` first. Do not change production code.
 
-Do not change production code.
+## Inputs
 
-## Read
-
-- `openspec/project.md`
-- Gradle settings/build files
-- only source files needed to identify modules, entry points, and test layout
-
-Do not inspect more than 40 source files without explaining why.
+Read the relevant completed worker findings and manifest/index shards. Return
+work to the queue if evidence coverage for a section is insufficient. Do not
+replace missing findings with assumptions.
 
 ## Update `openspec/project.md`
 
-Add or refine:
+Maintain a concise repository-level map:
 
-- architecture overview
-- module responsibilities
-- package conventions
-- test commands
-- Java/Gradle/toolchain notes
-- deployment/runtime notes if obvious from repo
-- public API/contract locations
-- known unknowns
+- explicit project purpose and product boundaries
+- languages, frameworks, build systems, and toolchains
+- module/service/application responsibilities
+- repository conventions and ownership evidence when present
+- build, test, validation, and local runtime commands
+- public contract and schema locations
+- links to system architecture, capability, coverage, and unknown indexes
+- bootstrap freshness and status
 
-Every inferred statement must be marked `INFERRED_FROM_CODE` when business
-intent is not explicit.
+This file is an entry point, not a dump of every module.
+
+## Update Architecture Documents
+
+### `architecture/system-context.md`
+
+- systems, applications, services, libraries, and external actors
+- dependency direction and major data flows
+- entry points and integration boundaries
+- deployment-unit boundaries when evidenced
+
+### `architecture/runtime-and-deployment.md`
+
+- processes and runtime topology
+- environment and configuration model
+- deployment manifests and infrastructure evidence
+- persistence, messaging, scheduled/background execution
+- operational dependencies and failure boundaries
+
+### `architecture/cross-cutting-concerns.md`
+
+- authentication and authorization
+- security and secret handling
+- validation and error semantics
+- audit and compliance behavior
+- observability
+- retries, idempotency, transactions, concurrency, and resilience
+- data lifecycle and privacy
+- performance mechanisms and limits when evidenced
+
+### `architecture/decisions.md`
+
+- existing ADRs and design records
+- architectural constraints evidenced by build, contracts, or code
+- status, scope, supersession, and source links when known
+- `UNKNOWN` rationale where behavior exists but the original decision cannot be
+  recovered
+
+Mark non-applicable sections explicitly. Link every material statement to
+worker evidence or repository paths. Record contradictions and unknowns in the
+canonical indexes.
+
+## Glossary
+
+Update `openspec/glossary.md` with domain terms, aliases, ambiguous terms, and
+the repository evidence that established each meaning. Do not invent business
+definitions.
 
 ## Output
 
 ```text
-# OpenSpec Project Context Updated
+# Project Context Synthesized
 
-## Sections Updated
-
-## Evidence Used
-
-## Unknowns
-
-## Next Recommended Action
+Documents updated: <count>
+Modules represented: <count>
+Cross-cutting areas covered: <count>/<applicable count>
+Unknowns added: <count>
+Contradictions added: <count>
 ```
