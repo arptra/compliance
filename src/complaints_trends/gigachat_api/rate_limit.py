@@ -125,6 +125,7 @@ class AdaptiveRateLimiter:
         successful = 0 < status_code < 400
         transitioned = False
         recovered = False
+        released_queued = 0
         delay = 0.0
         retry_after = None
 
@@ -149,12 +150,13 @@ class AdaptiveRateLimiter:
                         self._current_interval * 0.85,
                     )
                 if lease.serial:
-                    if (
-                        self._active_requests == 0
-                        and not self._wait_queue
-                        and time.monotonic() >= self._retry_not_before
-                    ):
+                    now = time.monotonic()
+                    if self._active_requests == 0 and now >= self._retry_not_before:
+                        released_queued = len(self._wait_queue)
                         self._serial_mode = False
+                        self._current_interval = self._min_interval
+                        self._retry_not_before = 0.0
+                        self._next_allowed_at = now
                         recovered = True
 
             active = self._active_requests
@@ -172,8 +174,9 @@ class AdaptiveRateLimiter:
                 delay,
             )
             logger.warning(
-                "[GIGACHAT_QUEUE] parallel dispatch stopped; requests moved to "
-                "the global FIFO queue; concurrency=1 queued=%s active=%s",
+                "[GIGACHAT_QUEUE] parallel dispatch paused; requests moved to "
+                "the global FIFO queue; concurrency=1 until_successful_probe "
+                "queued=%s active=%s",
                 queued,
                 active,
             )
@@ -195,9 +198,10 @@ class AdaptiveRateLimiter:
             )
         if recovered:
             logger.info(
-                "[GIGACHAT_POOL] event=serial_queue_drained limiter=%s "
-                "next_mode=parallel",
+                "[GIGACHAT_POOL] event=serial_probe_succeeded limiter=%s "
+                "released_queued=%s next_mode=parallel",
                 self._key,
+                released_queued,
             )
 
     def _finish_exception(self, lease: _RequestLease) -> None:
