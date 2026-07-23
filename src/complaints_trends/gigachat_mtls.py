@@ -250,18 +250,9 @@ class _HTTPXChatClient:
             return None
 
     def _post_api_with_backoff(self, path: str, *, json: dict) -> httpx.Response:
-        response = None
-        for attempt in range(6):
-            self._api_limiter.wait()
-            response = self._client.post(path, json=json)
-            if response.status_code != 429:
-                if response.status_code < 400:
-                    self._api_limiter.record_success()
-                return response
-            self._api_limiter.backoff(response, attempt)
-        if response is None:
-            raise RuntimeError("GigaChat request was not executed")
-        return response
+        return self._api_limiter.execute(
+            lambda: self._client.post(path, json=json)
+        )
 
     @classmethod
     def _extract_token_count(cls, data: object) -> int | None:

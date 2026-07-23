@@ -2913,11 +2913,11 @@ export default function GigaChatPage() {
             value={Math.min(asyncWorkerCount, ASYNC_WORKER_SLIDER_MAX)}
             onChange={(event) => setAsyncWorkerCount(clampAsyncWorkerCount(event.target.value))}
           />
-          <small className='lab-field-help'>Для боевого API поднимайте постепенно: слишком много workers может упереться в лимиты.</small>
+          <small className='lab-field-help'>В обычном режиме запросы идут асинхронно. При HTTP 429 backend переводит ожидающие запросы в одну общую очередь с concurrency = 1.</small>
         </label>
         <div className='async-workers-summary'>
           <strong>{asyncWorkerCount === 1 ? 'Последовательно' : 'Параллельно'}</strong>
-          <span>{asyncWorkerCount === 1 ? 'Следующий запрос стартует после завершения предыдущего.' : `До ${asyncWorkerCount} строк могут быть в работе одновременно.`}</span>
+          <span>{asyncWorkerCount === 1 ? 'Следующий запрос стартует после завершения предыдущего.' : `До ${asyncWorkerCount} строк могут быть в работе одновременно. HTTP 429 включает общую последовательную очередь и записывается в backend log.`}</span>
         </div>
       </div>
     </section>

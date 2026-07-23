@@ -190,7 +190,10 @@ def run_row(req: GigaChatLabRowRunRequest, services=Depends(get_service_containe
         if response_text:
             detail = f"{detail}: {response_text[:500]}"
         if status_code == 429:
-            detail = f"{detail}. API временно ограничил частоту запросов; уменьшите workers или повторите позже."
+            detail = (
+                f"{detail}. Лимит сохранился после повторов в общей последовательной "
+                "очереди; повторите задачу позже."
+            )
         raise HTTPException(status_code=429 if status_code == 429 else 502, detail=detail) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

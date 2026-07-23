@@ -115,10 +115,8 @@ class AuthorizationKeyTokenProvider:
                 return self._token.access_token
 
             authorization_key = self._read_authorization_key()
-            response = None
-            for attempt in range(6):
-                self._oauth_limiter.wait()
-                response = self._client.post(
+            response = self._oauth_limiter.execute(
+                lambda: self._client.post(
                     self.oauth_url,
                     headers={
                         "Accept": "application/json",
@@ -128,13 +126,7 @@ class AuthorizationKeyTokenProvider:
                     },
                     data={"scope": self.scope},
                 )
-                if getattr(response, "status_code", 0) != 429:
-                    if getattr(response, "status_code", 0) < 400:
-                        self._oauth_limiter.record_success()
-                    break
-                self._oauth_limiter.backoff(response, attempt)
-            if response is None:
-                raise RuntimeError("OAuth request was not executed")
+            )
             response.raise_for_status()
             payload = response.json()
             access_token = str(payload.get("access_token") or "").strip()
@@ -182,18 +174,9 @@ class TokenAuthorizedHTTPXClient:
             return None
 
     def _post_api_with_backoff(self, path: str, *, json: dict) -> httpx.Response:
-        response = None
-        for attempt in range(6):
-            self._api_limiter.wait()
-            response = self._api_client.post(path, json=json, headers=self._headers())
-            if response.status_code != 429:
-                if response.status_code < 400:
-                    self._api_limiter.record_success()
-                return response
-            self._api_limiter.backoff(response, attempt)
-        if response is None:
-            raise RuntimeError("GigaChat request was not executed")
-        return response
+        return self._api_limiter.execute(
+            lambda: self._api_client.post(path, json=json, headers=self._headers())
+        )
 
     @classmethod
     def _extract_token_count(cls, data: object) -> int | None:
