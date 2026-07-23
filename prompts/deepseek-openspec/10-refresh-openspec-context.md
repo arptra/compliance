@@ -44,6 +44,10 @@ Only the coordinator updates canonical specs/indexes. Preserve confirmed
 requirements until new evidence proves a change; record contradictions rather
 than silently deleting intent.
 
+All refresh, synthesis, and audit dispatch obeys `Global HTTP 429 Queue` from
+`00-global-rules.md`. One explicit 429 stops new parallel slots and moves all
+waiting/retry requests into the same serial FIFO queue.
+
 ## Validate
 
 After synthesis:

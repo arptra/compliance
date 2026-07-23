@@ -71,8 +71,12 @@ Use native subagents when available; otherwise run the same assignments as
 isolated bounded passes.
 
 Use the highest safe concurrency. Keep worker slots filled while runnable
-ticket items remain. Reduce concurrency after resource failures without losing
-completed analyses.
+ticket items remain. Reduce concurrency after non-429 resource failures without
+losing completed analyses. An explicit HTTP 429 activates `Global HTTP 429
+Queue` from `00-global-rules.md`: log the worker/request and Retry-After, stop
+filling parallel slots, return rate-limited tickets to retry state, and process
+every waiting/retry ticket and auditor request through one FIFO queue with
+concurrency `1`.
 
 Partition by cost:
 
@@ -94,6 +98,31 @@ Before dispatch, the coordinator marks the assigned queue items `running`.
 Workers write only unique analysis files and unique findings files. Only the
 coordinator updates shared `index.json` and `queue.json` through the script's
 `mark` command.
+
+When a worker/batch returns an explicit HTTP 429, record that distinct request
+once against one representative assigned ticket before waiting:
+
+```bash
+python3 <prompt-pack>/scripts/git_ticket_history.py mark \
+  --repo . \
+  --prefix '<exact-prefix>' \
+  --ticket '<ticket-id>' \
+  --status rate_limited \
+  --http-status 429 \
+  --worker-id '<worker-id>' \
+  --request-id '<sanitized-id-if-available>' \
+  --retry-after '<value-if-available>'
+```
+
+Relay both returned `log_records` to the runtime logger and show the returned
+`user_message` translated to the user's language. The persisted scheduler
+rejects a second running ticket and out-of-order dispatch while the global 429
+latch is active.
+
+For a multi-ticket batch, return its other assigned `running` tickets to
+`pending` with a short reference to the same worker request, but do not record
+additional fake 429 events. One actual rate-limited request produces one warning
+event even when several ticket assignments must be requeued.
 
 ## Required Ticket Analysis
 

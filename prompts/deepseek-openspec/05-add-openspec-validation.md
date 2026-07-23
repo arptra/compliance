@@ -43,6 +43,11 @@ Validate:
 - reverse artifact-to-capability links can be resolved
 - unknown and contradiction IDs are unique
 - queue counts agree with actual queue items
+- the shared queue is the only scheduler-state authority
+- `GLOBAL_SERIAL_QUEUE` implies `rate_limit_latched: true`, concurrency `1`,
+  and no more than one newly dispatched running request
+- every `rate_limited` item records an explicit HTTP status `429`
+- FIFO order uses original enqueue time with stable item ID as tie-break
 - coverage counts agree with manifest and traceability data
 - no secret values or private payloads were copied into artifacts
 - `openspec/meta.yml` matches the applied pack version/fingerprint and contains
@@ -82,6 +87,8 @@ When `openspec/history/git-tickets/registry.json` exists, validate:
 - registry, meta, index, queue, and ticket JSON parse structurally
 - each indexed ticket file and analysis path resolves
 - queue/index statuses and ticket signatures agree
+- a latched ticket scheduler reports `GLOBAL_SERIAL_QUEUE`, concurrency `1`,
+  and no out-of-order or parallel ticket dispatch
 - every completed analysis cites only commits associated with that ticket
 - shared multi-ticket commits and ref-only records are explicitly labeled
 - no full patches, secrets, personal data, or fabricated issue-tracker facts are

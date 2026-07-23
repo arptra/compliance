@@ -134,6 +134,26 @@ For pre-2.1.0 repositories:
 
 This migration is additive and must not trigger domain/bootstrap reanalysis.
 
+## Migration `add-global-429-queue-v1`
+
+For pre-2.2.0 repositories:
+
+1. Add a `scheduler` block from `templates/work-queue.template.yml` to every
+   pack-owned work queue that lacks one, preserving all item IDs and statuses.
+2. Default a queue with no structured prior rate-limit state to `PARALLEL`.
+   Do not infer an old 429 from generic timeout/resource-error text.
+3. Add nullable enqueue-time and last-HTTP-status fields without resetting
+   attempts, completion, findings, or ticket signatures.
+4. If a queue already contains structured explicit HTTP 429 evidence, set
+   `GLOBAL_SERIAL_QUEUE`, concurrency `1`, and preserve its retry timing.
+5. Add nullable rate-limit result fields to worker output contracts.
+6. Validate that a latched queue has at most one newly dispatched running item
+   and resumes in stable FIFO order.
+7. Do not rerun repository analysis or completed ticket analysis solely because
+   scheduler metadata was added.
+
+This migration changes orchestration behavior, not canonical SDD content.
+
 ## Future Overlay Updates
 
 Future prompt packs must:

@@ -26,6 +26,11 @@ If version, fingerprint, or supported artifact schema differs, route to
 Preserve the existing queue and task state. If target schemas are newer than the
 pack, stop and request the matching/newer pack instead of downgrading.
 
+Before dispatching resumed work, read the shared queue's `scheduler` block. If
+`rate_limit_latched` is true, keep `GLOBAL_SERIAL_QUEUE`, honor
+`retry_not_before`, and resume at most one request from FIFO order. Never create
+a fresh parallel wave merely because the CLI process restarted.
+
 ## Bootstrap Takes Priority
 
 If bootstrap status is `IN_PROGRESS`:

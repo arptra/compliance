@@ -32,8 +32,12 @@ Parallel code edits are allowed only for explicitly separate tasks with
 non-overlapping file ownership and independent validation commands. Otherwise,
 the coordinator performs canonical edits after gathering worker findings.
 
-Use the highest safe runtime concurrency and reduce it after resource failures.
-Never pretend subagents ran if the environment does not provide them.
+Use the highest safe runtime concurrency and reduce it after non-429 resource
+failures. An explicit HTTP 429 activates `Global HTTP 429 Queue` from
+`00-global-rules.md` for read-only reviews, validation, and any parallel code
+task: log the transition, stop new parallel dispatch, and continue through one
+FIFO queue with concurrency `1`. Never pretend subagents ran if the environment
+does not provide them.
 
 ## Implementation Workflow
 

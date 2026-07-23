@@ -59,7 +59,11 @@ parallel-dispatch capabilities.
 Use the maximum safe concurrency reported by the runtime. If unknown, begin
 with at most four independent workers. Increase up to eight after successful
 batches only when resources remain healthy. On OOM, timeout, or resource
-pressure, reduce concurrency and retry unfinished assignments.
+pressure other than HTTP 429, reduce concurrency and retry unfinished
+assignments. On an explicit HTTP 429, execute `Global HTTP 429 Queue` from
+`00-global-rules.md`: atomically stop new parallel dispatch, checkpoint the
+shared scheduler, and continue all waiting/retry requests through one FIFO queue
+with concurrency `1`.
 
 ## Phase 1 - Foundation
 
@@ -181,7 +185,22 @@ file.
 
 Keep available worker slots filled while independent runnable items remain;
 do not wait for an entire slow wave before dispatching replacements into free
-slots. The coordinator alone owns scheduling and retries.
+slots. This slot-refill rule is disabled as soon as the global 429 latch is set.
+The coordinator alone owns scheduling and retries.
+
+For every explicit 429:
+
+1. write the required `WARN [RATE_LIMIT]` record;
+2. latch `scheduler.dispatch_mode: GLOBAL_SERIAL_QUEUE` in the shared queue;
+3. set `scheduler.current_concurrency: 1` and the retry-not-before value;
+4. return the affected item to retry state without discarding partial findings;
+5. order all waiting/retry items by original enqueue time, then stable ID;
+6. checkpoint before sleeping or dispatching the next serial request;
+7. write and display the `INFO [SCHEDULER]` record with the actual queue count.
+
+Do not create one retry loop per worker. Requests already in flight may report
+their result, but no replacement is launched and every additional 429 joins the
+same global FIFO queue.
 
 After every worker result:
 

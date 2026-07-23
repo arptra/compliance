@@ -24,6 +24,9 @@ repository by mistake.
   autonomously. Do not ask the user to approve individual workers or batches.
 - Progress updates must be short: phase, completed/total work items, coverage,
   and blockers.
+- Every explicit HTTP 429 must produce the rate-limit warning and an immediate
+  user-visible message that parallel dispatch stopped and requests entered one
+  global FIFO queue with concurrency `1`.
 - Never hide partial coverage behind the word "initialized".
 - When the user asks a factual repository question directly, route it to
   `15-answer-repository-question.md` without forcing them through a feature
@@ -262,7 +265,11 @@ Repository paths classified: <percent>
 Capabilities synthesized: <count>
 Declared gaps: <count>
 Status: <running|retrying|blocked|complete>
+Dispatch: <parallel concurrency=N|global FIFO queue concurrency=1, waiting=N>
 ```
+
+When dispatch changes because of HTTP 429, print the transition immediately;
+do not wait for the next periodic progress report.
 
 ## Full Bootstrap Final Format
 

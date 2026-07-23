@@ -53,6 +53,11 @@ When native subagents exist, dispatch
 ownership with the coordinator. Without native subagents, perform the same
 retrieval as a separate bounded coordinator pass before drafting claims.
 
+Retrieval and grounding-validation requests obey `Global HTTP 429 Queue` from
+`00-global-rules.md`. If either returns an explicit 429, log it, stop opening
+parallel slots, and serialize all remaining retrieval/validation requests in
+the same global FIFO queue.
+
 ## Evidence Search Order
 
 1. Search fresh OpenSpec capability, command, architecture, and traceability

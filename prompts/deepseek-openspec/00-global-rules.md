@@ -187,8 +187,9 @@ labels and do not replace current-state requirement evidence states.
 - Use the highest safe concurrency exposed by the runtime. If no limit is
   reported, start with up to four independent workers and scale up to eight
   only after successful batches.
-- On resource exhaustion, reduce concurrency and retry unfinished work. Do not
-  discard completed findings.
+- On non-429 resource exhaustion, reduce concurrency and retry unfinished work.
+  HTTP 429 follows the global serial-queue contract below. Do not discard
+  completed findings.
 - Workers are read-only with respect to canonical OpenSpec files. Each worker
   writes only its own `openspec/bootstrap/findings/<worker-id>.yml` result.
 - Only the coordinator/synthesizer writes canonical specs and indexes.
@@ -197,6 +198,43 @@ labels and do not replace current-state requirement evidence states.
 - Save queue and state checkpoints after every completed batch.
 - Use an independent auditor worker after synthesis; the synthesizer must not
   self-certify completeness.
+
+## Global HTTP 429 Queue
+
+Apply this contract to every coordinator that dispatches subagents, validators,
+or isolated model requests.
+
+- Trigger it only from an explicit HTTP `429`/rate-limit result. Do not classify
+  a timeout, OOM, generic network error, or guessed provider condition as 429.
+- Log every distinct 429 immediately through the CLI/runtime logger. Never log
+  response bodies, credentials, authorization headers, or private payloads.
+- Emit these two records with real values where available:
+
+```text
+WARN [RATE_LIMIT] status=429 worker=<id> request=<sanitized-id|unknown> retry_after=<value|unknown>
+INFO [SCHEDULER] parallel dispatch stopped; <count> requests are in the global FIFO queue; concurrency=1
+```
+
+- Also show the second message as a short user-visible progress update in the
+  user's language. A 429 must not remain hidden only in an internal finding.
+- The first 429 atomically latches the shared queue scheduler to
+  `GLOBAL_SERIAL_QUEUE`. Stop opening replacement worker slots immediately.
+- Requests already sent may finish, because they cannot be unsent. Requeue each
+  rate-limited assignment and place all waiting/retry assignments into one
+  stable FIFO order using original enqueue time and work-item ID as a tie-break.
+- While latched, set effective concurrency to exactly `1` for all request types,
+  including retrieval, synthesis, validation, audit, and Git ticket analysis.
+  Do not maintain separate per-role retry lanes.
+- Workers never retry 429 independently. They return `rate_limited` plus any
+  partial safe findings; only the coordinator owns waiting and retry dispatch.
+- Honor a valid `Retry-After` or provider reset value. If none is supplied, use
+  bounded exponential backoff with jitter. Never retry all queued work at once.
+- Checkpoint the scheduler latch, queue order, retry-not-before value, and
+  affected item status before waiting. A restarted CLI resumes the unfinished
+  queue serially instead of recreating a parallel wave.
+- Do not automatically restore parallelism during the same run. The latch may
+  be cleared for a later run only after the global queue is empty and any
+  provider cooldown has expired.
 
 ## Context Discipline For Daily Work
 

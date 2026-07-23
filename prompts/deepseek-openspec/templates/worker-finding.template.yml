@@ -2,7 +2,7 @@ schema_version: 1
 worker_id: "WORK-example"
 role: "domain-capability-analyzer"
 assignment_id: "WORK-example"
-status: completed
+status: completed # completed | partial | rate_limited | failed
 assigned_artifact_count: 0
 accounting:
   analyzed: []
@@ -34,6 +34,11 @@ evidence:
     lines: null
     evidence_state: OBSERVED_IN_CODE
     supports: []
+rate_limit:
+  detected: false
+  http_status: null
+  retry_after: null
+  request_id: null
 sanitization:
   secrets_copied: false
   private_payloads_copied: false

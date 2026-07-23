@@ -21,6 +21,10 @@ Read `../00-global-rules.md` and this file before the role-specific prompt.
   only the assigned structured result when no findings file is assigned.
 - Do not edit `project.md`, `architecture/`, `specs/`, `index/`, bootstrap
   state, or the shared queue.
+- If an assigned model/tool request returns an explicit HTTP 429, do not retry
+  it locally. Return `status: rate_limited`, available `Retry-After`/request ID,
+  and any already-produced safe partial findings to the coordinator. The
+  coordinator owns the single global retry queue and user-visible logging.
 - The coordinator validates and merges findings.
 
 ## Evidence Rules

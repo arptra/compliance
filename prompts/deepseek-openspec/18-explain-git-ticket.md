@@ -38,6 +38,11 @@ Without native subagents, execute the three modes as separate bounded passes.
 The coordinator synthesizes the result into the ticket analysis template, then
 uses `agents/git-ticket-analysis-auditor.md` before marking it completed.
 
+These locator and auditor requests obey `Global HTTP 429 Queue` from
+`00-global-rules.md`. After an explicit 429, log the transition and continue
+all unfinished modes through the same serial FIFO queue; do not launch the
+remaining modes as a new parallel wave.
+
 ## Evidence Rules
 
 - Every behavioral statement must cite a commit plus file/symbol evidence.

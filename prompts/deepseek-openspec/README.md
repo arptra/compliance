@@ -17,7 +17,7 @@ supports polyglot repositories and monorepos.
 
 ## Current Version And Capabilities
 
-Current prompt-pack version: `2.1.0`.
+Current prompt-pack version: `2.2.0`.
 
 The pack can:
 
@@ -34,7 +34,18 @@ The pack can:
 - index ticket IDs from local Git history and explain each ticket with its
   historical diff, current code, tests, contracts, and later evolution.
 
-### What Is New In `2.1.0`
+### What Is New In `2.2.0`
+
+- every explicit HTTP 429 is written to the runtime log with worker, sanitized
+  request ID, and Retry-After when available;
+- the first 429 immediately stops new parallel dispatch and emits a visible
+  message that requests entered one global FIFO queue;
+- all waiting and retry requests then run with concurrency `1`, including
+  retrieval, validation, audit, implementation review, and ticket analysis;
+- queue scheduler state survives CLI restarts and prevents a new parallel wave;
+- Git ticket scheduling enforces serial FIFO order in the bundled parser.
+
+### Added Previously In `2.1.0`
 
 - deterministic exact-prefix ticket extraction from commit messages, Git notes,
   reflogs, and local ref names;
@@ -97,6 +108,11 @@ The orchestrator detects whether the local CLI exposes real subagent tools.
 
 Workers never concurrently edit canonical specs. Each writes one structured
 finding file; a single coordinator validates and merges results.
+
+If any request returns an explicit HTTP 429, the coordinator logs it, stops
+opening parallel slots, and moves every waiting/retry request into one global
+FIFO queue with concurrency `1`. The serial latch is checkpointed, so restarting
+the CLI does not accidentally recreate a parallel wave.
 
 ## Main OpenSpec Artifacts
 

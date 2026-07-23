@@ -41,6 +41,7 @@ class GitTicketHistoryTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+        self.last_tool_stderr = result.stderr
         return json.loads(result.stdout)
 
     def scan(self) -> dict:
@@ -141,6 +142,60 @@ class GitTicketHistoryTest(unittest.TestCase):
         self.scan()
         changed = json.loads((store / "index.json").read_text(encoding="utf-8"))
         self.assertEqual(changed["tickets"][0]["analysis_status"], "stale")
+
+    def test_429_latches_global_serial_fifo_queue(self) -> None:
+        self.git("commit", "--allow-empty", "-m", "PROJ-101 and PROJ-102")
+        self.scan()
+
+        limited = self.tool(
+            "mark",
+            "--ticket",
+            "PROJ-101",
+            "--status",
+            "rate_limited",
+            "--http-status",
+            "429",
+            "--worker-id",
+            "worker-1",
+            "--request-id",
+            "request-1",
+            "--retry-after",
+            "5",
+        )
+        self.assertEqual(limited["scheduler"]["dispatch_mode"], "GLOBAL_SERIAL_QUEUE")
+        self.assertEqual(limited["scheduler"]["current_concurrency"], 1)
+        self.assertEqual(limited["scheduler"]["retry_after"], "5")
+        self.assertIsNotNone(limited["scheduler"]["retry_not_before"])
+        self.assertIn("status=429", limited["log_records"][0])
+        self.assertIn("global FIFO queue", limited["log_records"][1])
+        self.assertIn("WARN [RATE_LIMIT] status=429", self.last_tool_stderr)
+        self.assertIn("INFO [SCHEDULER] parallel dispatch stopped", self.last_tool_stderr)
+
+        status = self.tool("status")
+        self.assertTrue(status["scheduler"]["rate_limit_latched"])
+        self.assertEqual(status["queue"]["rate_limited"], 1)
+
+        out_of_order = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "mark",
+                "--ticket",
+                "PROJ-102",
+                "--status",
+                "running",
+                "--repo",
+                str(self.repo),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertEqual(out_of_order.returncode, 2)
+        self.assertIn("next ticket is PROJ-101", out_of_order.stderr)
+
+        resumed = self.tool("mark", "--ticket", "PROJ-101", "--status", "running")
+        self.assertEqual(resumed["scheduler"]["current_concurrency"], 1)
 
 
 if __name__ == "__main__":

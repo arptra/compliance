@@ -6,6 +6,28 @@ follow Semantic Versioning.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-23
+
+### Added
+
+- Immediate structured logging for every explicit HTTP 429, including worker,
+  sanitized request ID, and Retry-After when available.
+- A user-visible scheduler message stating that parallel dispatch stopped and
+  requests entered one global FIFO queue.
+- Persistent rate-limit scheduler fields for resumable work queues and Git
+  ticket queues.
+- FIFO and single-running-ticket enforcement in the bundled Git history parser
+  while the rate-limit latch is active.
+
+### Changed
+
+- An explicit HTTP 429 now switches all request types from parallel dispatch to
+  `GLOBAL_SERIAL_QUEUE` with concurrency `1` for the rest of the run.
+- Workers return rate-limit metadata instead of starting independent retry
+  loops; the coordinator alone honors Retry-After/backoff and dispatches retries.
+- A restarted CLI preserves an unfinished serial queue instead of opening a new
+  parallel wave.
+
 ## [2.1.0] - 2026-07-13
 
 ### Added

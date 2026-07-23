@@ -7,6 +7,18 @@ summary:
   completed: 0
   retry: 0
   blocked: 0
+scheduler:
+  dispatch_mode: PARALLEL
+  current_concurrency: null
+  rate_limit_latched: false
+  rate_limited_at: null
+  retry_after: null
+  retry_not_before: null
+  rate_limit_event_count: 0
+  last_429:
+    worker_id: null
+    request_id: null
+    retry_after: null
 items:
   - id: "WORK-example"
     phase: extraction
@@ -20,6 +32,8 @@ items:
     depends_on: []
     output_file: "openspec/bootstrap/findings/WORK-example.yml"
     status: pending
+    enqueued_at: null
     attempts: 0
     last_error: null
+    last_http_status: null
     discovered_follow_ups: []

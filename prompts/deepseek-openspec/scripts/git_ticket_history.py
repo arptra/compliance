@@ -11,7 +11,8 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -151,9 +152,13 @@ def parse_git_log(repo: Path, include_reflog: bool) -> tuple[int, list[dict[str,
                 "authored_at": authored_at.strip() or None,
                 "message": message.rstrip(),
                 "notes": notes.rstrip(),
+                "_scan_order": len(commits),
             }
         )
-    unique = {commit["oid"]: commit for commit in commits if commit["oid"]}
+    unique: dict[str, dict[str, Any]] = {}
+    for commit in commits:
+        if commit["oid"] and commit["oid"] not in unique:
+            unique[commit["oid"]] = commit
     return len(unique), list(unique.values())
 
 
@@ -236,7 +241,13 @@ def update_registry(history_root: Path, prefix: str, store: Path) -> None:
 def ticket_signature(record: dict[str, Any]) -> str:
     stable = {
         "ticket_id": record["ticket_id"],
-        "commits": [item["oid"] for item in record.get("commits", [])],
+        "commits": [
+            item["oid"]
+            for item in sorted(
+                record.get("commits", []),
+                key=lambda value: (value.get("authored_at") or "", value["oid"]),
+            )
+        ],
         "ref_matches": record.get("ref_matches", []),
     }
     payload = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -292,6 +303,7 @@ def scan(args: argparse.Namespace) -> int:
                         commit["notes"], specific_pattern
                     ),
                     "is_merge": len(commit["parents"]) > 1,
+                    "_scan_order": commit["_scan_order"],
                 }
             )
 
@@ -310,14 +322,22 @@ def scan(args: argparse.Namespace) -> int:
 
     existing_queue = load_json(store / "queue.json", {"items": []})
     previous_items = {item.get("ticket_id"): item for item in existing_queue.get("items", [])}
+    scheduler = normalized_scheduler(existing_queue.get("scheduler"))
     index_items: list[dict[str, Any]] = []
     queue_items: list[dict[str, Any]] = []
     tickets_dir = store / "tickets"
     for ticket_id in sorted(tickets):
         record = tickets[ticket_id]
         record["commits"] = sorted(
-            record["commits"], key=lambda item: (item.get("authored_at") or "", item["oid"])
+            record["commits"],
+            key=lambda item: (
+                item.get("authored_at") or "",
+                -int(item.get("_scan_order", 0)),
+                item["oid"],
+            ),
         )
+        for commit in record["commits"]:
+            commit.pop("_scan_order", None)
         record["commit_count"] = len(record["commits"])
         record["first_commit_at"] = (
             record["commits"][0].get("authored_at") if record["commits"] else None
@@ -344,8 +364,12 @@ def scan(args: argparse.Namespace) -> int:
                 "analysis_file": analysis_file,
                 "signature": record["signature"],
                 "status": status,
+                "enqueued_at": previous.get("enqueued_at") or utc_now(),
                 "attempts": previous.get("attempts", 0) if unchanged else 0,
                 "last_error": previous.get("last_error") if unchanged else None,
+                "last_http_status": (
+                    previous.get("last_http_status") if unchanged else None
+                ),
                 "cost": {
                     "commits": record["commit_count"],
                     "ref_matches": len(record["ref_matches"]),
@@ -376,6 +400,7 @@ def scan(args: argparse.Namespace) -> int:
         "schema_version": SCHEMA_VERSION,
         "prefix": prefix,
         "updated_at": utc_now(),
+        "scheduler": scheduler,
         "items": queue_items,
         "summary": queue_summary(queue_items),
     }
@@ -425,6 +450,54 @@ def queue_summary(items: Iterable[dict[str, Any]]) -> dict[str, int]:
         status = str(item.get("status", "unknown"))
         summary[status] = summary.get(status, 0) + 1
     return summary
+
+
+def default_scheduler() -> dict[str, Any]:
+    return {
+        "dispatch_mode": "PARALLEL",
+        "current_concurrency": None,
+        "rate_limit_latched": False,
+        "rate_limited_at": None,
+        "retry_after": None,
+        "retry_not_before": None,
+        "rate_limit_event_count": 0,
+        "last_429": None,
+    }
+
+
+def normalized_scheduler(value: Any) -> dict[str, Any]:
+    scheduler = default_scheduler()
+    if isinstance(value, dict):
+        scheduler.update(value)
+    if scheduler.get("rate_limit_latched"):
+        scheduler["dispatch_mode"] = "GLOBAL_SERIAL_QUEUE"
+        scheduler["current_concurrency"] = 1
+    return scheduler
+
+
+def bounded_log_value(value: str | None, limit: int = 500) -> str | None:
+    if value is None:
+        return None
+    return " ".join(value.split())[:limit]
+
+
+def retry_deadline(value: str | None) -> str | None:
+    if not value:
+        return None
+    now = datetime.now(timezone.utc)
+    if value.isdigit():
+        try:
+            deadline = now + timedelta(seconds=int(value))
+        except OverflowError:
+            return None
+        return deadline.replace(microsecond=0).isoformat()
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def history_root(root: Path, output: str | None) -> Path:
@@ -490,6 +563,7 @@ def status(args: argparse.Namespace) -> int:
         "generated_at": meta.get("generated_at"),
         "refs_fingerprint": meta.get("refs_fingerprint"),
         "current_refs_fingerprint": refs_fingerprint(root, bool(meta.get("include_reflog"))),
+        "scheduler": normalized_scheduler(queue.get("scheduler")),
         "queue": queue_summary(queue.get("items", [])),
     }
     result["fresh"] = result["refs_fingerprint"] == result["current_refs_fingerprint"]
@@ -626,6 +700,7 @@ def mark(args: argparse.Namespace) -> int:
     index_path = store / "index.json"
     queue = load_json(queue_path, {"items": []})
     index = load_json(index_path, {"tickets": []})
+    scheduler = normalized_scheduler(queue.get("scheduler"))
     queue_item = next(
         (item for item in queue.get("items", []) if item.get("ticket_id") == args.ticket),
         None,
@@ -636,20 +711,105 @@ def mark(args: argparse.Namespace) -> int:
     )
     if not queue_item or not index_item:
         raise GitTicketError(f"Ticket not found: {args.ticket}")
+    if args.status == "rate_limited" and args.http_status != 429:
+        raise GitTicketError("rate_limited status requires --http-status 429")
+    if args.status != "rate_limited" and args.http_status == 429:
+        raise GitTicketError("HTTP 429 must be recorded with --status rate_limited")
+    if args.status == "running" and scheduler.get("rate_limit_latched"):
+        running_others = [
+            item
+            for item in queue.get("items", [])
+            if item.get("status") == "running" and item.get("ticket_id") != args.ticket
+        ]
+        if running_others:
+            raise GitTicketError(
+                "Global serial queue already has a running ticket: "
+                f"{running_others[0].get('ticket_id')}"
+            )
+        eligible = sorted(
+            (
+                item
+                for item in queue.get("items", [])
+                if item.get("status") in {"pending", "stale", "failed", "rate_limited"}
+            ),
+            key=lambda item: (item.get("enqueued_at") or "", item.get("ticket_id") or ""),
+        )
+        if eligible and eligible[0].get("ticket_id") != args.ticket:
+            raise GitTicketError(
+                "Global serial queue must preserve FIFO order; next ticket is "
+                f"{eligible[0].get('ticket_id')}"
+            )
     if args.status == "completed":
         analysis_path = store / index_item["analysis_file"]
         if not analysis_path.exists():
             raise GitTicketError(f"Analysis file does not exist: {analysis_path}")
+    now = utc_now()
     queue_item["status"] = args.status
     if args.status == "running":
         queue_item["attempts"] = int(queue_item.get("attempts", 0)) + 1
-    queue_item["last_error"] = args.error
+    queue_item["last_error"] = bounded_log_value(args.error)
+    queue_item["last_http_status"] = args.http_status
+    queue_item["enqueued_at"] = queue_item.get("enqueued_at") or now
+    log_records: list[str] = []
+    user_message: str | None = None
+    if args.status == "rate_limited":
+        worker_id = bounded_log_value(args.worker_id, 128) or "unknown"
+        request_id = bounded_log_value(args.request_id, 128) or "unknown"
+        retry_after = bounded_log_value(args.retry_after, 128) or "unknown"
+        scheduler.update(
+            {
+                "dispatch_mode": "GLOBAL_SERIAL_QUEUE",
+                "current_concurrency": 1,
+                "rate_limit_latched": True,
+                "rate_limited_at": now,
+                "retry_after": None if retry_after == "unknown" else retry_after,
+                "retry_not_before": retry_deadline(
+                    None if retry_after == "unknown" else retry_after
+                ),
+                "rate_limit_event_count": int(
+                    scheduler.get("rate_limit_event_count", 0)
+                )
+                + 1,
+                "last_429": {
+                    "worker_id": worker_id,
+                    "request_id": request_id,
+                    "retry_after": retry_after,
+                    "ticket_id": args.ticket,
+                    "at": now,
+                },
+            }
+        )
+        waiting_count = sum(
+            item.get("status") in {"pending", "stale", "failed", "rate_limited"}
+            for item in queue.get("items", [])
+        )
+        log_records = [
+            "WARN [RATE_LIMIT] status=429 "
+            f"worker={worker_id} request={request_id} retry_after={retry_after}",
+            "INFO [SCHEDULER] parallel dispatch stopped; "
+            f"{waiting_count} requests are in the global FIFO queue; concurrency=1",
+        ]
+        user_message = (
+            "HTTP 429: parallel dispatch stopped; requests entered one global "
+            f"FIFO queue; concurrency=1; waiting={waiting_count}"
+        )
     index_item["analysis_status"] = args.status
+    queue["scheduler"] = scheduler
     queue["summary"] = queue_summary(queue.get("items", []))
     queue["updated_at"] = utc_now()
     atomic_write_json(queue_path, queue)
     atomic_write_json(index_path, index)
-    print(json.dumps({"ticket_id": args.ticket, "status": args.status}, indent=2))
+    result = {
+        "ticket_id": args.ticket,
+        "status": args.status,
+        "scheduler": scheduler,
+    }
+    if log_records:
+        result["log_records"] = log_records
+        result["user_message"] = user_message
+        for record in log_records:
+            print(record, file=sys.stderr)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -698,9 +858,15 @@ def build_parser() -> argparse.ArgumentParser:
     mark_parser.add_argument("--prefix")
     mark_parser.add_argument("--output")
     mark_parser.add_argument(
-        "--status", choices=["pending", "running", "completed", "failed", "stale"], required=True
+        "--status",
+        choices=["pending", "running", "completed", "failed", "stale", "rate_limited"],
+        required=True,
     )
     mark_parser.add_argument("--error")
+    mark_parser.add_argument("--http-status", type=int)
+    mark_parser.add_argument("--worker-id")
+    mark_parser.add_argument("--request-id")
+    mark_parser.add_argument("--retry-after")
     mark_parser.set_defaults(func=mark)
     return parser
 

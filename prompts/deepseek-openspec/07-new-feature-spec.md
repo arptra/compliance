@@ -109,6 +109,10 @@ read-only impact analysis such as contracts, tests, data/migrations, security,
 and reverse dependencies. Each returns findings to the coordinator; only the
 coordinator writes the OpenSpec change.
 
+All dispatch obeys `Global HTTP 429 Queue` from `00-global-rules.md`. After an
+explicit 429, stop parallel replacement dispatch and put every waiting impact,
+validation, and audit request into the same serial FIFO queue.
+
 Do not claim subagents were used when the CLI does not provide them.
 
 ## Validate And Ask Once

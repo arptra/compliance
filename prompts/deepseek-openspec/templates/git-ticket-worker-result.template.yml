@@ -16,6 +16,11 @@ results:
     ambiguity: []
     unknowns: []
 follow_up_requests: []
+rate_limit:
+  detected: false
+  http_status: null
+  retry_after: null
+  request_id: null
 sanitization:
   secrets_copied: false
   personal_data_copied: false
