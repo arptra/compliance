@@ -6,6 +6,7 @@ import math
 import re
 import shutil
 import threading
+import time
 import traceback
 import uuid
 from contextlib import suppress
@@ -935,7 +936,6 @@ class GigaChatLabService:
             rendered_payload = self._inject_row_rule_context(rendered_payload, prompt_rule_evaluation)
 
         llm_cfg = self.cfg.llm.model_copy(deep=True)
-        llm_cfg = self.apply_llm_overrides(llm_cfg)
         llm_fields = llm_cfg.__class__.model_fields
         for key, value in values.items():
             if key in llm_fields:
@@ -1007,7 +1007,7 @@ class GigaChatLabService:
             async_workers=async_workers,
             current_label=f"Задача поставлена в очередь: {async_workers} workers",
         )
-        (task_dir / "input.json").write_text(req.model_dump_json(indent=2), encoding="utf-8")
+        (task_dir / "input.json").write_text(req.model_dump_json(), encoding="utf-8")
         self._write_background_summary(summary)
 
         cancel_flag = threading.Event()
@@ -1042,10 +1042,19 @@ class GigaChatLabService:
         if not result_path.exists():
             raise FileNotFoundError(f"Background task result not found: {task_id}")
         payload = json.loads(result_path.read_text(encoding="utf-8"))
+        workbook = GigaChatWorkbookSheetDataResponse(**payload["workbook"])
+        row_runs: list[GigaChatBackgroundTaskRowRun] = []
+        for raw_row_run in payload.get("row_runs", []):
+            row_run = dict(raw_row_run)
+            source_position = row_run.pop("_source_position", None)
+            if not row_run.get("source_row") and isinstance(source_position, int):
+                if 0 <= source_position < len(workbook.rows):
+                    row_run["source_row"] = workbook.rows[source_position]
+            row_runs.append(GigaChatBackgroundTaskRowRun(**row_run))
         return GigaChatBackgroundTaskResultResponse(
             task=summary,
-            workbook=GigaChatWorkbookSheetDataResponse(**payload["workbook"]),
-            row_runs=[GigaChatBackgroundTaskRowRun(**row) for row in payload.get("row_runs", [])],
+            workbook=workbook,
+            row_runs=row_runs,
         )
 
     def _run_background_labeling_row(
@@ -1084,7 +1093,6 @@ class GigaChatLabService:
             ))
         return {
             "row_index": item.row_index,
-            "source_row": item.source_row,
             "result": result.model_dump(mode="json"),
             "reclassification_result": reclassification_result.model_dump(mode="json") if reclassification_result else None,
             "error": None,
@@ -1101,6 +1109,7 @@ class GigaChatLabService:
         summary.async_workers = async_workers
         summary.current_label = f"Фоновая разметка запущена: {async_workers} workers"
         self._write_background_summary(summary)
+        last_summary_write_at = time.monotonic()
 
         try:
             if req.rows:
@@ -1114,7 +1123,10 @@ class GigaChatLabService:
                         index = futures[future]
                         item = req.rows[index]
                         try:
-                            row_runs_by_position[index] = future.result()
+                            row_runs_by_position[index] = {
+                                **future.result(),
+                                "_source_position": index,
+                            }
                         except _BackgroundTaskCancelled:
                             summary.status = "cancelled"
                             summary.current_label = "Задача отменена"
@@ -1125,7 +1137,7 @@ class GigaChatLabService:
                             summary.failed_rows += 1
                             row_runs_by_position[index] = {
                                 "row_index": item.row_index,
-                                "source_row": item.source_row,
+                                "_source_position": index,
                                 "result": None,
                                 "reclassification_result": None,
                                 "error": str(exc),
@@ -1136,7 +1148,10 @@ class GigaChatLabService:
                             f"Готово {summary.completed_rows} из {summary.total_rows}; "
                             f"workers: {max_workers}"
                         )
-                        self._write_background_summary(summary)
+                        now = time.monotonic()
+                        if summary.completed_rows == summary.total_rows or now - last_summary_write_at >= 0.25:
+                            self._write_background_summary(summary)
+                            last_summary_write_at = now
                         if cancel_flag.is_set():
                             summary.status = "cancelled"
                             summary.current_label = "Задача отменена"
@@ -1163,10 +1178,17 @@ class GigaChatLabService:
                 rows=source_rows,
             )
             result_path = task_dir / "result.json"
-            result_path.write_text(json.dumps({
-                "workbook": workbook.model_dump(mode="json"),
-                "row_runs": row_runs,
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "workbook": workbook.model_dump(mode="json"),
+                        "row_runs": row_runs,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
             summary.result_path = str(result_path)
             self._write_background_summary(summary)
         except Exception as exc:

@@ -14,6 +14,25 @@ class _Response:
         self.headers = {"Retry-After": retry_after} if retry_after is not None else {}
 
 
+def test_retry_delay_uses_fast_fallback_and_honors_retry_after(monkeypatch) -> None:
+    import complaints_trends.gigachat_api.rate_limit as rate_limit
+
+    monkeypatch.delenv("GIGACHAT_RETRY_BASE_DELAY_SECONDS", raising=False)
+    monkeypatch.delenv("GIGACHAT_RETRY_MAX_DELAY_SECONDS", raising=False)
+
+    response = _Response(429)
+    assert [rate_limit.rate_limit_delay(response, attempt) for attempt in range(6)] == [
+        0.05,
+        0.1,
+        0.2,
+        0.4,
+        0.8,
+        1.0,
+    ]
+    assert rate_limit.rate_limit_delay(_Response(429, retry_after="0"), 0) == 0
+    assert rate_limit.rate_limit_delay(_Response(429, retry_after="2.5"), 0) == 2.5
+
+
 def test_limiter_allows_configured_callers_to_overlap_before_429() -> None:
     limiter = AdaptiveRateLimiter(key="test:parallel", min_interval=0, max_interval=0)
     barrier = threading.Barrier(8)
@@ -39,6 +58,18 @@ def test_limiter_allows_configured_callers_to_overlap_before_429() -> None:
 
     assert [response.status_code for response in responses] == [200] * 8
     assert max_active == 8
+
+
+def test_success_logging_is_sampled_for_large_batches(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="uvicorn.error.gigachat")
+    limiter = AdaptiveRateLimiter(key="test:logging", min_interval=0, max_interval=0)
+
+    for _ in range(250):
+        limiter.execute(lambda: _Response(200))
+
+    assert caplog.text.count("event=request_dispatched") == 1
+    assert caplog.text.count("event=throughput") == 3
+    assert "event=request_completed" not in caplog.text
 
 
 def test_429_uses_one_serial_probe_then_releases_queue_in_parallel(monkeypatch, caplog) -> None:
@@ -110,4 +141,5 @@ def test_429_uses_one_serial_probe_then_releases_queue_in_parallel(monkeypatch, 
     assert "action=global_serial_queue" in caplog.text
     assert "global FIFO queue; concurrency=1 until_successful_probe" in caplog.text
     assert "event=serial_probe_succeeded" in caplog.text
-    assert "released_queued=3 next_mode=parallel" in caplog.text
+    assert "released_queued=3" in caplog.text
+    assert "next_mode=parallel" in caplog.text

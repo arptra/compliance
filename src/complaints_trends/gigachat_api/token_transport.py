@@ -153,7 +153,17 @@ class _ChatResp:
 
 class TokenAuthorizedHTTPXClient:
     def __init__(self, *, base_url: str, token_provider: AuthorizationKeyTokenProvider, verify: bool | str, timeout: float = 60.0):
-        self._api_client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
+        self._api_client = httpx.Client(
+            base_url=base_url,
+            verify=verify,
+            timeout=timeout,
+            trust_env=False,
+            limits=httpx.Limits(
+                max_connections=64,
+                max_keepalive_connections=64,
+                keepalive_expiry=60.0,
+            ),
+        )
         self._token_provider = token_provider
         self._api_limiter = get_rate_limiter(f"api:{base_url}")
 

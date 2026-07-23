@@ -2224,6 +2224,15 @@ export default function GigaChatPage() {
     }
   }, [searchParams])
 
+  const mergeAnnotatedResults = (rows: AnnotatedSheetRow[]) => {
+    if (!rows.length) return
+    const rowKeys = new Set(rows.map((row) => row.rowKey))
+    setAnnotatedRows((current) => [
+      ...rows.slice().reverse(),
+      ...current.filter((item) => !rowKeys.has(item.rowKey)),
+    ])
+  }
+
   const appendAnnotatedResult = (
     data: GigaChatLabRowRunResponse,
     rowIndex: number,
@@ -2231,12 +2240,7 @@ export default function GigaChatPage() {
     reclassificationData?: GigaChatLabRowRunResponse | null,
   ) => {
     if (!sheetData) return
-    const annotatedRow = buildAnnotatedRow(data, rowIndex, row, sheetData, reclassificationData)
-    setAnnotatedRows((current) => {
-      const next = current.filter((item) => item.rowKey !== annotatedRow.rowKey)
-      next.unshift(annotatedRow)
-      return next
-    })
+    mergeAnnotatedResults([buildAnnotatedRow(data, rowIndex, row, sheetData, reclassificationData)])
   }
 
   const buildRowRunResultPages = (
@@ -2447,6 +2451,7 @@ export default function GigaChatPage() {
       let completedSteps = 0
       let completedRows = 0
       let firstError: Error | null = null
+      const completedAnnotatedRows: AnnotatedSheetRow[] = []
       const workerCount = Math.min(asyncWorkerCount, runnableRowIndexes.length)
       await runWithConcurrency(runnableRowIndexes, asyncWorkerCount, async (rowIndex, idx) => {
         if (firstError) return
@@ -2475,7 +2480,7 @@ export default function GigaChatPage() {
           if (reclassificationData) {
             completedSteps += 1
           }
-          appendAnnotatedResult(data, rowIndex, row, reclassificationData)
+          completedAnnotatedRows.push(buildAnnotatedRow(data, rowIndex, row, sheetData, reclassificationData))
           lastResultPages = buildRowRunResultPages(data, reclassificationData)
           completedRows += 1
           updateProcessingOverlay(
@@ -2489,6 +2494,7 @@ export default function GigaChatPage() {
           if (!firstError) firstError = error as Error
         }
       })
+      mergeAnnotatedResults(completedAnnotatedRows)
       if (firstError) throw firstError
       if (lastResultPages.length) {
         setRowRunResultPages(lastResultPages)
@@ -2824,7 +2830,7 @@ export default function GigaChatPage() {
           />
           <span>
             <strong>Подсчитывать токены перед отправкой</strong>
-            <small>Перед каждым запросом в GigaChat будет вызван API подсчета токенов для текущего payload.</small>
+            <small>Перед каждым запросом вызывается отдельный API подсчета. Для максимальной скорости массовой разметки выключите эту опцию.</small>
           </span>
         </label>
 

@@ -28,11 +28,12 @@ def rate_limit_delay(response: object, attempt: int) -> float:
     retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
     if retry_after:
         try:
-            return max(0.2, min(30.0, float(retry_after)))
+            return max(0.0, min(30.0, float(retry_after)))
         except Exception:
             pass
-    fallback_delays = (1.5, 3.0, 6.0, 10.0, 15.0)
-    return fallback_delays[min(attempt, len(fallback_delays) - 1)]
+    base_delay = _env_float("GIGACHAT_RETRY_BASE_DELAY_SECONDS", 0.05)
+    max_delay = max(base_delay, _env_float("GIGACHAT_RETRY_MAX_DELAY_SECONDS", 1.0))
+    return min(max_delay, base_delay * (2 ** min(max(0, attempt), 10)))
 
 
 def retry_after_value(response: object) -> str | None:
@@ -46,6 +47,8 @@ def retry_after_value(response: object) -> str | None:
 @dataclass(frozen=True)
 class _RequestLease:
     serial: bool
+    started_at: float
+    queue_wait_ms: float
 
 
 class AdaptiveRateLimiter:
@@ -61,6 +64,10 @@ class AdaptiveRateLimiter:
         self._next_waiter_id = 0
         self._wait_queue: deque[int] = deque()
         self._condition = threading.Condition()
+        self._parallel_peak_active = 0
+        self._completed_requests = 0
+        self._last_stats_at = time.monotonic()
+        self._last_stats_completed = 0
 
     def snapshot(self) -> dict[str, object]:
         with self._condition:
@@ -75,6 +82,7 @@ class AdaptiveRateLimiter:
 
     def _acquire(self) -> _RequestLease:
         thread_name = threading.current_thread().name
+        queued_at = time.monotonic()
         with self._condition:
             waiter_id = self._next_waiter_id
             self._next_waiter_id += 1
@@ -87,12 +95,19 @@ class AdaptiveRateLimiter:
                 ready_at = max(self._next_allowed_at, self._retry_not_before)
                 if at_front and serial_slot_available and now >= ready_at:
                     self._wait_queue.popleft()
-                    lease = _RequestLease(serial=self._serial_mode)
+                    lease = _RequestLease(
+                        serial=self._serial_mode,
+                        started_at=now,
+                        queue_wait_ms=max(0.0, (now - queued_at) * 1000),
+                    )
                     self._active_requests += 1
                     self._next_allowed_at = now + self._current_interval
                     active = self._active_requests
                     queued = len(self._wait_queue)
                     mode = "serial" if lease.serial else "parallel"
+                    log_dispatch = lease.serial or active > self._parallel_peak_active
+                    if not lease.serial:
+                        self._parallel_peak_active = max(self._parallel_peak_active, active)
                     self._condition.notify_all()
                     break
 
@@ -101,15 +116,17 @@ class AdaptiveRateLimiter:
                     timeout = max(0.001, ready_at - now)
                 self._condition.wait(timeout=timeout)
 
-        logger.info(
-            "[GIGACHAT_POOL] event=request_dispatched limiter=%s mode=%s "
-            "active=%s queued=%s thread=%s",
-            self._key,
-            mode,
-            active,
-            queued,
-            thread_name,
-        )
+        if log_dispatch:
+            logger.info(
+                "[GIGACHAT_POOL] event=request_dispatched limiter=%s mode=%s "
+                "active=%s queued=%s queue_wait_ms=%.1f thread=%s",
+                self._key,
+                mode,
+                active,
+                queued,
+                lease.queue_wait_ms,
+                thread_name,
+            )
         return lease
 
     def _finish(
@@ -128,6 +145,8 @@ class AdaptiveRateLimiter:
         released_queued = 0
         delay = 0.0
         retry_after = None
+        request_duration_ms = max(0.0, (time.monotonic() - lease.started_at) * 1000)
+        throughput_stats: tuple[int, float, int, int, str] | None = None
 
         with self._condition:
             self._active_requests = max(0, self._active_requests - 1)
@@ -136,6 +155,7 @@ class AdaptiveRateLimiter:
                 retry_after = retry_after_value(response)
                 transitioned = not self._serial_mode
                 self._serial_mode = True
+                self._parallel_peak_active = 0
                 now = time.monotonic()
                 self._current_interval = min(
                     self._max_interval,
@@ -159,6 +179,22 @@ class AdaptiveRateLimiter:
                         self._next_allowed_at = now
                         recovered = True
 
+            if not rate_limited:
+                self._completed_requests += 1
+                now = time.monotonic()
+                stats_elapsed = now - self._last_stats_at
+                if self._completed_requests == 1 or self._completed_requests % 100 == 0 or stats_elapsed >= 2.0:
+                    completed_since_last = self._completed_requests - self._last_stats_completed
+                    throughput_stats = (
+                        self._completed_requests,
+                        completed_since_last / max(stats_elapsed, 0.001),
+                        self._active_requests,
+                        len(self._wait_queue),
+                        "serial" if self._serial_mode else "parallel",
+                    )
+                    self._last_stats_at = now
+                    self._last_stats_completed = self._completed_requests
+
             active = self._active_requests
             queued = len(self._wait_queue) + (1 if rate_limited and will_retry else 0)
             mode = "serial" if self._serial_mode else "parallel"
@@ -167,11 +203,13 @@ class AdaptiveRateLimiter:
         if rate_limited:
             logger.warning(
                 "[GIGACHAT_RATE_LIMIT] status=429 limiter=%s attempt=%s "
-                "retry_after=%s delay_seconds=%.3f action=global_serial_queue",
+                "retry_after=%s delay_seconds=%.3f request_duration_ms=%.1f "
+                "action=global_serial_queue",
                 self._key,
                 attempt + 1,
                 retry_after or "unknown",
                 delay,
+                request_duration_ms,
             )
             logger.warning(
                 "[GIGACHAT_QUEUE] parallel dispatch paused; requests moved to "
@@ -187,21 +225,35 @@ class AdaptiveRateLimiter:
                     self._key,
                 )
         else:
-            logger.info(
+            logger.debug(
                 "[GIGACHAT_POOL] event=request_completed limiter=%s status=%s "
-                "mode=%s active=%s queued=%s",
+                "mode=%s active=%s queued=%s request_duration_ms=%.1f",
                 self._key,
                 status_code or "exception",
                 mode,
                 active,
                 queued,
+                request_duration_ms,
+            )
+        if throughput_stats is not None:
+            completed_total, rate_rps, stats_active, stats_queued, stats_mode = throughput_stats
+            logger.info(
+                "[GIGACHAT_POOL] event=throughput limiter=%s mode=%s "
+                "completed_total=%s rate_rps=%.2f active=%s queued=%s",
+                self._key,
+                stats_mode,
+                completed_total,
+                rate_rps,
+                stats_active,
+                stats_queued,
             )
         if recovered:
             logger.info(
                 "[GIGACHAT_POOL] event=serial_probe_succeeded limiter=%s "
-                "released_queued=%s next_mode=parallel",
+                "released_queued=%s request_duration_ms=%.1f next_mode=parallel",
                 self._key,
                 released_queued,
+                request_duration_ms,
             )
 
     def _finish_exception(self, lease: _RequestLease) -> None:
@@ -211,13 +263,14 @@ class AdaptiveRateLimiter:
             queued = len(self._wait_queue)
             mode = "serial" if self._serial_mode else "parallel"
             self._condition.notify_all()
-        logger.info(
+        logger.warning(
             "[GIGACHAT_POOL] event=request_failed limiter=%s mode=%s "
-            "active=%s queued=%s",
+            "active=%s queued=%s request_duration_ms=%.1f",
             self._key,
             mode,
             active,
             queued,
+            max(0.0, (time.monotonic() - lease.started_at) * 1000),
         )
 
     def execute(self, request: Callable[[], ResponseT], *, max_attempts: int = 6) -> ResponseT:
@@ -245,7 +298,7 @@ _LIMITERS_LOCK = threading.Lock()
 
 def get_rate_limiter(key: str) -> AdaptiveRateLimiter:
     min_interval = _env_float("GIGACHAT_MIN_REQUEST_INTERVAL_SECONDS", 0.0)
-    max_interval = _env_float("GIGACHAT_MAX_REQUEST_INTERVAL_SECONDS", 20.0)
+    max_interval = _env_float("GIGACHAT_MAX_REQUEST_INTERVAL_SECONDS", 1.0)
     with _LIMITERS_LOCK:
         limiter = _LIMITERS.get(key)
         if limiter is None:

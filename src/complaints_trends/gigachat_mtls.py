@@ -236,7 +236,17 @@ class _ChatResp:
 
 class _HTTPXChatClient:
     def __init__(self, *, base_url: str, verify: bool | str | ssl.SSLContext, timeout: float = 60.0):
-        self._client = httpx.Client(base_url=base_url, verify=verify, timeout=timeout, trust_env=False)
+        self._client = httpx.Client(
+            base_url=base_url,
+            verify=verify,
+            timeout=timeout,
+            trust_env=False,
+            limits=httpx.Limits(
+                max_connections=64,
+                max_keepalive_connections=64,
+                keepalive_expiry=60.0,
+            ),
+        )
         self._api_limiter = get_rate_limiter(f"api:{base_url}")
 
     def count_tokens(self, *, model: str, input_text: str) -> int | None:
