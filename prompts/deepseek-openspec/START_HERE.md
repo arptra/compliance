@@ -13,6 +13,25 @@ contains this `START_HERE.md`. Resolve every `openspec/` path relative to the
 target repository root. Never create prompt-pack files inside the target
 repository by mistake.
 
+## OpenSpec 1.x Fast Path
+
+If the target repository contains `openspec/config.yaml`, it is already an
+official OpenSpec 1.x project. Do not run this pack's legacy foundation or full
+bootstrap writers and do not create `project.md`, `meta.yml`, `index/`, or
+`bootstrap/` inside its `openspec/` directory.
+
+Instead:
+
+1. Read repository-local `GIGACODE.md` and `openspec/README.md` when present.
+2. Use the generated OPSX command/skill for explore, propose, apply, sync, or
+   archive.
+3. Read only the relevant current capability spec and its implementation
+   evidence.
+4. Use this prompt pack only for an explicitly requested auxiliary operation
+   that does not change the official SSOT layout.
+
+This fast path overrides all state detection and menu instructions below.
+
 ## Interaction Contract
 
 - Show exactly one numbered menu at a time.

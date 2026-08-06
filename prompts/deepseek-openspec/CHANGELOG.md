@@ -6,6 +6,14 @@ follow Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Added an OpenSpec 1.x compatibility gate: repositories with
+  `openspec/config.yaml` keep the official OPSX `specs/` and `changes/` layout
+  instead of receiving the prompt pack's legacy extended bootstrap tree.
+- Relabeled the pack's `project.md`/`index/`/`bootstrap/` tree as a legacy
+  extension rather than canonical OpenSpec structure.
+
 ## [2.2.0] - 2026-07-23
 
 ### Added

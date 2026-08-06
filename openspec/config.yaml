@@ -1,0 +1,37 @@
+schema: spec-driven
+
+context: |
+  Product: authenticated GigaChat Lab for loading tabular workbooks, applying local rule packs,
+  sending selected rows to GigaChat, reviewing results, and storing raw/rules/gigachat Parquet layers.
+  Backend: Python 3.11+, FastAPI, Pydantic, pandas/pyarrow, SQLite catalog, httpx transports.
+  Frontend: React 18, TypeScript, Vite, React Router, TanStack Query/Table.
+  Active runtime is defined by src/complaints_trends/api/app.py and apps/dashboard/src/routes/index.tsx.
+  Legacy analytics modules remain in the repository but are not mounted in the current UI/API.
+  Current observable behavior is authoritative only in openspec/specs/. Archive entries are history.
+  For bounded context, start at openspec/README.md, read one relevant capability spec, then inspect
+  only the implementation files listed for that capability. Never infer API fields, CLI options,
+  config keys, defaults, or status transitions: verify them in routes, schemas, code, tests, or specs.
+
+rules:
+  proposal:
+    - State one intent, affected capabilities, non-goals, compatibility impact, and code evidence to inspect.
+    - Do not propose restoring legacy routes unless the user explicitly asks for that behavior.
+  specs:
+    - Write observable behavior with SHALL or MUST and concrete WHEN/THEN scenarios.
+    - Keep each capability independently readable; link to another capability instead of duplicating requirements.
+    - Treat openspec/specs as current state and use ADDED, MODIFIED, REMOVED, or RENAMED only in change deltas.
+  design:
+    - Name the exact frontend and backend files expected to change and the tests that prove the contract.
+    - Re-open code before recording parameters, defaults, persistence paths, concurrency, or error behavior.
+  tasks:
+    - Split work into small ordered checkboxes with implementation, tests, spec sync, and final validation.
+
+operations:
+  apply:
+    guidance:
+      - Use frontend-contract-scout and backend-contract-scout in parallel for cross-layer changes.
+      - Keep subagents read-only; the main agent owns edits and resolves their evidence.
+      - Run focused tests first, then the frontend build or broader pytest suite when the change crosses boundaries.
+  archive:
+    guidance:
+      - Archive only after implementation and verification; record the implementing commits when known.

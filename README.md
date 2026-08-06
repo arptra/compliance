@@ -7,6 +7,39 @@
 
 ---
 
+## OpenSpec SSOT и GIGACODE
+
+Актуальное поведение frontend/backend зафиксировано в официальной структуре OpenSpec 1.x:
+
+- точка входа и карта минимального контекста: [`openspec/README.md`](openspec/README.md);
+- текущий SSOT: `openspec/specs/**/spec.md`;
+- активные изменения: `openspec/changes/<change-name>/`;
+- восстановленная история фич: `openspec/changes/archive/YYYY-MM-DD-<change-name>/`;
+- постоянные правила для GIGACODE: [`GIGACODE.md`](GIGACODE.md);
+- адаптированные OpenSpec-команды и skills для GIGACODE: `.gigacode/commands/` и `.gigacode/skills/`.
+
+После установки Node.js 20.19+ и OpenSpec CLI:
+
+```bash
+npm install -g @fission-ai/openspec@latest
+openspec list
+openspec validate --specs
+```
+
+Перезапустите GIGACODE после первого получения `.gigacode/`. Дальше можно работать обычным текстом или командами:
+
+```text
+/opsx-explore "обсудить изменение"
+/opsx-propose "добавить одну конкретную фичу"
+/opsx-apply <change-name>
+/opsx-sync <change-name>
+/opsx-archive <change-name>
+```
+
+GIGACODE при новом сеансе начинает с короткого `GIGACODE.md` и `openspec/README.md`, затем читает одну нужную capability-спеку и её код. Весь репозиторий и архив в контекст не загружаются. Старый `prompts/deepseek-openspec/` остаётся самостоятельным prompt pack, но не является SSOT этого проекта.
+
+---
+
 ## 1. Что решает проект
 
 Проект предназначен для обработки ежемесячных Excel-файлов контакт-центра/поддержки (десятки колонок, длинные диалоги, шумные роли вроде `CLIENT/OPERATOR/CHATBOT`).

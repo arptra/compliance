@@ -1,5 +1,13 @@
 # DeepSeek OpenSpec Prompt Pack For Large Repositories
 
+> **OpenSpec 1.x compatibility:** this prompt pack predates the official OPSX
+> layout and includes an optional extended bootstrap/index format. In a target
+> repository that already contains `openspec/config.yaml`, the official
+> `openspec/specs/` and `openspec/changes/` tree is authoritative. Do not create
+> legacy `openspec/project.md`, `openspec/AGENTS.md`, `meta.yml`, `index/`, or
+> `bootstrap/` artifacts over that repository. Use its generated OPSX skills
+> and its local `GIGACODE.md`/`openspec/README.md` guidance instead.
+
 This prompt pack lets a local DeepSeek model build and use an evidence-backed
 current-state SDD for repositories that cannot fit in one context window.
 
@@ -114,7 +122,11 @@ opening parallel slots, and moves every waiting/retry request into one global
 FIFO queue with concurrency `1`. The serial latch is checkpointed, so restarting
 the CLI does not accidentally recreate a parallel wave.
 
-## Main OpenSpec Artifacts
+## Legacy Extended Prompt-Pack Artifacts
+
+The following tree is the prompt pack's historical large-repository extension,
+not the canonical OpenSpec 1.x core layout. The official core is
+`openspec/config.yaml`, `openspec/specs/`, and `openspec/changes/`.
 
 ```text
 openspec/

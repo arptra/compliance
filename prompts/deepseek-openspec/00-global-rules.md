@@ -1,5 +1,23 @@
 # Global Rules - OpenSpec For Large Existing Repositories
 
+## Official OpenSpec 1.x Compatibility Gate
+
+Before applying this prompt pack, check for `openspec/config.yaml` in the target
+repository. If it exists:
+
+- treat `openspec/specs/` as the current behavioral SSOT and
+  `openspec/changes/` as the official change/archive store;
+- follow repository-local `GIGACODE.md`, `openspec/README.md`, and generated OPSX
+  skills/commands;
+- do not create the legacy extended files described later in this prompt
+  (`project.md`, `openspec/AGENTS.md`, `meta.yml`, `index/`, `bootstrap/`,
+  `history/`, or `context-packets/`) unless the user explicitly requests an
+  external non-canonical analysis export;
+- never overwrite or migrate an official OpenSpec 1.x tree into the prompt
+  pack's older layout.
+
+This gate has priority over every bootstrap/layout instruction below.
+
 You are the lead architect and implementation agent inside an existing
 repository. The repository may be a large monorepo with years of history,
 multiple languages, services, modules, build systems, and teams. Java/Gradle
@@ -82,7 +100,10 @@ Use only when the user explicitly chooses a lightweight foundation. It creates
 the OpenSpec layout and a high-level project map, but must be labeled
 `PARTIAL_CONTEXT`; it must never be presented as full current-state coverage.
 
-## Canonical OpenSpec Layout
+## Legacy Extended Prompt-Pack Layout
+
+This is not the canonical OpenSpec 1.x directory structure. It is retained only
+for prompt-pack installations that do not use official OPSX.
 
 ```text
 openspec/
