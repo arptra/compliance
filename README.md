@@ -1,5 +1,11 @@
 # complaints-trends
 
+Пользовательское описание дашборда, логика обработки жалоб и пошаговый порядок работы: [`DASHBOARD_USER_GUIDE.md`](DASHBOARD_USER_GUIDE.md).
+
+PDF-версия пользовательского руководства: [`output/pdf/gigachat-lab-user-guide.pdf`](output/pdf/gigachat-lab-user-guide.pdf).
+
+Команды запуска для разработки: [`LOCAL_DEVELOPMENT.md`](LOCAL_DEVELOPMENT.md).
+
 Максимально подробное руководство по проекту анализа жалоб из Excel:
 - подготовка данных с **GigaChat только для нормализации/weak labels**,
 - обучение и аналитика только на локальных моделях `scikit-learn`,
