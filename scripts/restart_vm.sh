@@ -10,9 +10,9 @@ if [[ ! -x "${RESTART_SCRIPT}" ]]; then
   exit 1
 fi
 
-# Re-read the same settings on every restart, including certificate renewal.
-source "${ROOT_DIR}/scripts/load_vm_env.sh"
-load_vm_env "${ROOT_DIR}"
+# Reuse the same editable block on every restart, including certificate renewal.
+source "${ROOT_DIR}/scripts/start_vm_https.sh"
+setup_vm_launch_settings
 
 # VM defaults: keep them separate from local desktop ports.
 export API_PORT="${API_PORT:-18000}"

@@ -2297,60 +2297,54 @@ TLS подключён через параметры [Uvicorn](https://www.uvico
 для подключения к GigaChat по-прежнему нужен его CA bundle (`certs/ca.pem` или
 `GIGACHAT_CA_BUNDLE_FILE`).
 
-Один раз скопируйте шаблон в `.env.vm` в корне проекта:
+Один раз откройте `scripts/start_vm_https.sh` и замените значения после `:-`
+в блоке `setup_vm_launch_settings` на домен и пути вашей ВМ. Например:
 
 ```bash
-cp .env.vm.example .env.vm
-chmod 600 .env.vm
-```
-
-В `.env.vm` укажите свои значения и сохраните файл:
-
-```dotenv
-PUBLIC_HOST=dashboard.example.com
-HTTPS_ENABLED=1
-TLS_CERT_FILE=/path/to/fullchain.pem
-TLS_KEY_FILE=/path/to/privkey.pem
+export PUBLIC_HOST="${PUBLIC_HOST:-dashboard.example.com}"
+export TLS_CERT_FILE="${TLS_CERT_FILE:-/path/to/fullchain.pem}"
+export TLS_KEY_FILE="${TLS_KEY_FILE:-/path/to/privkey.pem}"
 ```
 
 После этого запускайте без повторного указания домена и сертификатов:
 
 ```bash
-scripts/start_vm.sh
-# Отдельная точка входа, принудительно включающая HTTPS:
 scripts/start_vm_https.sh
+# Для перезапуска с теми же настройками:
+scripts/restart_vm.sh
 ```
 
-Все три скрипта (`start_vm.sh`, `start_vm_https.sh`, `restart_vm.sh`) автоматически
-читают `.env.vm` из корня репозитория независимо от текущего каталога. Файл исключён
-из Git; обновление кода сохраняет настройки ВМ. При обновлении проекта не копируйте
-шаблон поверх уже заполненного `.env.vm`.
+Все три скрипта (`start_vm.sh`, `start_vm_https.sh`, `restart_vm.sh`) используют
+один блок переменных внутри `scripts/start_vm_https.sh`. Настройки задаются прямо
+в скрипте; `.env.vm` не читается. Синтаксис `${VARIABLE:-значение}` также позволяет
+при необходимости разово переопределить значение через окружение. При обновлении
+`scripts/start_vm_https.sh` сохраняйте в нём значения вашей ВМ.
 
 Адреса после запуска:
 
 - UI: `https://dashboard.example.com:15173`
 - API health: `https://dashboard.example.com:18000/api/health`
 
-Например, для сертификатов Let's Encrypt сохраните в `.env.vm`:
+Например, для сертификатов Let's Encrypt укажите в этом блоке:
 
-```dotenv
-PUBLIC_HOST=dashboard.example.com
-TLS_CERT_FILE=/etc/letsencrypt/live/dashboard.example.com/fullchain.pem
-TLS_KEY_FILE=/etc/letsencrypt/live/dashboard.example.com/privkey.pem
+```bash
+export PUBLIC_HOST="${PUBLIC_HOST:-dashboard.example.com}"
+export TLS_CERT_FILE="${TLS_CERT_FILE:-/etc/letsencrypt/live/dashboard.example.com/fullchain.pem}"
+export TLS_KEY_FILE="${TLS_KEY_FILE:-/etc/letsencrypt/live/dashboard.example.com/privkey.pem}"
 ```
 
 Если серверный сертификат и промежуточная цепочка выданы отдельными файлами:
 
-```dotenv
-TLS_CERT_FILE=/path/to/server.pem
-TLS_CHAIN_FILE=/path/to/intermediates.pem
-TLS_KEY_FILE=/path/to/server.key
+```bash
+export TLS_CERT_FILE="${TLS_CERT_FILE:-/path/to/server.pem}"
+export TLS_CHAIN_FILE="${TLS_CHAIN_FILE:-/path/to/intermediates.pem}"
+export TLS_KEY_FILE="${TLS_KEY_FILE:-/path/to/server.key}"
 ```
 
 Пути относительно проекта разрешаются от корня репозитория. Скрипт собирает цепочку
 в `.run/tls/fullchain.pem`, проверяет формат PEM и соответствие сертификата ключу,
 затем передаёт весь файл обоим серверам. При ошибке запуск прекращается без перехода
-на HTTP. Для зашифрованного ключа задайте `TLS_KEY_PASSWORD` в `.env.vm` или окружении.
+на HTTP. Для зашифрованного ключа задайте `TLS_KEY_PASSWORD` в окружении.
 Для корпоративного CA можно задать `TLS_CA_FILE=/path/to/root-ca.pem`, чтобы HTTPS-прокси
 dashboard доверял API; проверка TLS остаётся включённой. Доверие к этому CA в браузере
 нужно настроить на клиентской машине.
@@ -2363,17 +2357,10 @@ scripts/restart_vm.sh
 scripts/stop_vm.sh
 ```
 
-`restart_vm.sh` заново читает `.env.vm` и проверяет новые файлы до остановки работающих
-процессов. Параметры из окружения имеют приоритет над файлом, например:
-`API_PORT=18443 scripts/start_vm.sh`. Для другого файла настроек задайте
-`VM_ENV_FILE=/path/to/vm.env`; относительный путь считается от корня репозитория.
-Если явно указанный файл недоступен или содержит ошибку, запуск/перезапуск остановится.
-При отсутствии обычного `.env.vm` используются прежние значения из окружения и defaults.
-
-Формат `.env.vm` — строки `NAME=value`, комментарии с `#`, при необходимости одинарные
-или двойные кавычки вокруг значения. Значения читаются буквально: `$VAR`, `~`, обратные
-кавычки и shell-команды не разворачиваются, escape-последовательности не обрабатываются.
-Обычный `.env` остаётся отдельным файлом и этими скриптами автоматически не читается.
+`restart_vm.sh` заново применяет блок из `scripts/start_vm_https.sh` и проверяет
+новые файлы сертификатов до остановки работающих процессов. Параметры из окружения
+имеют приоритет над значениями по умолчанию в скрипте, например:
+`API_PORT=18443 scripts/start_vm_https.sh`.
 
 Для явного запуска ВМ по HTTP в тестовом окружении есть `HTTPS_ENABLED=0`.
 `PUBLIC_SCHEME` должен соответствовать этому флагу; старые HTTP URL overrides

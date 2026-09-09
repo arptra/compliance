@@ -10,9 +10,9 @@ if [[ ! -x "${START_SCRIPT}" ]]; then
   exit 1
 fi
 
-# Load saved host/certificate settings before applying VM defaults.
-source "${ROOT_DIR}/scripts/load_vm_env.sh"
-load_vm_env "${ROOT_DIR}"
+# Reuse the editable host/certificate block in the HTTPS launcher.
+source "${ROOT_DIR}/scripts/start_vm_https.sh"
+setup_vm_launch_settings
 
 # VM defaults: keep them separate from local desktop ports.
 export API_PORT="${API_PORT:-18000}"

@@ -170,11 +170,10 @@ print_next_steps() {
 VM setup is ready.
 
 Start the app:
-  # Once: copy .env.vm.example to .env.vm and set PUBLIC_HOST, TLS_CERT_FILE, TLS_KEY_FILE.
-  # Keep an existing .env.vm when updating the app.
-  scripts/start_vm.sh
+  # Once: edit PUBLIC_HOST, TLS_CERT_FILE and TLS_KEY_FILE in scripts/start_vm_https.sh.
+  scripts/start_vm_https.sh
 
-Start and restart scripts automatically load your saved .env.vm settings.
+Start and restart scripts reuse the settings in scripts/start_vm_https.sh.
 
 HTTPS_ENABLED=1 is the VM default for both API and dashboard.
 The public hostname must match the server certificate's SAN.
