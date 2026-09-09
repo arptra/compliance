@@ -91,7 +91,7 @@ Activate Python environment in your current shell:
   source .venv311/bin/activate
 
 Start on VM:
-  # Once: edit PUBLIC_HOST, TLS_CERT_FILE and TLS_KEY_FILE in scripts/start_vm_https.sh.
+  # Once: edit only TLS_CERT_FILE (fullchain) and TLS_KEY_FILE in scripts/start_vm_https.sh.
   scripts/start_vm_https.sh
 
 HTTPS is enabled by default. Start/restart scripts reuse the HTTPS launcher's settings.

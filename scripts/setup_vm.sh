@@ -170,19 +170,13 @@ print_next_steps() {
 VM setup is ready.
 
 Start the app:
-  # Once: edit PUBLIC_HOST, TLS_CERT_FILE and TLS_KEY_FILE in scripts/start_vm_https.sh.
+  # Once: edit only TLS_CERT_FILE (fullchain) and TLS_KEY_FILE in scripts/start_vm_https.sh.
   scripts/start_vm_https.sh
 
 Start and restart scripts reuse the settings in scripts/start_vm_https.sh.
 
 HTTPS_ENABLED=1 is the VM default for both API and dashboard.
-The public hostname must match the server certificate's SAN.
-
-Useful overrides:
-  PUBLIC_HOST=your.vm.host scripts/start_vm.sh
-  API_PORT=18000 DASHBOARD_PORT=15173 scripts/start_vm.sh
-  TLS_CERT_FILE=/path/to/fullchain.pem TLS_KEY_FILE=/path/to/privkey.pem PUBLIC_HOST=your.domain scripts/start_vm_https.sh
-  HTTPS_ENABLED=0 scripts/start_vm.sh  # Explicit HTTP opt-out for testing
+The VM hostname is detected automatically and must match the server certificate's SAN.
 
 Default local dev user is created on first API access:
   email: dev@local

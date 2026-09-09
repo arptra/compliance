@@ -165,21 +165,28 @@ class HTTPSCertificateTests(unittest.TestCase):
             launcher = scripts / "start_vm_https.sh"
             launcher.write_text(
                 launcher.read_text()
-                .replace(":-your.domain}", ":-saved.example.com}")
                 .replace(":-certs/server/fullchain.pem}", ":-saved certs/fullchain.pem}")
                 .replace(":-certs/server/privkey.pem}", ":-saved certs/privkey.pem}")
             )
             # An obsolete settings file cannot override the variables in the script.
             (root / ".env.vm").write_text("PUBLIC_HOST=obsolete.example.com\nTLS_CERT_FILE=/missing.pem\n")
+            # The launcher now discovers the VM hostname with only those two paths.
+            commands = root / "bin"
+            commands.mkdir()
+            hostname = commands / "hostname"
+            hostname.write_text('#!/usr/bin/env bash\necho detected.vm.example.com\n')
+            hostname.chmod(0o755)
+            auto_env = clean_env(PATH=f"{commands}{os.pathsep}{os.environ['PATH']}", TLS_CHAIN_FILE="/unused-chain.pem")
             for name in ("start_vm.sh", "restart_vm.sh", "start_vm_https.sh"):
                 with self.subTest(configured_entrypoint=name):
-                    result = subprocess.run(["bash", str(scripts / name)], cwd="/", env=clean_env(),
+                    result = subprocess.run(["bash", str(scripts / name)], cwd="/", env=auto_env,
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("DISPATCH:1:https", result.stdout)
                     if name != "restart_vm.sh":
-                        self.assertIn("https://saved.example.com:18000", result.stdout)
-                        self.assertIn("https://saved.example.com:15173", result.stdout)
+                        self.assertIn("https://detected.vm.example.com:18000", result.stdout)
+                        self.assertIn("https://detected.vm.example.com:15173", result.stdout)
+                    self.assertEqual((root / ".run/tls/fullchain.pem").read_bytes(), self.fullchain.read_bytes())
             # Environment overrides still work, and this entrypoint forces HTTPS.
             result = subprocess.run(
                 ["bash", str(launcher)], cwd="/",

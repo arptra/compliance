@@ -10,7 +10,7 @@ if [[ ! -x "${START_SCRIPT}" ]]; then
   exit 1
 fi
 
-# Reuse the editable host/certificate block in the HTTPS launcher.
+# Reuse the two certificate paths in the HTTPS launcher.
 source "${ROOT_DIR}/scripts/start_vm_https.sh"
 setup_vm_launch_settings
 
