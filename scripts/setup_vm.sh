@@ -125,7 +125,7 @@ prepare_directories() {
     "${ROOT_DIR}/reports" \
     "${ROOT_DIR}/exports" \
     "${ROOT_DIR}/models" \
-    "${ROOT_DIR}/certs"
+    "${ROOT_DIR}/certs/server"
 }
 
 install_python_dependencies() {
@@ -170,12 +170,17 @@ print_next_steps() {
 VM setup is ready.
 
 Start the app:
-  scripts/start_vm.sh
+  # First place the server fullchain.pem and privkey.pem into certs/server/.
+  PUBLIC_HOST=your.domain scripts/start_vm.sh
+
+HTTPS_ENABLED=1 is the VM default for both API and dashboard.
+The public hostname must match the server certificate's SAN.
 
 Useful overrides:
   PUBLIC_HOST=your.vm.host scripts/start_vm.sh
   API_PORT=18000 DASHBOARD_PORT=15173 scripts/start_vm.sh
-  PUBLIC_SCHEME=https PUBLIC_HOST=your.domain scripts/start_vm.sh
+  TLS_CERT_FILE=/path/to/fullchain.pem TLS_KEY_FILE=/path/to/privkey.pem PUBLIC_HOST=your.domain scripts/start_vm_https.sh
+  HTTPS_ENABLED=0 scripts/start_vm.sh  # Explicit HTTP opt-out for testing
 
 Default local dev user is created on first API access:
   email: dev@local

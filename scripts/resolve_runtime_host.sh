@@ -65,9 +65,21 @@ resolve_public_host_name() {
 }
 
 setup_vm_runtime_env() {
-  local public_scheme="${PUBLIC_SCHEME:-http}"
+  export HTTPS_ENABLED="${HTTPS_ENABLED:-1}"
+  local public_scheme="https"
   local hmr_protocol="ws"
   local resolved_public_host=""
+
+  case "${HTTPS_ENABLED}" in
+    1) public_scheme="https" ;;
+    0) public_scheme="http" ;;
+    *) echo "HTTPS_ENABLED must be 1 or 0" >&2; return 1 ;;
+  esac
+  if [[ -n "${PUBLIC_SCHEME:-}" && "${PUBLIC_SCHEME}" != "${public_scheme}" ]]; then
+    echo "PUBLIC_SCHEME conflicts with HTTPS_ENABLED=${HTTPS_ENABLED}. Use HTTPS_ENABLED=0 for HTTP." >&2
+    return 1
+  fi
+  export PUBLIC_SCHEME="${public_scheme}"
 
   resolved_public_host="$(resolve_public_host_name)"
 
@@ -92,4 +104,18 @@ setup_vm_runtime_env() {
   export VITE_HMR_PROTOCOL="${VITE_HMR_PROTOCOL:-${hmr_protocol}}"
   export API_DISPLAY_URL="${API_DISPLAY_URL:-${public_scheme}://${API_PUBLIC_HOST}:${API_PORT}}"
   export DASHBOARD_DISPLAY_URL="${DASHBOARD_DISPLAY_URL:-${public_scheme}://${DASHBOARD_PUBLIC_HOST}:${DASHBOARD_PORT}}"
+
+  if [[ "${HTTPS_ENABLED}" == "1" ]]; then
+    local url
+    for url in "${VITE_API_BASE_URL}" "${VITE_PUBLIC_ORIGIN}" "${API_DISPLAY_URL}" "${DASHBOARD_DISPLAY_URL}"; do
+      if [[ "${url}" != https://* ]]; then
+        echo "HTTPS is enabled, but an HTTP/invalid URL override was provided: ${url}" >&2
+        return 1
+      fi
+    done
+    if [[ "${VITE_HMR_PROTOCOL}" != "wss" ]]; then
+      echo "HTTPS requires VITE_HMR_PROTOCOL=wss" >&2
+      return 1
+    fi
+  fi
 }

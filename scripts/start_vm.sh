@@ -17,6 +17,8 @@ export DASHBOARD_PORT="${DASHBOARD_PORT:-15173}"
 # shellcheck source=/dev/null
 source "${RESOLVE_SCRIPT}"
 setup_vm_runtime_env
+source "${ROOT_DIR}/scripts/setup_https_env.sh"
+setup_https_env "${ROOT_DIR}"
 
 cat <<EOF
 Resolved VM runtime settings:
@@ -26,6 +28,8 @@ Resolved VM runtime settings:
   API public URL:    ${API_DISPLAY_URL}
   Dashboard URL:     ${DASHBOARD_DISPLAY_URL}
   Dashboard -> API:  ${VITE_API_BASE_URL}
+  HTTPS enabled:     ${HTTPS_ENABLED}
+  TLS fullchain:     ${TLS_CERT_FILE:-disabled}
 EOF
 
 exec "${START_SCRIPT}"

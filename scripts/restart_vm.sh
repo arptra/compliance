@@ -17,5 +17,8 @@ export DASHBOARD_PORT="${DASHBOARD_PORT:-15173}"
 # shellcheck source=/dev/null
 source "${RESOLVE_SCRIPT}"
 setup_vm_runtime_env
+source "${ROOT_DIR}/scripts/setup_https_env.sh"
+# Validate replacement certificates before stopping a running stack.
+setup_https_env "${ROOT_DIR}"
 
 exec "${RESTART_SCRIPT}"

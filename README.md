@@ -2274,32 +2274,84 @@ export NPM_REGISTRY=https://my.npm.mirror/
 
 ## Dashboard on VM / external host access
 
-Если dashboard запускается на VM и открывается с другого хоста:
+Для запуска на ВМ используйте скрипты из корня проекта. `start_vm.sh` и
+`restart_vm.sh` по умолчанию включают **`HTTPS_ENABLED=1`**: API обслуживается по
+HTTPS на порту `18000`, dashboard — по HTTPS на `15173`, HMR — по WSS.
+TLS подключён через параметры [Uvicorn](https://www.uvicorn.org/settings/#https)
+и [Vite](https://vite.dev/config/server-options#server-https).
+
+Подготовьте зависимости через `scripts/setup_vm.sh` (Ubuntu/Debian) или
+`scripts/install_deps.sh`, если системные зависимости уже установлены.
+Разместите выданные для вашего домена серверные сертификаты:
+
+- `certs/server/fullchain.pem`: PEM-сертификат сервера, затем все промежуточные
+  сертификаты CA в порядке от издателя сервера к корню. Корневой сертификат
+  обычно не включают в отправляемую сервером цепочку: он должен быть доверен клиенту.
+- `certs/server/privkey.pem`: соответствующий приватный ключ, доступный пользователю,
+  от которого запускается приложение (`chmod 600 certs/server/privkey.pem`).
+
+`PUBLIC_HOST` должен совпадать с DNS-именем в SAN сертификата и разрешаться в адрес ВМ.
+При открытии по IP сертификат должен содержать этот IP в SAN. Если заданы отдельные
+`API_PUBLIC_HOST` и `DASHBOARD_PUBLIC_HOST`, сертификат должен покрывать оба имени.
+Серверные сертификаты хранятся отдельно от клиентских сертификатов GigaChat;
+для подключения к GigaChat по-прежнему нужен его CA bundle (`certs/ca.pem` или
+`GIGACHAT_CA_BUNDLE_FILE`).
 
 ```bash
-cd apps/dashboard
-npm install
-npm run dev
+PUBLIC_HOST=dashboard.example.com scripts/start_vm.sh
+# Отдельная точка входа, принудительно включающая HTTPS:
+PUBLIC_HOST=dashboard.example.com scripts/start_vm_https.sh
 ```
 
-Dev server уже зафиксирован на:
+Адреса после запуска:
 
-- `0.0.0.0:5173` (host mode + strict port)
+- UI: `https://dashboard.example.com:15173`
+- API health: `https://dashboard.example.com:18000/api/health`
 
-API base для dashboard по умолчанию вычисляется как:
-- `<scheme>://<hostname>:8000`
-
-То есть если вы открываете UI по адресу `http://<VM_IP>:5173`, фронт автоматически будет ходить в `http://<VM_IP>:8000`.
-Если у вас API доступен по другому адресу (reverse proxy / другой порт / домен), задайте:
+Для сертификатов в другом каталоге экспортируйте пути перед запуском:
 
 ```bash
-export VITE_API_BASE_URL=http://<api-host>:<api-port>
+export PUBLIC_HOST=dashboard.example.com
+export TLS_CERT_FILE=/etc/letsencrypt/live/dashboard.example.com/fullchain.pem
+export TLS_KEY_FILE=/etc/letsencrypt/live/dashboard.example.com/privkey.pem
+scripts/start_vm.sh
 ```
 
-Дополнительно для удаленного HMR можно задать:
+Если серверный сертификат и промежуточная цепочка выданы отдельными файлами:
 
 ```bash
-export VITE_HMR_HOST=<public_vm_ip_or_dns>
+export TLS_CERT_FILE=/path/to/server.pem
+export TLS_CHAIN_FILE=/path/to/intermediates.pem
+export TLS_KEY_FILE=/path/to/server.key
+scripts/start_vm_https.sh
 ```
 
-Проверьте также firewall/security group: входящий TCP `5173` должен быть открыт.
+Пути относительно проекта разрешаются от корня репозитория. Скрипт собирает цепочку
+в `.run/tls/fullchain.pem`, проверяет формат PEM и соответствие сертификата ключу,
+затем передаёт весь файл обоим серверам. При ошибке запуск прекращается без перехода
+на HTTP. Для зашифрованного ключа задайте `TLS_KEY_PASSWORD` в окружении.
+Для корпоративного CA можно задать `TLS_CA_FILE=/path/to/root-ca.pem`, чтобы HTTPS-прокси
+dashboard доверял API; проверка TLS остаётся включённой. Доверие к этому CA в браузере
+нужно настроить на клиентской машине.
+
+После обновления сертификатов выполните в том же окружении:
+
+```bash
+scripts/restart_vm.sh
+# Остановка:
+scripts/stop_vm.sh
+```
+
+`restart_vm.sh` проверяет новые файлы до остановки работающих процессов. Скрипты
+не читают `.env` автоматически: экспортируйте нестандартные пути и имя хоста
+в окружении при каждом запуске/перезапуске или сохраните экспорты в профиле сервиса.
+
+Для явного запуска ВМ по HTTP в тестовом окружении есть `HTTPS_ENABLED=0`.
+`PUBLIC_SCHEME` должен соответствовать этому флагу; старые HTTP URL overrides
+и `VITE_HMR_PROTOCOL=ws` при включённом HTTPS отклоняются. Порты можно изменить
+через `API_PORT` и `DASHBOARD_PORT`. Откройте соответствующие входящие TCP-порты
+в firewall/security group ВМ. На этих портах в режиме HTTPS принимается TLS;
+отдельный HTTP-редирект не запускается.
+
+Для обычного локального запуска остаётся `scripts/start_local_stack.sh`
+(`http://127.0.0.1:5173`, API `http://127.0.0.1:8000`).
