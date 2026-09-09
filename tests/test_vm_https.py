@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def clean_env(**overrides: str) -> dict[str, str]:
-    prefixes = ("TLS_", "HTTPS_ENABLED", "PUBLIC_", "VITE_", "API_", "DASHBOARD_", "RESOLVED_", "VM_HOSTNAME")
+    prefixes = ("TLS_", "HTTPS_ENABLED", "PUBLIC_", "VITE_", "API_", "DASHBOARD_", "RESOLVED_", "VM_HOSTNAME", "VM_ENV_FILE", "GIGACHAT_CA_BUNDLE_FILE")
     return {**{key: value for key, value in os.environ.items() if not key.startswith(prefixes)}, **overrides}
 
 
@@ -63,6 +63,65 @@ class VMRuntimeTests(unittest.TestCase):
         ):
             with self.subTest(overrides=overrides):
                 self.assertNotEqual(self.resolve(**overrides).returncode, 0)
+
+
+class VMSavedSettingsTests(unittest.TestCase):
+    def load_settings(self, root: Path, **overrides: str):
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; load_vm_env "$2"; "$3" -c "$4"', "test",
+             str(ROOT / "scripts/load_vm_env.sh"), str(root), sys.executable,
+             'import json, os; print(json.dumps({k: os.getenv(k) for k in '
+             '["PUBLIC_HOST", "TLS_CERT_FILE", "TLS_KEY_FILE", "TLS_KEY_PASSWORD", "API_PORT"]}))'],
+            cwd="/", env=clean_env(**overrides), capture_output=True, text=True,
+        )
+
+    def test_saved_settings_support_quotes_comments_crlf_and_environment_overrides(self):
+        with tempfile.TemporaryDirectory(prefix="vm settings ") as temporary:
+            root = Path(temporary)
+            (root / ".env.vm").write_bytes(
+                b'# VM settings\r\nPUBLIC_HOST=saved.example.com\r\n'
+                b'export TLS_CERT_FILE="certs/server bundle.pem" # full chain\r\n'
+                b"TLS_KEY_FILE='certs/private key.pem'\r\n"
+                b"TLS_KEY_PASSWORD='literal $secret # password'\r\nAPI_PORT=16443\r\nAPI_PORT=18443 # API\r\n"
+            )
+            result = self.load_settings(root, PUBLIC_HOST="override.example.com", TLS_KEY_PASSWORD="")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {
+                "PUBLIC_HOST": "override.example.com", "TLS_CERT_FILE": "certs/server bundle.pem",
+                "TLS_KEY_FILE": "certs/private key.pem", "TLS_KEY_PASSWORD": "", "API_PORT": "18443",
+            })
+            result = self.load_settings(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["TLS_KEY_PASSWORD"], "literal $secret # password")
+
+    def test_missing_default_is_optional_but_explicit_file_is_required(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(self.load_settings(root).returncode, 0)
+            result = self.load_settings(root, VM_ENV_FILE="missing.env")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not readable", result.stderr)
+            (root / "saved.env").write_text("PUBLIC_HOST=custom.example.com")
+            result = self.load_settings(root, VM_ENV_FILE="saved.env")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["PUBLIC_HOST"], "custom.example.com")
+
+    def test_values_are_literal_and_invalid_lines_do_not_expose_passwords(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / "must-not-exist"
+            value = f"$(touch {marker})"
+            (root / ".env.vm").write_text(f"TLS_KEY_PASSWORD='{value}'\n")
+            result = self.load_settings(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["TLS_KEY_PASSWORD"], value)
+            self.assertFalse(marker.exists())
+            for content in ('TLS_KEY_PASSWORD="secret-without-closing-quote\n', 'UNSUPPORTED_VM_OPTION=value\n', 'PUBLIC_HOST invalid\n'):
+                with self.subTest(content=content):
+                    (root / ".env.vm").write_text(content)
+                    result = self.load_settings(root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("secret-without-closing-quote", result.stderr)
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl is required to create test certificates")
@@ -132,7 +191,7 @@ class HTTPSCertificateTests(unittest.TestCase):
             root = Path(temporary)
             scripts = root / "scripts"
             scripts.mkdir()
-            for name in ("start_vm.sh", "start_vm_https.sh", "restart_vm.sh", "resolve_runtime_host.sh", "setup_https_env.sh", "prepare_https.py"):
+            for name in ("start_vm.sh", "start_vm_https.sh", "restart_vm.sh", "resolve_runtime_host.sh", "setup_https_env.sh", "prepare_https.py", "load_vm_env.sh"):
                 shutil.copy2(ROOT / "scripts" / name, scripts / name)
             python = root / ".venv311/bin/python"
             python.parent.mkdir(parents=True)
@@ -158,6 +217,37 @@ class HTTPSCertificateTests(unittest.TestCase):
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("DISPATCH:1:https", result.stdout)
+
+            # Persist non-default paths once, then launch/restart from fresh shells.
+            saved = root / "saved certs"
+            certificates.rename(saved)
+            settings = root / ".env.vm"
+            settings.write_text(
+                'PUBLIC_HOST=saved.example.com\nTLS_CERT_FILE="saved certs/fullchain.pem"\n'
+                'TLS_KEY_FILE="saved certs/privkey.pem"\nAPI_PORT=18443\nDASHBOARD_PORT=15443\n'
+            )
+            for name in ("start_vm.sh", "restart_vm.sh", "start_vm_https.sh"):
+                with self.subTest(saved_entrypoint=name):
+                    result = subprocess.run(["bash", str(scripts / name)], cwd="/", env=clean_env(),
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("DISPATCH:1:https", result.stdout)
+                    if name != "restart_vm.sh":
+                        self.assertIn("https://saved.example.com:18443", result.stdout)
+                        self.assertIn("https://saved.example.com:15443", result.stdout)
+            # The HTTPS entrypoint must still force TLS if the saved mode is HTTP.
+            settings.write_text(settings.read_text() + 'HTTPS_ENABLED=0\nPUBLIC_SCHEME=http\n')
+            result = subprocess.run(["bash", str(scripts / "start_vm_https.sh")], cwd="/", env=clean_env(),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("DISPATCH:1:https", result.stdout)
+            # A bad setting on the next restart must not stop the running stack.
+            settings.write_text('TLS_KEY_PASSWORD="invalid-secret\n')
+            result = subprocess.run(["bash", str(scripts / "restart_vm.sh")], cwd="/", env=clean_env(),
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("DISPATCH", result.stdout)
+            self.assertNotIn("invalid-secret", result.stderr)
 
     @unittest.skipUnless(shutil.which("node") and (ROOT / "apps/dashboard/node_modules/vite").is_dir(), "Vite dependencies are required")
     def test_api_dashboard_and_proxy_serve_https_with_full_chain(self):

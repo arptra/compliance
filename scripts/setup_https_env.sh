@@ -26,6 +26,7 @@ setup_https_env() {
     echo "HTTPS is enabled. Provide a server fullchain and private key:" >&2
     echo "  TLS_CERT_FILE=${cert_file}" >&2
     echo "  TLS_KEY_FILE=${key_file}" >&2
+    echo "Save these paths and PUBLIC_HOST in ${app_root}/.env.vm (template: .env.vm.example)." >&2
     echo "For a separate intermediate bundle, also set TLS_CHAIN_FILE. See README.md." >&2
     return 1
   fi

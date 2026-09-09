@@ -91,11 +91,11 @@ Activate Python environment in your current shell:
   source .venv311/bin/activate
 
 Start on VM:
-  # Put the server fullchain.pem and privkey.pem into certs/server/ first.
-  PUBLIC_HOST=<certificate-dns-name> scripts/start_vm.sh
+  # Once: copy .env.vm.example to .env.vm and set PUBLIC_HOST, TLS_CERT_FILE, TLS_KEY_FILE.
+  # Keep an existing .env.vm when updating the app.
+  scripts/start_vm.sh
 
-HTTPS is enabled by default. For other certificate paths:
-  TLS_CERT_FILE=/path/to/fullchain.pem TLS_KEY_FILE=/path/to/privkey.pem PUBLIC_HOST=<certificate-dns-name> scripts/start_vm_https.sh
+HTTPS is enabled by default. Start/restart scripts automatically load .env.vm.
 EOF
 }
 

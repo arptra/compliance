@@ -10,6 +10,10 @@ if [[ ! -x "${START_SCRIPT}" ]]; then
   exit 1
 fi
 
+# Load saved host/certificate settings before applying VM defaults.
+source "${ROOT_DIR}/scripts/load_vm_env.sh"
+load_vm_env "${ROOT_DIR}"
+
 # VM defaults: keep them separate from local desktop ports.
 export API_PORT="${API_PORT:-18000}"
 export DASHBOARD_PORT="${DASHBOARD_PORT:-15173}"

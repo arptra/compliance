@@ -170,8 +170,11 @@ print_next_steps() {
 VM setup is ready.
 
 Start the app:
-  # First place the server fullchain.pem and privkey.pem into certs/server/.
-  PUBLIC_HOST=your.domain scripts/start_vm.sh
+  # Once: copy .env.vm.example to .env.vm and set PUBLIC_HOST, TLS_CERT_FILE, TLS_KEY_FILE.
+  # Keep an existing .env.vm when updating the app.
+  scripts/start_vm.sh
+
+Start and restart scripts automatically load your saved .env.vm settings.
 
 HTTPS_ENABLED=1 is the VM default for both API and dashboard.
 The public hostname must match the server certificate's SAN.
